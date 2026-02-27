@@ -21,6 +21,7 @@
 #define REAPERAPI_WANT_SetExtState
 #define REAPERAPI_WANT_plugin_register
 #define REAPERAPI_WANT_GetMainHwnd
+#define REAPERAPI_WANT_GetUserInputs
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
@@ -35,9 +36,33 @@ const char* (*g_GetExtState)(const char*, const char*) = nullptr;
 void (*g_SetExtState)(const char*, const char*, const char*, bool) = nullptr;
 HWND g_reaperMainHwnd = nullptr;
 int (*g_plugin_register)(const char*, void*) = nullptr;
+bool (*g_GetUserInputs)(const char*, int, const char*, char*, int) = nullptr;
 
 static ReDockItContainer* g_container = nullptr;
 static int g_cmdId = 0;
+
+// Deferred startup timer — fires on REAPER main loop, auto-opens container if enabled
+static int g_startupCounter = 0;
+static void startupTimerFunc()
+{
+  if (++g_startupCounter < 15) return; // ~450ms delay
+  g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
+
+  if (g_GetExtState) {
+    const char* val = g_GetExtState("ReDockIt_cpp", "auto_open");
+    // Auto-open by default — only skip if explicitly set to "0"
+    bool autoOpen = true;
+    if (val && val[0] == '0') autoOpen = false;
+    if (autoOpen) {
+      if (!g_container) {
+        g_container = new ReDockItContainer();
+      }
+      if (!g_container->GetHwnd()) {
+        g_container->Create();
+      }
+    }
+  }
+}
 
 static bool hookCommandProc(int command, int flag)
 {
@@ -93,6 +118,7 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_Main_OnCommand = Main_OnCommand;
   g_GetExtState = GetExtState;
   g_SetExtState = SetExtState;
+  g_GetUserInputs = GetUserInputs;
 
   g_cmdId = rec->Register("command_id", (void*)"ReDockIt_OpenContainer");
   if (!g_cmdId) return 0;
@@ -102,6 +128,9 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   rec->Register("gaccel", &accel);
   rec->Register("hookcommand", (void*)hookCommandProc);
   rec->Register("toggleaction", (void*)toggleActionCallback);
+
+  // Deferred auto-open on startup
+  g_plugin_register("timer", (void*)(void(*)())startupTimerFunc);
 
   return 1;
 }

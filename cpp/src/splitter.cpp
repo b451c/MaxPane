@@ -185,11 +185,21 @@ void SplitterLayout::Recalculate(int w, int h)
 
 int SplitterLayout::HitTestSplitter(int x, int y) const
 {
+  // Use a wider grab margin (±5px beyond the actual splitter rect)
+  // so it's easier to grab the splitter edge
+  const int GRAB_MARGIN = 5;
   int count = GetSplitterCount();
   for (int i = 0; i < count; i++) {
     const RECT& r = m_splitters[i].rect;
-    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom)
-      return i;
+    if (m_splitters[i].orient == SPLIT_VERTICAL) {
+      if (x >= r.left - GRAB_MARGIN && x < r.right + GRAB_MARGIN &&
+          y >= r.top && y < r.bottom)
+        return i;
+    } else {
+      if (x >= r.left && x < r.right &&
+          y >= r.top - GRAB_MARGIN && y < r.bottom + GRAB_MARGIN)
+        return i;
+    }
   }
   return -1;
 }

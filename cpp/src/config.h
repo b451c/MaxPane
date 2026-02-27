@@ -6,7 +6,31 @@ static const int MAX_SPLITTERS = 3;
 static const int SPLITTER_WIDTH = 5;
 static const int MIN_PANE_SIZE = 50;
 static const int PANE_HEADER_HEIGHT = 18;
+static const int MAX_TABS_PER_PANE = 8;
+static const int TAB_BAR_HEIGHT = 20;
+static const int TAB_MIN_WIDTH = 60;
+static const int TAB_MAX_WIDTH = 150;
+static const int MAX_WORKSPACES = 10;
+static const int MAX_WORKSPACE_NAME = 64;
 static const char* EXT_SECTION = "ReDockIt_cpp";
+
+// Tab color palette (index 0 = no color)
+static const int TAB_COLOR_COUNT = 9;
+struct TabColor {
+  const char* name;
+  unsigned char r, g, b;
+};
+static const TabColor TAB_COLORS[] = {
+  {"Default",  0,   0,   0  },  // 0: no color
+  {"Red",      180, 60,  60 },  // 1
+  {"Orange",   190, 120, 50 },  // 2
+  {"Yellow",   180, 170, 50 },  // 3
+  {"Green",    60,  150, 70 },  // 4
+  {"Blue",     60,  100, 180},  // 5
+  {"Purple",   130, 70,  170},  // 6
+  {"Pink",     170, 70,  130},  // 7
+  {"Cyan",     50,  150, 160},  // 8
+};
 
 // Layout presets
 enum LayoutPreset {
@@ -43,7 +67,7 @@ struct WindowDef {
 
 static const WindowDef KNOWN_WINDOWS[] = {
   {"Media Explorer",    "Media Explorer",        nullptr,          50124, 0},
-  {"FX Browser",        "Add FX",                "FX",             40271, 1},
+  {"FX Browser",        "Browse FX",             "Add FX",          40271, 1},
   {"Actions",           "Actions",               nullptr,          40605, 2},
   {"Mixer",             "Mixer",                 nullptr,          40078, 0},
   {"Region Manager",    "Region/Marker Manager", "Region",         40326, 1},
