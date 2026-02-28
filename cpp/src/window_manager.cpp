@@ -32,6 +32,7 @@ struct FindWindowData {
   const char* searchTitle;
   HWND result;
   HWND skipContainer;
+  const char* dbgPrefix;
 };
 
 static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
@@ -54,44 +55,12 @@ static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
   if (dockedSuffix) *dockedSuffix = '\0';
 
   if (strstr(matchBuf, data->searchTitle) == matchBuf) {
-    DBG("[ReDockIt] EnumWindows: PREFIX match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
+    DBG("[ReDockIt] %s: PREFIX match '%s' for '%s' hwnd=%p\n", data->dbgPrefix, buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
   if (strstr(matchBuf, data->searchTitle)) {
-    DBG("[ReDockIt] EnumWindows: SUBSTR match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
-    data->result = hwnd;
-    return FALSE;
-  }
-  return TRUE;
-}
-
-static BOOL CALLBACK FindChildWindowEnumProc(HWND hwnd, LPARAM lParam)
-{
-  FindWindowData* data = (FindWindowData*)lParam;
-  char buf[512];
-  GetWindowText(hwnd, buf, sizeof(buf));
-  if (!buf[0]) return TRUE;
-
-  if (strstr(buf, "toolbar") || strstr(buf, "Toolbar")) return TRUE;
-
-  // Skip windows inside our container
-  if (data->skipContainer && (hwnd == data->skipContainer || IsChild(data->skipContainer, hwnd)))
-    return TRUE;
-
-  // Strip " (docked)" suffix for matching (ReaImGui dock frames)
-  char matchBuf[512];
-  safe_strncpy(matchBuf, buf, sizeof(matchBuf));
-  char* dockedSuffix = strstr(matchBuf, " (docked)");
-  if (dockedSuffix) *dockedSuffix = '\0';
-
-  if (strstr(matchBuf, data->searchTitle) == matchBuf) {
-    DBG("[ReDockIt] EnumChildWindows: PREFIX match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
-    data->result = hwnd;
-    return FALSE;
-  }
-  if (strstr(matchBuf, data->searchTitle)) {
-    DBG("[ReDockIt] EnumChildWindows: SUBSTR match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
+    DBG("[ReDockIt] %s: SUBSTR match '%s' for '%s' hwnd=%p\n", data->dbgPrefix, buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
@@ -133,7 +102,7 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
   }
 
   // 3. Top-level windows with prefix/substring match
-  FindWindowData data = { title, nullptr, skipContainer };
+  FindWindowData data = { title, nullptr, skipContainer, "EnumWindows" };
   EnumWindows(FindWindowEnumProc, (LPARAM)&data);
   if (data.result) {
     return data.result;
@@ -148,8 +117,8 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
     {
       char dockedTitle[512];
       snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", title);
-      FindWindowData dockData = { dockedTitle, nullptr, skipContainer };
-      EnumChildWindows(g_reaperMainHwnd, FindChildWindowEnumProc, (LPARAM)&dockData);
+      FindWindowData dockData = { dockedTitle, nullptr, skipContainer, "EnumChildWindows" };
+      EnumChildWindows(g_reaperMainHwnd, FindWindowEnumProc, (LPARAM)&dockData);
       if (dockData.result) {
         DBG("[ReDockIt] FindReaperWindow: DOCKED FRAME child match hwnd=%p\n", (void*)dockData.result);
         return dockData.result;
@@ -160,13 +129,13 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
     {
       char dockedTitle[512];
       snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", title);
-      FindWindowData dockData = { dockedTitle, nullptr, skipContainer };
+      FindWindowData dockData = { dockedTitle, nullptr, skipContainer, "EnumChildWindows" };
       HWND dockChild = nullptr;
       while ((dockChild = FindWindowEx(g_reaperMainHwnd, dockChild, nullptr, nullptr)) != nullptr) {
         if (skipContainer && (dockChild == skipContainer || IsChild(skipContainer, dockChild)))
           continue;
         dockData.result = nullptr;
-        EnumChildWindows(dockChild, FindChildWindowEnumProc, (LPARAM)&dockData);
+        EnumChildWindows(dockChild, FindWindowEnumProc, (LPARAM)&dockData);
         if (dockData.result) {
           DBG("[ReDockIt] FindReaperWindow: DOCKED FRAME grandchild match hwnd=%p\n", (void*)dockData.result);
           return dockData.result;
@@ -176,7 +145,7 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
 
     // 4c. Fallback: search for inner window among direct children
     data.result = nullptr;
-    EnumChildWindows(g_reaperMainHwnd, FindChildWindowEnumProc, (LPARAM)&data);
+    EnumChildWindows(g_reaperMainHwnd, FindWindowEnumProc, (LPARAM)&data);
     if (data.result) {
       return data.result;
     }
@@ -189,7 +158,7 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
         continue;
       // Search ALL children of every child of main window, not just docks
       data.result = nullptr;
-      EnumChildWindows(dockChild, FindChildWindowEnumProc, (LPARAM)&data);
+      EnumChildWindows(dockChild, FindWindowEnumProc, (LPARAM)&data);
       if (data.result) {
         char dockBuf[256];
         GetWindowText(dockChild, dockBuf, sizeof(dockBuf));
@@ -245,8 +214,8 @@ void WindowManager::DumpAllWindowTitles(const char* context)
 HWND WindowManager::FindChildInParent(HWND parent, const char* title)
 {
   if (!parent || !title) return nullptr;
-  FindWindowData data = { title, nullptr, nullptr };
-  EnumChildWindows(parent, FindChildWindowEnumProc, (LPARAM)&data);
+  FindWindowData data = { title, nullptr, nullptr, "EnumChildWindows" };
+  EnumChildWindows(parent, FindWindowEnumProc, (LPARAM)&data);
   return data.result;
 }
 
