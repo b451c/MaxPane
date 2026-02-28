@@ -37,6 +37,18 @@
 
 ## Installation
 
+### ReaPack (recommended)
+
+1. In REAPER, go to **Extensions > ReaPack > Import repositories...**
+2. Paste this URL:
+   ```
+   https://github.com/b4s1c/ReDockIT/raw/main/index.xml
+   ```
+3. Go to **Extensions > ReaPack > Browse packages**, search for **ReDockIT**.
+4. Right-click > **Install**, then restart REAPER.
+
+ReaPack will automatically notify you of future updates.
+
 ### Manual install
 
 1. Download `reaper_redockit.dylib` (macOS) from the [Releases](../../releases) page.
@@ -174,6 +186,7 @@ See [open issues](../../issues) for ideas.
 ## Links
 
 - **REAPER** — https://www.reaper.fm
+- **ReaPack** — https://reapack.com
 - **REAPER SDK** — https://github.com/justinfrankel/reaper-sdk
 - **WDL/SWELL** — https://github.com/cockos/WDL
 

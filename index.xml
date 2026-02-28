@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<index version="1" name="ReDockIT">
+  <category name="Extensions">
+    <reapack name="reaper_redockit" type="extension" desc="Nested docker layouts for REAPER">
+      <metadata>
+        <link rel="website">https://github.com/b4s1c/ReDockIT</link>
+        <description><![CDATA[# ReDockIT
+
+Nested docker layouts for REAPER — a native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.
+
+## Features
+
+- Flexible split layouts (up to 16 panes)
+- Tabbed windows with drag-and-drop between panes
+- 14 known REAPER windows with one-click capture
+- Arbitrary window capture (including ReaImGui scripts)
+- Named workspaces (save/restore complete layouts)
+- Favorites, tab colors, layout presets
+- Full state persistence across REAPER restarts
+- Zero dependencies — pure C++ extension
+]]></description>
+      </metadata>
+
+      <version name="1.0.0" author="b4s1c" time="2025-03-01T00:00:00Z">
+        <changelog><![CDATA[Initial release
+
+- Native C++ REAPER extension (no script dependencies)
+- Binary split tree layout engine with up to 16 panes
+- Tabbed window management with drag-and-drop
+- 14 known REAPER windows + arbitrary window capture
+- Dock frame detection for ReaImGui windows
+- Named workspaces, favorites, tab colors
+- 5 built-in layout presets
+- Auto-open on startup, full state persistence
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_redockit-arm64.dylib">https://github.com/b4s1c/ReDockIT/releases/download/v1.0.0/reaper_redockit-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_redockit-x86_64.dylib">https://github.com/b4s1c/ReDockIT/releases/download/v1.0.0/reaper_redockit-x86_64.dylib</source>
+        <source platform="win64" file="reaper_redockit-x64.dll">https://github.com/b4s1c/ReDockIT/releases/download/v1.0.0/reaper_redockit-x64.dll</source>
+        <source platform="linux64" file="reaper_redockit-x86_64.so">https://github.com/b4s1c/ReDockIT/releases/download/v1.0.0/reaper_redockit-x86_64.so</source>
+      </version>
+    </reapack>
+  </category>
+</index>
