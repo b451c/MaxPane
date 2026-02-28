@@ -5,7 +5,8 @@ static const int MAX_FAVORITES = 32;
 struct FavoriteEntry {
   char name[256];
   char searchTitle[256];
-  int toggleAction;       // REAPER action ID (0 = arbitrary, no auto-open)
+  int toggleAction;           // resolved numeric action ID (runtime)
+  char actionCommand[128];    // stable command string ("_RSxxx" or "12345")
   bool isKnown;
   bool used;
 };
@@ -17,7 +18,7 @@ public:
   void Load();   // from ExtState
   void Save();   // to ExtState
 
-  bool Add(const char* name, const char* searchTitle, int toggleAction, bool isKnown);
+  bool Add(const char* name, const char* searchTitle, const char* actionCommand, bool isKnown);
   void Remove(int index);
   int GetCount() const { return m_count; }
   const FavoriteEntry& Get(int index) const;

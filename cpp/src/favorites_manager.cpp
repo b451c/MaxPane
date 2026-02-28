@@ -21,6 +21,8 @@ void FavoritesManager::Load()
   if (!g_GetExtState) return;
 
   const char* countStr = g_GetExtState(FAV_SECTION, "fav_count");
+  DBG("[ReDockIt] FavoritesManager::Load: section='%s' fav_count='%s'\n",
+      FAV_SECTION, countStr ? countStr : "(null)");
   if (!countStr || !countStr[0]) return;
 
   int count = atoi(countStr);
@@ -34,6 +36,7 @@ void FavoritesManager::Load()
 
     snprintf(key, sizeof(key), "fav_%d_name", i);
     const char* name = g_GetExtState(FAV_SECTION, key);
+    DBG("[ReDockIt] FavoritesManager::Load: fav_%d_name='%s'\n", i, name ? name : "(null)");
     if (!name || !name[0]) continue;
     strncpy(fav.name, name, sizeof(fav.name) - 1);
 
@@ -45,9 +48,25 @@ void FavoritesManager::Load()
       strncpy(fav.searchTitle, fav.name, sizeof(fav.searchTitle) - 1);
     }
 
-    snprintf(key, sizeof(key), "fav_%d_action", i);
-    const char* actionStr = g_GetExtState(FAV_SECTION, key);
-    fav.toggleAction = (actionStr && actionStr[0]) ? atoi(actionStr) : 0;
+    snprintf(key, sizeof(key), "fav_%d_actioncmd", i);
+    const char* actionCmd = g_GetExtState(FAV_SECTION, key);
+    DBG("[ReDockIt] FavoritesManager::Load: fav_%d_actioncmd='%s'\n", i, actionCmd ? actionCmd : "(null)");
+    if (actionCmd && actionCmd[0]) {
+      strncpy(fav.actionCommand, actionCmd, sizeof(fav.actionCommand) - 1);
+      fav.toggleAction = ResolveActionCommand(actionCmd);
+      DBG("[ReDockIt] FavoritesManager::Load: resolved actioncmd '%s' -> %d\n",
+          actionCmd, fav.toggleAction);
+    } else {
+      // Legacy: try old numeric-only key
+      snprintf(key, sizeof(key), "fav_%d_action", i);
+      const char* actionStr = g_GetExtState(FAV_SECTION, key);
+      fav.toggleAction = (actionStr && actionStr[0]) ? atoi(actionStr) : 0;
+      if (fav.toggleAction > 0) {
+        snprintf(fav.actionCommand, sizeof(fav.actionCommand), "%d", fav.toggleAction);
+      }
+      DBG("[ReDockIt] FavoritesManager::Load: legacy action='%s' -> %d\n",
+          actionStr ? actionStr : "(null)", fav.toggleAction);
+    }
 
     snprintf(key, sizeof(key), "fav_%d_known", i);
     const char* knownStr = g_GetExtState(FAV_SECTION, key);
@@ -79,9 +98,8 @@ void FavoritesManager::Save()
     snprintf(key, sizeof(key), "fav_%d_search", i);
     g_SetExtState(FAV_SECTION, key, fav.searchTitle, true);
 
-    snprintf(key, sizeof(key), "fav_%d_action", i);
-    snprintf(buf, sizeof(buf), "%d", fav.toggleAction);
-    g_SetExtState(FAV_SECTION, key, buf, true);
+    snprintf(key, sizeof(key), "fav_%d_actioncmd", i);
+    g_SetExtState(FAV_SECTION, key, fav.actionCommand, true);
 
     snprintf(key, sizeof(key), "fav_%d_known", i);
     g_SetExtState(FAV_SECTION, key, fav.isKnown ? "1" : "0", true);
@@ -94,7 +112,7 @@ void FavoritesManager::Save()
   }
 }
 
-bool FavoritesManager::Add(const char* name, const char* searchTitle, int toggleAction, bool isKnown)
+bool FavoritesManager::Add(const char* name, const char* searchTitle, const char* actionCommand, bool isKnown)
 {
   if (!name || !name[0]) return false;
   if (m_count >= MAX_FAVORITES) return false;
@@ -106,7 +124,12 @@ bool FavoritesManager::Add(const char* name, const char* searchTitle, int toggle
   memset(&fav, 0, sizeof(FavoriteEntry));
   strncpy(fav.name, name, sizeof(fav.name) - 1);
   strncpy(fav.searchTitle, searchTitle ? searchTitle : name, sizeof(fav.searchTitle) - 1);
-  fav.toggleAction = toggleAction;
+  if (actionCommand && actionCommand[0]) {
+    strncpy(fav.actionCommand, actionCommand, sizeof(fav.actionCommand) - 1);
+    fav.toggleAction = ResolveActionCommand(actionCommand);
+  } else {
+    fav.toggleAction = 0;
+  }
   fav.isKnown = isKnown;
   fav.used = true;
   m_count++;

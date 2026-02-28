@@ -10,6 +10,7 @@ struct PaneSnapshot {
     bool isArbitrary;
     char name[256];
     int toggleAction;
+    char actionCommand[128];  // stable command string
   } tabs[MAX_TABS_PER_PANE];
 };
 

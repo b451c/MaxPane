@@ -42,18 +42,24 @@ static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
   if (!buf[0]) return TRUE;
 
   if (strstr(buf, "toolbar") || strstr(buf, "Toolbar")) return TRUE;
-  if (strstr(buf, "(docked)")) return TRUE;
 
   // Skip windows inside our container
   if (data->skipContainer && (hwnd == data->skipContainer || IsChild(data->skipContainer, hwnd)))
     return TRUE;
 
-  if (strstr(buf, data->searchTitle) == buf) {
+  // Strip " (docked)" suffix for matching (ReaImGui scripts use this)
+  char matchBuf[512];
+  strncpy(matchBuf, buf, sizeof(matchBuf) - 1);
+  matchBuf[sizeof(matchBuf) - 1] = '\0';
+  char* dockedSuffix = strstr(matchBuf, " (docked)");
+  if (dockedSuffix) *dockedSuffix = '\0';
+
+  if (strstr(matchBuf, data->searchTitle) == matchBuf) {
     DBG("[ReDockIt] EnumWindows: PREFIX match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
-  if (strstr(buf, data->searchTitle)) {
+  if (strstr(matchBuf, data->searchTitle)) {
     DBG("[ReDockIt] EnumWindows: SUBSTR match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
@@ -76,10 +82,12 @@ static BOOL CALLBACK FindChildWindowEnumProc(HWND hwnd, LPARAM lParam)
     return TRUE;
 
   if (strstr(buf, data->searchTitle) == buf) {
+    DBG("[ReDockIt] EnumChildWindows: PREFIX match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
   if (strstr(buf, data->searchTitle)) {
+    DBG("[ReDockIt] EnumChildWindows: SUBSTR match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
@@ -92,7 +100,23 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
 
   DBG("[ReDockIt] FindReaperWindow: searching for '%s'\n", title);
 
-  // 1. Exact match among top-level windows
+  // 1. Prefer dock frame version "Title (docked)" — ReaImGui scripts use this
+  //    The dock frame contains the actual rendered UI; the inner window is often empty/grey.
+  {
+    char dockedTitle[512];
+    snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", title);
+    HWND hwnd = FindWindowEx(nullptr, nullptr, nullptr, dockedTitle);
+    if (hwnd) {
+      if (skipContainer && (hwnd == skipContainer || IsChild(skipContainer, hwnd))) {
+        hwnd = nullptr;
+      } else {
+        DBG("[ReDockIt] FindReaperWindow: DOCKED FRAME match '%s' hwnd=%p\n", dockedTitle, (void*)hwnd);
+        return hwnd;
+      }
+    }
+  }
+
+  // 2. Exact match among top-level windows
   HWND hwnd = FindWindowEx(nullptr, nullptr, nullptr, title);
   if (hwnd) {
     // Make sure it's not inside our container
@@ -104,24 +128,80 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
     }
   }
 
-  // 2. Top-level windows with prefix/substring match
+  // 3. Top-level windows with prefix/substring match
   FindWindowData data = { title, nullptr, skipContainer };
   EnumWindows(FindWindowEnumProc, (LPARAM)&data);
   if (data.result) {
     return data.result;
   }
 
-  // 3. Search child windows of REAPER main window
+  // 4. Search child windows of REAPER main window
   if (g_reaperMainHwnd) {
     data.result = nullptr;
     EnumChildWindows(g_reaperMainHwnd, FindChildWindowEnumProc, (LPARAM)&data);
     if (data.result) {
       return data.result;
     }
+
+    // 5. Search grandchildren — windows inside REAPER_dock containers
+    //    SWELL's EnumChildWindows may not recurse, so check each dock explicitly
+    HWND dockChild = nullptr;
+    while ((dockChild = FindWindowEx(g_reaperMainHwnd, dockChild, nullptr, nullptr)) != nullptr) {
+      if (skipContainer && (dockChild == skipContainer || IsChild(skipContainer, dockChild)))
+        continue;
+      // Search ALL children of every child of main window, not just docks
+      data.result = nullptr;
+      EnumChildWindows(dockChild, FindChildWindowEnumProc, (LPARAM)&data);
+      if (data.result) {
+        char dockBuf[256];
+        GetWindowText(dockChild, dockBuf, sizeof(dockBuf));
+        DBG("[ReDockIt] FindReaperWindow: found '%s' inside '%s' (hwnd=%p)\n",
+            title, dockBuf, (void*)data.result);
+        return data.result;
+      }
+    }
   }
 
   DBG("[ReDockIt] FindReaperWindow: NOT FOUND '%s'\n", title);
   return nullptr;
+}
+
+// Diagnostic: dump all visible window titles (call when debugging search failures)
+struct DumpWindowData {
+  const char* targetTitle;
+  int count;
+};
+
+static BOOL CALLBACK DumpWindowEnumProc(HWND hwnd, LPARAM lParam)
+{
+  DumpWindowData* data = (DumpWindowData*)lParam;
+  if (!IsWindowVisible(hwnd)) return TRUE;
+  char buf[512];
+  GetWindowText(hwnd, buf, sizeof(buf));
+  if (buf[0]) {
+    DBG("[ReDockIt] DumpWindows[%d]: '%s' hwnd=%p\n", data->count, buf, (void*)hwnd);
+    data->count++;
+  }
+  return TRUE;
+}
+
+void WindowManager::DumpAllWindowTitles(const char* context)
+{
+  DBG("[ReDockIt] === DumpAllWindowTitles: %s ===\n", context ? context : "");
+  DumpWindowData data = { nullptr, 0 };
+
+  // Top-level windows
+  DBG("[ReDockIt] -- Top-level windows --\n");
+  data.count = 0;
+  EnumWindows(DumpWindowEnumProc, (LPARAM)&data);
+
+  // Children of REAPER main window
+  if (g_reaperMainHwnd) {
+    DBG("[ReDockIt] -- Children of REAPER main window --\n");
+    data.count = 0;
+    EnumChildWindows(g_reaperMainHwnd, DumpWindowEnumProc, (LPARAM)&data);
+  }
+  DBG("[ReDockIt] === End DumpAllWindowTitles ===\n");
 }
 
 HWND WindowManager::FindChildInParent(HWND parent, const char* title)
@@ -183,14 +263,23 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
   return false;
 }
 
-bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd)
+bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction, const char* actionCmd)
 {
+  DBG("[ReDockIt] CaptureArbitraryWindow: pane=%d name='%s' hwnd=%p action=%d cmd='%s'\n",
+      paneId, displayName ? displayName : "(null)", (void*)targetHwnd, toggleAction,
+      actionCmd ? actionCmd : "(null)");
   if (paneId < 0 || paneId >= MAX_PANES) return false;
   if (!targetHwnd || !displayName) return false;
 
   PaneState& ps = m_panes[paneId];
-  if (ps.tabCount >= MAX_TABS_PER_PANE) return false;
-  if (IsWindowCaptured(targetHwnd)) return false;
+  if (ps.tabCount >= MAX_TABS_PER_PANE) {
+    DBG("[ReDockIt] CaptureArbitraryWindow: REJECTED pane %d full (tabCount=%d)\n", paneId, ps.tabCount);
+    return false;
+  }
+  if (IsWindowCaptured(targetHwnd)) {
+    DBG("[ReDockIt] CaptureArbitraryWindow: REJECTED hwnd=%p already captured\n", (void*)targetHwnd);
+    return false;
+  }
 
   TabEntry& tab = ps.tabs[ps.tabCount];
   memset(&tab, 0, sizeof(TabEntry));
@@ -202,8 +291,12 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
 
   tab.name = tab.arbitraryName;
   tab.searchTitle = tab.arbitrarySearchTitle;
-  tab.toggleAction = 0;
+  tab.toggleAction = toggleAction;
   tab.isArbitrary = true;
+  if (actionCmd && actionCmd[0]) {
+    strncpy(tab.arbitraryActionCmd, actionCmd, sizeof(tab.arbitraryActionCmd) - 1);
+    tab.arbitraryActionCmd[sizeof(tab.arbitraryActionCmd) - 1] = '\0';
+  }
 
   if (DoCapture(tab, targetHwnd, containerHwnd)) {
     if (ps.activeTab >= 0 && ps.activeTab < ps.tabCount) {

@@ -13,7 +13,9 @@ struct PendingCapture {
   bool isArbitrary = false;
   int tickCount = 0;
   int retryCount = 0;
+  int maxRetries = 30;
   int colorIndex = 0;
+  char actionCommand[128] = {};  // stable command string for re-resolve after restart
 };
 
 class CaptureQueue {
@@ -21,12 +23,14 @@ public:
   static const int MAX_PENDING = 32;
   static const int INITIAL_WAIT_TICKS = 10;  // 500ms at 50ms/tick
   static const int RETRY_INTERVAL = 4;       // 200ms
-  static const int MAX_RETRIES = 30;
+  static const int MAX_RETRIES = 30;          // ~1.5s for known windows with toggle
+  static const int MAX_RETRIES_ARBITRARY = 200; // ~10s for arbitrary (user may reopen manually)
+  static const int MAX_RETRIES_STARTUP = 600;   // ~30s for startup restore
 
   CaptureQueue();
 
   void EnqueueKnown(int paneId, int knownIdx);
-  void EnqueueArbitrary(int paneId, const char* name, int toggleAction = 0);
+  void EnqueueArbitrary(int paneId, const char* name, int toggleAction = 0, const char* actionCmd = nullptr);
   bool Tick(HWND containerHwnd, WindowManager& winMgr);  // returns true if any captured
   bool HasPending() const;
   void CancelAll();

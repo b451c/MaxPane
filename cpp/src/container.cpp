@@ -25,6 +25,7 @@ ReDockItContainer::ReDockItContainer()
   , m_captureQueue(new CaptureQueue())
   , m_favMgr(new FavoritesManager())
   , m_wsMgr(new WorkspaceManager())
+  , m_shutdownGraceTicks(0)
 {
   m_captureMode.active = false;
   m_captureMode.targetPaneId = -1;
@@ -230,9 +231,27 @@ void ReDockItContainer::LoadState()
       if (!winName[0]) continue;
 
       if (panes[i].tabs[t].isArbitrary) {
+        int arbAction = panes[i].tabs[t].toggleAction;
+        const char* arbCmd = panes[i].tabs[t].actionCommand;
+        // If saved state has no action, check favorites for a matching entry
+        if ((!arbCmd || !arbCmd[0]) && m_favMgr) {
+          int favIdx = m_favMgr->FindByName(winName);
+          if (favIdx >= 0) {
+            const FavoriteEntry& fav = m_favMgr->Get(favIdx);
+            if (fav.actionCommand[0] && strcmp(fav.actionCommand, "0") != 0) {
+              arbAction = fav.toggleAction;
+              arbCmd = fav.actionCommand;
+              DBG("[ReDockIt] LoadState: enriched '%s' from favorites: action=%d cmd='%s'\n",
+                  winName, arbAction, arbCmd);
+            }
+          }
+        }
         HWND h = WindowManager::FindReaperWindow(winName, m_hwnd);
         if (h) {
-          m_winMgr.CaptureArbitraryWindow(i, h, winName, m_hwnd);
+          m_winMgr.CaptureArbitraryWindow(i, h, winName, m_hwnd, arbAction, arbCmd);
+        } else {
+          m_captureQueue->EnqueueArbitrary(i, winName, arbAction, arbCmd);
+          needsCaptureTimer = true;
         }
       } else {
         for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
@@ -322,9 +341,27 @@ void ReDockItContainer::LoadWorkspace(const char* name)
       if (!wname[0]) continue;
 
       if (ws->panes[p].tabs[t].isArbitrary) {
+        int arbAction = ws->panes[p].tabs[t].toggleAction;
+        const char* arbCmd = ws->panes[p].tabs[t].actionCommand;
+        // If saved state has no action, check favorites for a matching entry
+        if ((!arbCmd || !arbCmd[0]) && m_favMgr) {
+          int favIdx = m_favMgr->FindByName(wname);
+          if (favIdx >= 0) {
+            const FavoriteEntry& fav = m_favMgr->Get(favIdx);
+            if (fav.actionCommand[0] && strcmp(fav.actionCommand, "0") != 0) {
+              arbAction = fav.toggleAction;
+              arbCmd = fav.actionCommand;
+              DBG("[ReDockIt] LoadWorkspace: enriched '%s' from favorites: action=%d cmd='%s'\n",
+                  wname, arbAction, arbCmd);
+            }
+          }
+        }
         HWND h = WindowManager::FindReaperWindow(wname, m_hwnd);
         if (h) {
-          m_winMgr.CaptureArbitraryWindow(p, h, wname, m_hwnd);
+          m_winMgr.CaptureArbitraryWindow(p, h, wname, m_hwnd, arbAction, arbCmd);
+        } else {
+          m_captureQueue->EnqueueArbitrary(p, wname, arbAction, arbCmd);
+          needsCaptureTimer = true;
         }
       } else {
         for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
@@ -692,7 +729,42 @@ void ReDockItContainer::OnLButtonUp(int x, int y)
 void ReDockItContainer::OnTimer()
 {
   if (m_hwnd && !IsWindowVisible(m_hwnd)) {
-    DBG("[ReDockIt] OnTimer: window no longer visible, shutting down\n");
+    // Don't shut down while capture queue is active — toggle actions
+    // may temporarily hide the docker that contains us
+    if (m_captureQueue->HasPending()) {
+      DBG("[ReDockIt] OnTimer: window not visible but capture queue active, skipping shutdown\n");
+      return;
+    }
+    // Don't shut down if we have captured windows in any pane.
+    // Docker reparenting can make us temporarily invisible, but we must
+    // not release our captured windows. Only shut down if all panes are empty.
+    bool hasCaptured = false;
+    for (int p = 0; p < MAX_PANES; p++) {
+      const PaneState* ps = m_winMgr.GetPaneState(p);
+      if (ps) {
+        for (int t = 0; t < ps->tabCount; t++) {
+          if (ps->tabs[t].captured) {
+            hasCaptured = true;
+            break;
+          }
+        }
+      }
+      if (hasCaptured) break;
+    }
+    if (hasCaptured) {
+      // We have captured windows — do NOT shut down, just wait.
+      // The docker will become visible again after reparenting settles.
+      return;
+    }
+    // Don't shut down during grace period after capture — docker reparenting
+    // may temporarily make us invisible
+    if (m_shutdownGraceTicks > 0) {
+      m_shutdownGraceTicks--;
+      DBG("[ReDockIt] OnTimer: window not visible but grace period active (%d left), skipping shutdown\n",
+          m_shutdownGraceTicks);
+      return;
+    }
+    DBG("[ReDockIt] OnTimer: window no longer visible and no captured windows, shutting down\n");
     Shutdown();
     return;
   }
@@ -884,9 +956,13 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
     int favIdx = cmd - MenuIds::FAV_BASE;
     if (favIdx >= 0 && favIdx < m_favMgr->GetCount()) {
       const FavoriteEntry& fav = m_favMgr->Get(favIdx);
+      DBG("[ReDockIt] FAV CLICK: '%s' search='%s' action=%d cmd='%s' isKnown=%d pane=%d\n",
+          fav.name, fav.searchTitle, fav.toggleAction, fav.actionCommand, fav.isKnown, paneId);
 
       HWND found = WindowManager::FindReaperWindow(fav.searchTitle, m_hwnd);
+      DBG("[ReDockIt] FAV CLICK: FindReaperWindow('%s') -> %p\n", fav.searchTitle, (void*)found);
       if (found) {
+        DBG("[ReDockIt] FAV CLICK: window found, capturing directly\n");
         if (fav.isKnown) {
           for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
             if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
@@ -895,11 +971,14 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
             }
           }
         } else {
-          m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd);
+          m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd,
+                                           fav.toggleAction, fav.actionCommand);
         }
         RefreshLayout();
         SaveState();
       } else if (fav.toggleAction > 0) {
+        DBG("[ReDockIt] FAV CLICK: window not found, has toggle action=%d -> enqueue + fire action\n",
+            fav.toggleAction);
         if (fav.isKnown) {
           for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
             if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
@@ -908,11 +987,22 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
             }
           }
         } else {
-          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, fav.toggleAction);
+          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, fav.toggleAction, fav.actionCommand);
         }
         StartCaptureTimer();
       } else {
-        DBG("[ReDockIt] Favorite '%s': not found and no toggle action\n", fav.name);
+        DBG("[ReDockIt] FAV CLICK: window not found, NO toggle action -> enqueue for polling\n");
+        if (fav.isKnown) {
+          for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
+            if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
+              m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, 0, fav.actionCommand);
+              break;
+            }
+          }
+        } else {
+          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, 0, fav.actionCommand);
+        }
+        StartCaptureTimer();
       }
     }
     return;
@@ -922,9 +1012,29 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
   if (cmd == MenuIds::FAV_ADD) {
     const TabEntry* activeTab = m_winMgr.GetActiveTabEntry(paneId);
     if (activeTab && activeTab->captured && activeTab->name) {
+      char actionCmd[128] = "";
+      if (activeTab->isArbitrary) {
+        // For arbitrary windows, prompt for action command ID
+        if (activeTab->arbitraryActionCmd[0]) {
+          // Already have a stored command string
+          strncpy(actionCmd, activeTab->arbitraryActionCmd, sizeof(actionCmd) - 1);
+        } else if (g_GetUserInputs) {
+          char inputBuf[128] = "";
+          if (g_GetUserInputs("Add to Favorites", 1,
+                              "Action ID or _command (for auto-reopen):",
+                              inputBuf, sizeof(inputBuf))) {
+            if (inputBuf[0]) {
+              strncpy(actionCmd, inputBuf, sizeof(actionCmd) - 1);
+            }
+          }
+        }
+      } else {
+        // Known window — use numeric action ID
+        GetActionCommandString(activeTab->toggleAction, actionCmd, sizeof(actionCmd));
+      }
       m_favMgr->Add(activeTab->name,
                      activeTab->searchTitle ? activeTab->searchTitle : activeTab->name,
-                     activeTab->toggleAction,
+                     actionCmd,
                      !activeTab->isArbitrary);
     }
     return;
@@ -1201,6 +1311,8 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
         else if (self->m_captureQueue->HasPending()) {
           if (self->m_captureQueue->Tick(self->m_hwnd, self->m_winMgr)) {
             self->RefreshLayout();
+            // Grace period: reparenting may temporarily hide our docker
+            self->m_shutdownGraceTicks = 10;  // ~5s at 500ms timer
           }
           if (!self->m_captureQueue->HasPending()) {
             self->StopCaptureTimerIfIdle();

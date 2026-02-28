@@ -15,6 +15,7 @@ struct TabEntry {
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char arbitraryName[256];
   char arbitrarySearchTitle[256];
+  char arbitraryActionCmd[128];   // stable command string ("_RSxxx" or "12345")
 };
 
 struct PaneState {
@@ -31,7 +32,7 @@ public:
 
   // Capture appends a new tab (returns false if MAX_TABS reached)
   bool CaptureByIndex(int paneId, int knownWindowIndex, HWND containerHwnd);
-  bool CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd);
+  bool CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction = 0, const char* actionCmd = nullptr);
 
   // Tab management
   void SetActiveTab(int paneId, int tabIndex);
@@ -55,6 +56,7 @@ public:
 
   static HWND FindReaperWindow(const char* title, HWND skipContainer = nullptr);
   static HWND FindChildInParent(HWND parent, const char* title);
+  static void DumpAllWindowTitles(const char* context = nullptr);
 
 private:
   PaneState m_panes[MAX_PANES];

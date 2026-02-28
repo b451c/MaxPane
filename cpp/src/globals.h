@@ -19,6 +19,34 @@ extern void (*g_SetExtState)(const char*, const char*, const char*, bool);
 extern HWND g_reaperMainHwnd;
 extern int (*g_plugin_register)(const char*, void*);
 extern bool (*g_GetUserInputs)(const char*, int, const char*, char*, int);
+extern int (*g_GetToggleCommandState)(int);
+extern int (*g_NamedCommandLookup)(const char*);
+extern const char* (*g_ReverseNamedCommandLookup)(int);
+
+// Resolve action command string to numeric ID (handles both "_RSxxx" and "12345")
+inline int ResolveActionCommand(const char* cmd)
+{
+  if (!cmd || !cmd[0]) return 0;
+  if (cmd[0] == '_' && g_NamedCommandLookup) {
+    return g_NamedCommandLookup(cmd);
+  }
+  return atoi(cmd);
+}
+
+// Get stable command string for an action ID (returns named ID for custom actions, numeric string for built-in)
+inline const char* GetActionCommandString(int actionId, char* buf, int bufSize)
+{
+  if (actionId <= 0) { buf[0] = '0'; buf[1] = '\0'; return buf; }
+  if (g_ReverseNamedCommandLookup) {
+    const char* named = g_ReverseNamedCommandLookup(actionId);
+    if (named && named[0]) {
+      snprintf(buf, bufSize, "%s", named);
+      return buf;
+    }
+  }
+  snprintf(buf, bufSize, "%d", actionId);
+  return buf;
+}
 
 // Auto-open helpers — canonical logic in one place
 // Default is ON unless explicitly set to "0"

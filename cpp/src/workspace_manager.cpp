@@ -169,8 +169,15 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
         const TabEntry& tab = ps->tabs[t];
         if (tab.captured && tab.name) {
           if (tab.isArbitrary) {
-            char val[280];
-            snprintf(val, sizeof(val), "arb:%s", tab.name);
+            // Get stable action command string
+            char cmdStr[128] = "0";
+            if (tab.arbitraryActionCmd[0]) {
+              strncpy(cmdStr, tab.arbitraryActionCmd, sizeof(cmdStr) - 1);
+            } else if (tab.toggleAction > 0) {
+              GetActionCommandString(tab.toggleAction, cmdStr, sizeof(cmdStr));
+            }
+            char val[512];
+            snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, tab.name);
             g_SetExtState(EXT_SECTION, key, val, true);
           } else {
             g_SetExtState(EXT_SECTION, key, tab.name, true);
@@ -203,8 +210,10 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
       for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
         if (panes[p].tabs[t].isArbitrary) {
-          char val[280];
-          snprintf(val, sizeof(val), "arb:%s", panes[p].tabs[t].name);
+          const char* cmdStr = panes[p].tabs[t].actionCommand[0]
+            ? panes[p].tabs[t].actionCommand : "0";
+          char val[512];
+          snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, panes[p].tabs[t].name);
           g_SetExtState(EXT_SECTION, key, val, true);
         } else {
           g_SetExtState(EXT_SECTION, key, panes[p].tabs[t].name, true);
@@ -232,10 +241,39 @@ void WorkspaceManager::ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int
     for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
       snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
       val = g_GetExtState(EXT_SECTION, key);
+      DBG("[ReDockIt] ReadPaneTabs: %s = '%s'\n", key, val ? val : "(null)");
       if (val && val[0]) {
         if (strncmp(val, "arb:", 4) == 0) {
           panes[p].tabs[t].isArbitrary = true;
-          strncpy(panes[p].tabs[t].name, val + 4, sizeof(panes[p].tabs[t].name) - 1);
+          // Format: "arb:cmdstr:name" (cmdstr = "_RSxxx" or "12345" or "0")
+          // Legacy: "arb:name" (no command)
+          const char* afterArb = val + 4;
+          const char* secondColon = strchr(afterArb, ':');
+          if (secondColon && secondColon > afterArb) {
+            // Extract command string
+            int cmdLen = (int)(secondColon - afterArb);
+            if (cmdLen >= (int)sizeof(panes[p].tabs[t].actionCommand))
+              cmdLen = (int)sizeof(panes[p].tabs[t].actionCommand) - 1;
+            strncpy(panes[p].tabs[t].actionCommand, afterArb, cmdLen);
+            panes[p].tabs[t].actionCommand[cmdLen] = '\0';
+            // Treat "0" as no action (legacy/empty marker)
+            if (strcmp(panes[p].tabs[t].actionCommand, "0") == 0) {
+              panes[p].tabs[t].actionCommand[0] = '\0';
+              panes[p].tabs[t].toggleAction = 0;
+            } else {
+              panes[p].tabs[t].toggleAction = ResolveActionCommand(panes[p].tabs[t].actionCommand);
+            }
+            // Name after second colon
+            strncpy(panes[p].tabs[t].name, secondColon + 1, sizeof(panes[p].tabs[t].name) - 1);
+            DBG("[ReDockIt] ReadPaneTabs: parsed arb cmd='%s' action=%d name='%s'\n",
+                panes[p].tabs[t].actionCommand, panes[p].tabs[t].toggleAction, secondColon + 1);
+          } else {
+            // Legacy format — no action command
+            panes[p].tabs[t].toggleAction = 0;
+            panes[p].tabs[t].actionCommand[0] = '\0';
+            strncpy(panes[p].tabs[t].name, afterArb, sizeof(panes[p].tabs[t].name) - 1);
+            DBG("[ReDockIt] ReadPaneTabs: parsed arb LEGACY name='%s'\n", afterArb);
+          }
         } else {
           panes[p].tabs[t].isArbitrary = false;
           strncpy(panes[p].tabs[t].name, val, sizeof(panes[p].tabs[t].name) - 1);
@@ -352,6 +390,13 @@ void WorkspaceManager::Save(const char* name, const SplitTree& tree, const Windo
       const TabEntry& tab = ps->tabs[t];
       ws.panes[p].tabs[t].isArbitrary = tab.isArbitrary;
       ws.panes[p].tabs[t].toggleAction = tab.toggleAction;
+      if (tab.isArbitrary && tab.arbitraryActionCmd[0]) {
+        strncpy(ws.panes[p].tabs[t].actionCommand, tab.arbitraryActionCmd,
+                sizeof(ws.panes[p].tabs[t].actionCommand) - 1);
+      } else if (tab.toggleAction > 0) {
+        GetActionCommandString(tab.toggleAction, ws.panes[p].tabs[t].actionCommand,
+                               sizeof(ws.panes[p].tabs[t].actionCommand));
+      }
       if (tab.name) {
         strncpy(ws.panes[p].tabs[t].name, tab.name, sizeof(ws.panes[p].tabs[t].name) - 1);
       }

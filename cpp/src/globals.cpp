@@ -10,3 +10,6 @@ void (*g_SetExtState)(const char*, const char*, const char*, bool) = nullptr;
 HWND g_reaperMainHwnd = nullptr;
 int (*g_plugin_register)(const char*, void*) = nullptr;
 bool (*g_GetUserInputs)(const char*, int, const char*, char*, int) = nullptr;
+int (*g_GetToggleCommandState)(int) = nullptr;
+int (*g_NamedCommandLookup)(const char*) = nullptr;
+const char* (*g_ReverseNamedCommandLookup)(int) = nullptr;

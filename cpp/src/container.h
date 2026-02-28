@@ -61,6 +61,7 @@ private:
   CaptureQueue* m_captureQueue;
   FavoritesManager* m_favMgr;
   WorkspaceManager* m_wsMgr;
+  int m_shutdownGraceTicks;  // countdown after capture completes before allowing shutdown
 
   void RefreshLayout();
   void StartCaptureTimer();

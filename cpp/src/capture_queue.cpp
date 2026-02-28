@@ -32,10 +32,21 @@ void CaptureQueue::EnqueueKnown(int paneId, int knownIdx)
   pc.isArbitrary = false;
   pc.tickCount = 0;
   pc.retryCount = 0;
+  pc.maxRetries = MAX_RETRIES;
 
-  // Fire the toggle action to open the window
+  // Fire the toggle action to open the window — but only if it's currently closed.
+  // If already open (state=1), don't toggle or we'd close it.
   if (g_Main_OnCommand) {
-    g_Main_OnCommand(def.toggleActionId, 0);
+    bool alreadyOpen = false;
+    if (g_GetToggleCommandState) {
+      int state = g_GetToggleCommandState(def.toggleActionId);
+      alreadyOpen = (state == 1);
+      DBG("[ReDockIt] CaptureQueue: toggle state for '%s' (action %d) = %d\n",
+          def.name, def.toggleActionId, state);
+    }
+    if (!alreadyOpen) {
+      g_Main_OnCommand(def.toggleActionId, 0);
+    }
   }
 
   m_count++;
@@ -43,7 +54,7 @@ void CaptureQueue::EnqueueKnown(int paneId, int knownIdx)
       def.name, paneId, m_count);
 }
 
-void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleAction)
+void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleAction, const char* actionCmd)
 {
   if (m_count >= MAX_PENDING) return;
   if (!name || !name[0]) return;
@@ -59,6 +70,10 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   pc.isArbitrary = true;
   pc.tickCount = 0;
   pc.retryCount = 0;
+  pc.maxRetries = (toggleAction > 0) ? MAX_RETRIES : MAX_RETRIES_ARBITRARY;
+  if (actionCmd && actionCmd[0]) {
+    strncpy(pc.actionCommand, actionCmd, sizeof(pc.actionCommand) - 1);
+  }
 
   // Fire the toggle action if we have one
   if (toggleAction > 0 && g_Main_OnCommand) {
@@ -66,8 +81,8 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   }
 
   m_count++;
-  DBG("[ReDockIt] CaptureQueue: enqueued arbitrary '%s' action=%d for pane %d (count=%d)\n",
-      name, toggleAction, paneId, m_count);
+  DBG("[ReDockIt] CaptureQueue: enqueued arbitrary '%s' action=%d cmd='%s' maxRetries=%d for pane %d (count=%d)\n",
+      name, toggleAction, pc.actionCommand, pc.maxRetries, paneId, m_count);
 }
 
 bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
@@ -103,22 +118,53 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     }
 
     if (found) {
+      // For arbitrary windows: check if the found window is the inner content
+      // (not the dock frame). ReaImGui scripts have a dock frame "Title (docked)"
+      // that contains the actual rendered UI. If we find "Title" but not
+      // "Title (docked)", wait a few retries for the dock frame to appear.
+      if (pc.isArbitrary) {
+        char dockedTitle[512];
+        snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", pc.searchTitle);
+        char foundTitle[512];
+        GetWindowText(found, foundTitle, sizeof(foundTitle));
+
+        bool foundIsDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
+        if (!foundIsDockFrame && pc.retryCount <= 8) {
+          // We found the inner window but no dock frame yet — wait for it
+          DBG("[ReDockIt] CaptureQueue: found inner '%s' hwnd=%p but no dock frame yet, waiting (retry=%d)\n",
+              pc.displayName, (void*)found, pc.retryCount);
+          continue;
+        }
+        if (!foundIsDockFrame) {
+          DBG("[ReDockIt] CaptureQueue: no dock frame appeared for '%s' after %d retries, using inner window\n",
+              pc.displayName, pc.retryCount);
+        }
+      }
+
+      DBG("[ReDockIt] CaptureQueue: FOUND '%s' hwnd=%p retry=%d, attempting capture (arb=%d action=%d cmd='%s')\n",
+          pc.displayName, (void*)found, pc.retryCount, pc.isArbitrary, pc.toggleAction, pc.actionCommand);
       bool captured = false;
       if (pc.isArbitrary) {
-        captured = winMgr.CaptureArbitraryWindow(pc.paneId, found, pc.displayName, containerHwnd);
+        captured = winMgr.CaptureArbitraryWindow(pc.paneId, found, pc.displayName, containerHwnd,
+                                                    pc.toggleAction, pc.actionCommand);
       } else {
         captured = winMgr.CaptureByIndex(pc.paneId, pc.knownWindowIndex, containerHwnd);
       }
 
       if (captured) {
-        DBG("[ReDockIt] CaptureQueue: captured '%s' after %d retries\n",
-            pc.displayName, pc.retryCount);
+        DBG("[ReDockIt] CaptureQueue: SUCCESS captured '%s' into pane %d after %d retries\n",
+            pc.displayName, pc.paneId, pc.retryCount);
         anyCaptured = true;
+      } else {
+        DBG("[ReDockIt] CaptureQueue: CAPTURE FAILED for '%s' hwnd=%p (already captured or pane full?)\n",
+            pc.displayName, (void*)found);
       }
       Remove(i);
-    } else if (pc.retryCount >= MAX_RETRIES) {
+    } else if (pc.retryCount >= pc.maxRetries) {
       DBG("[ReDockIt] CaptureQueue: FAILED '%s' after %d retries\n",
           pc.displayName, pc.retryCount);
+      // Diagnostic: dump all window titles to help discover actual title
+      WindowManager::DumpAllWindowTitles(pc.displayName);
       Remove(i);
     }
   }

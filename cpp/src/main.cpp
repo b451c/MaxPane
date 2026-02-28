@@ -22,6 +22,9 @@
 #define REAPERAPI_WANT_plugin_register
 #define REAPERAPI_WANT_GetMainHwnd
 #define REAPERAPI_WANT_GetUserInputs
+#define REAPERAPI_WANT_GetToggleCommandState
+#define REAPERAPI_WANT_NamedCommandLookup
+#define REAPERAPI_WANT_ReverseNamedCommandLookup
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
@@ -103,6 +106,9 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_GetExtState = GetExtState;
   g_SetExtState = SetExtState;
   g_GetUserInputs = GetUserInputs;
+  g_GetToggleCommandState = GetToggleCommandState;
+  g_NamedCommandLookup = NamedCommandLookup;
+  g_ReverseNamedCommandLookup = ReverseNamedCommandLookup;
 
   g_cmdId = rec->Register("command_id", (void*)"ReDockIt_OpenContainer");
   if (!g_cmdId) return 0;
