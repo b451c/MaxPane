@@ -784,7 +784,7 @@ void ReDockItContainer::OnContextMenu(int x, int y)
   // Check if click is on tab bar
   int tabIdx = TabHitTest(paneId, x, y);
   if (tabIdx >= 0) {
-    HMENU menu = BuildTabContextMenu(paneId, tabIdx, m_tree, m_winMgr);
+    HMENU menu = BuildTabContextMenu(paneId, tabIdx, m_tree, m_winMgr, *m_favMgr);
     if (!menu) return;
 
     POINT pt = {x, y};
@@ -832,6 +832,31 @@ void ReDockItContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     m_winMgr.SetTabColor(paneId, tabIdx, newColor);
     InvalidateRect(m_hwnd, nullptr, TRUE);
     SaveState();
+  } else if (cmd == MenuIds::FAV_ADD) {
+    const TabEntry* tab = m_winMgr.GetTab(paneId, tabIdx);
+    if (tab && tab->captured && tab->name) {
+      char actionCmd[128] = "";
+      if (tab->isArbitrary) {
+        if (tab->arbitraryActionCmd[0]) {
+          strncpy(actionCmd, tab->arbitraryActionCmd, sizeof(actionCmd) - 1);
+        } else if (g_GetUserInputs) {
+          char inputBuf[128] = "";
+          if (g_GetUserInputs("Add to Favorites", 1,
+                              "Action ID or _command (for auto-reopen):",
+                              inputBuf, sizeof(inputBuf))) {
+            if (inputBuf[0]) {
+              strncpy(actionCmd, inputBuf, sizeof(actionCmd) - 1);
+            }
+          }
+        }
+      } else {
+        GetActionCommandString(tab->toggleAction, actionCmd, sizeof(actionCmd));
+      }
+      m_favMgr->Add(tab->name,
+                     tab->searchTitle ? tab->searchTitle : tab->name,
+                     actionCmd,
+                     !tab->isArbitrary);
+    }
   }
 }
 
@@ -928,6 +953,12 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
+  // Delete Pane (release all tabs + merge)
+  if (cmd == MenuIds::DELETE_PANE) {
+    MergePane(paneId);  // MergePane already calls ReleaseWindow which releases all tabs
+    return;
+  }
+
   // Close (release active tab only)
   if (cmd == MenuIds::RELEASE) {
     const PaneState* ps = m_winMgr.GetPaneState(paneId);
@@ -1019,38 +1050,6 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
         }
         StartCaptureTimer();
       }
-    }
-    return;
-  }
-
-  // Favorites — add current tab
-  if (cmd == MenuIds::FAV_ADD) {
-    const TabEntry* activeTab = m_winMgr.GetActiveTabEntry(paneId);
-    if (activeTab && activeTab->captured && activeTab->name) {
-      char actionCmd[128] = "";
-      if (activeTab->isArbitrary) {
-        // For arbitrary windows, prompt for action command ID
-        if (activeTab->arbitraryActionCmd[0]) {
-          // Already have a stored command string
-          strncpy(actionCmd, activeTab->arbitraryActionCmd, sizeof(actionCmd) - 1);
-        } else if (g_GetUserInputs) {
-          char inputBuf[128] = "";
-          if (g_GetUserInputs("Add to Favorites", 1,
-                              "Action ID or _command (for auto-reopen):",
-                              inputBuf, sizeof(inputBuf))) {
-            if (inputBuf[0]) {
-              strncpy(actionCmd, inputBuf, sizeof(actionCmd) - 1);
-            }
-          }
-        }
-      } else {
-        // Known window — use numeric action ID
-        GetActionCommandString(activeTab->toggleAction, actionCmd, sizeof(actionCmd));
-      }
-      m_favMgr->Add(activeTab->name,
-                     activeTab->searchTitle ? activeTab->searchTitle : activeTab->name,
-                     actionCmd,
-                     !activeTab->isArbitrary);
     }
     return;
   }

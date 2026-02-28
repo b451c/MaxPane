@@ -89,7 +89,8 @@ static void BuildOpenWindowsSubmenu(HMENU submenu, int baseId,
 
 HMENU BuildTabContextMenu(int paneId, int tabIndex,
                           const SplitTree& tree,
-                          const WindowManager& winMgr)
+                          const WindowManager& winMgr,
+                          const FavoritesManager& favMgr)
 {
   HMENU menu = CreatePopupMenu();
   if (!menu) return nullptr;
@@ -104,6 +105,30 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::TAB_CLOSE;
     mi.dwTypeData = (char*)"Close Tab";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Add to Favorites
+  {
+    const TabEntry* tab = winMgr.GetTab(paneId, tabIndex);
+    bool canAdd = (tab && tab->captured && tab->name);
+    bool alreadyFav = false;
+    if (canAdd) {
+      for (int i = 0; i < favMgr.GetCount(); i++) {
+        if (strcmp(favMgr.Get(i).name, tab->name) == 0) {
+          alreadyFav = true;
+          break;
+        }
+      }
+    }
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::FAV_ADD;
+    mi.dwTypeData = alreadyFav ? (char*)"Already in Favorites" : (char*)"Add to Favorites";
+    mi.fState = (canAdd && !alreadyFav) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
@@ -302,27 +327,6 @@ HMENU BuildPaneContextMenu(int paneId,
         InsertMenuItem(favMenu, favPos++, TRUE, &mi);
       }
 
-      if (favCount > 0) {
-        MENUITEMINFO sep = {};
-        sep.cbSize = sizeof(sep);
-        sep.fMask = MIIM_TYPE;
-        sep.fType = MFT_SEPARATOR;
-        InsertMenuItem(favMenu, favPos++, TRUE, &sep);
-      }
-
-      // Add Current Tab
-      const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
-      {
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::FAV_ADD;
-        mi.dwTypeData = (char*)"Add Current Tab";
-        mi.fState = (activeTab && activeTab->captured) ? 0 : MFS_GRAYED;
-        InsertMenuItem(favMenu, favPos++, TRUE, &mi);
-      }
-
       // Delete submenu
       if (favCount > 0) {
         MENUITEMINFO sep = {};
@@ -434,7 +438,7 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::SPLIT_H;
-    mi.dwTypeData = (char*)"Split Horizontal";
+    mi.dwTypeData = (char*)"Split Top / Bottom";
     mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
@@ -446,21 +450,17 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::SPLIT_V;
-    mi.dwTypeData = (char*)"Split Vertical";
+    mi.dwTypeData = (char*)"Split Left / Right";
     mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
   // Merge with Sibling
   {
-    const PaneState* ps = winMgr.GetPaneState(paneId);
-    bool canMerge = false;
     int nodeIdx = tree.NodeForPane(paneId);
-    if (nodeIdx >= 0 && tree.CanMerge(nodeIdx)) {
-      if (!ps || ps->tabCount == 0) {
-        canMerge = true;
-      }
-    }
+    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
+    const PaneState* ps = winMgr.GetPaneState(paneId);
+    bool isEmpty = (!ps || ps->tabCount == 0);
 
     MENUITEMINFO mi = {};
     mi.cbSize = sizeof(mi);
@@ -468,6 +468,21 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::MERGE;
     mi.dwTypeData = (char*)"Merge with Sibling";
+    mi.fState = (canMerge && isEmpty) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Delete Pane (release all tabs + merge)
+  {
+    int nodeIdx = tree.NodeForPane(paneId);
+    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::DELETE_PANE;
+    mi.dwTypeData = (char*)"Delete Pane";
     mi.fState = canMerge ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }

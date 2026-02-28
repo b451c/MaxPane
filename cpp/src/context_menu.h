@@ -27,6 +27,7 @@ namespace MenuIds {
   static const int SPLIT_H = 10000;
   static const int SPLIT_V = 10001;
   static const int MERGE  = 10002;
+  static const int DELETE_PANE = 10003;
 }
 
 // Open window entry (populated by BuildPaneContextMenu's enumeration)
@@ -42,7 +43,8 @@ const OpenWindowEntry& GetOpenWindow(int index);
 // Build tab right-click menu. Caller owns returned HMENU.
 HMENU BuildTabContextMenu(int paneId, int tabIndex,
                           const SplitTree& tree,
-                          const WindowManager& winMgr);
+                          const WindowManager& winMgr,
+                          const FavoritesManager& favMgr);
 
 // Build pane right-click menu. Caller owns returned HMENU.
 HMENU BuildPaneContextMenu(int paneId,
