@@ -10,9 +10,12 @@ set(WDL_DIR "${CMAKE_SOURCE_DIR}/WDL/WDL")
 
 add_library(reaper_redockit SHARED
   src/main.cpp
+  src/globals.cpp
   src/container.cpp
   src/splitter.cpp
   src/window_manager.cpp
+  src/capture_queue.cpp
+  src/favorites_manager.cpp
 )
 
 target_include_directories(reaper_redockit PRIVATE
@@ -24,6 +27,11 @@ target_include_directories(reaper_redockit PRIVATE
 
 target_compile_definitions(reaper_redockit PRIVATE
   SWELL_PROVIDED_BY_APP
+  REDOCKIT_DEBUG
+)
+
+target_compile_options(reaper_redockit PRIVATE
+  -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 )
 
 if(APPLE)

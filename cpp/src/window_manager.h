@@ -55,9 +55,8 @@ public:
   bool IsAnyCaptured() const;
   bool IsWindowCaptured(HWND hwnd) const;
 
-  static HWND FindReaperWindow(const char* title);
+  static HWND FindReaperWindow(const char* title, HWND skipContainer = nullptr);
   static HWND FindChildInParent(HWND parent, const char* title);
-  static void DumpAllWindows();
 
 private:
   PaneState m_panes[MAX_PANES];

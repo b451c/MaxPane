@@ -44,12 +44,6 @@ public:
   float GetRatio(int idx) const { return m_ratios[idx]; }
   void SetRatio(int idx, float r) { if (idx >= 0 && idx < MAX_SPLITTERS) m_ratios[idx] = r; }
 
-  // Legacy wrappers for backward compat
-  float GetVSplitRatio() const { return m_ratios[0]; }
-  float GetHSplitRatio() const { return m_ratios[1]; }
-  void SetVSplitRatio(float r) { m_ratios[0] = r; }
-  void SetHSplitRatio(float r) { m_ratios[1] = r; }
-
 private:
   LayoutPreset m_preset;
   float m_ratios[MAX_SPLITTERS];

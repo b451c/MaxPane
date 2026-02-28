@@ -25,18 +25,8 @@
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
+#include "globals.h"
 #include "container.h"
-
-// Global REAPER API function pointers
-void (*g_DockWindowAddEx)(HWND, const char*, const char*, bool) = nullptr;
-void (*g_DockWindowRemove)(HWND) = nullptr;
-void (*g_ShowConsoleMsg)(const char*) = nullptr;
-void (*g_Main_OnCommand)(int, int) = nullptr;
-const char* (*g_GetExtState)(const char*, const char*) = nullptr;
-void (*g_SetExtState)(const char*, const char*, const char*, bool) = nullptr;
-HWND g_reaperMainHwnd = nullptr;
-int (*g_plugin_register)(const char*, void*) = nullptr;
-bool (*g_GetUserInputs)(const char*, int, const char*, char*, int) = nullptr;
 
 static ReDockItContainer* g_container = nullptr;
 static int g_cmdId = 0;
@@ -48,18 +38,12 @@ static void startupTimerFunc()
   if (++g_startupCounter < 15) return; // ~450ms delay
   g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
 
-  if (g_GetExtState) {
-    const char* val = g_GetExtState("ReDockIt_cpp", "auto_open");
-    // Auto-open by default — only skip if explicitly set to "0"
-    bool autoOpen = true;
-    if (val && val[0] == '0') autoOpen = false;
-    if (autoOpen) {
-      if (!g_container) {
-        g_container = new ReDockItContainer();
-      }
-      if (!g_container->GetHwnd()) {
-        g_container->Create();
-      }
+  if (IsAutoOpenEnabled()) {
+    if (!g_container) {
+      g_container = new ReDockItContainer();
+    }
+    if (!g_container->GetHwnd()) {
+      g_container->Create();
     }
   }
 }

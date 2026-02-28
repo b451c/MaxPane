@@ -2,17 +2,6 @@
 #include "splitter.h"
 #include "window_manager.h"
 
-// Forward declarations for REAPER API functions we import
-extern void (*g_DockWindowAddEx)(HWND hwnd, const char* name, const char* identstr, bool allowShow);
-extern void (*g_DockWindowRemove)(HWND);
-extern void (*g_ShowConsoleMsg)(const char*);
-extern void (*g_Main_OnCommand)(int, int);
-extern const char* (*g_GetExtState)(const char*, const char*);
-extern void (*g_SetExtState)(const char*, const char*, const char*, bool);
-extern HWND g_reaperMainHwnd;
-extern int (*g_plugin_register)(const char*, void*);
-extern bool (*g_GetUserInputs)(const char*, int, const char*, char*, int);
-
 // Capture mode: user clicks any window to grab it into a pane
 struct CaptureMode {
   bool active;
@@ -47,6 +36,9 @@ struct WorkspaceEntry {
   } panes[MAX_PANES];
 };
 
+class CaptureQueue;
+class FavoritesManager;
+
 class ReDockItContainer {
 public:
   ReDockItContainer();
@@ -58,8 +50,6 @@ public:
   void Toggle();
   bool IsVisible() const;
 
-  void CaptureDefaultWindows();
-  void CaptureWindowToPane(int paneId, const char* windowName);
   void SetLayoutPreset(LayoutPreset preset);
 
   void SaveState();
@@ -86,15 +76,19 @@ private:
   DragState m_dragState;
   WorkspaceEntry m_workspaces[MAX_WORKSPACES];
   int m_workspaceCount;
+  CaptureQueue* m_captureQueue;
+  FavoritesManager* m_favMgr;
+
+  void RefreshLayout();
+  void StartCaptureTimer();
+  void StopCaptureTimerIfIdle();
 
   void OnSize(int cx, int cy);
   void OnPaint(HDC hdc);
-  void OnLButtonDown(int x, int y);
   void OnMouseMove(int x, int y);
   void OnLButtonUp(int x, int y);
   void OnTimer();
   void OnContextMenu(int x, int y);
-  void DrawPaneLabel(HDC hdc, const Pane& pane, const char* label);
   void DrawTabBar(HDC hdc, int paneId, const RECT& paneRect);
 
   // Tab hit testing
