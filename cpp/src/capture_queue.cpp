@@ -131,6 +131,10 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         bool foundIsDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
         if (!foundIsDockFrame && pc.retryCount <= 8) {
           // We found the inner window but no dock frame yet — wait for it
+          if (pc.retryCount == 1) {
+            // Dump all windows once to see if dock frame exists anywhere
+            WindowManager::DumpAllWindowTitles(pc.displayName);
+          }
           DBG("[ReDockIt] CaptureQueue: found inner '%s' hwnd=%p but no dock frame yet, waiting (retry=%d)\n",
               pc.displayName, (void*)found, pc.retryCount);
           continue;

@@ -961,21 +961,36 @@ void ReDockItContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
       HWND found = WindowManager::FindReaperWindow(fav.searchTitle, m_hwnd);
       DBG("[ReDockIt] FAV CLICK: FindReaperWindow('%s') -> %p\n", fav.searchTitle, (void*)found);
-      if (found) {
-        DBG("[ReDockIt] FAV CLICK: window found, capturing directly\n");
-        if (fav.isKnown) {
-          for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
-            if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
-              m_winMgr.CaptureByIndex(paneId, j, m_hwnd);
-              break;
-            }
+      if (found && fav.isKnown) {
+        // Known windows don't need dock frame logic — capture directly
+        DBG("[ReDockIt] FAV CLICK: known window found, capturing directly\n");
+        for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
+          if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
+            m_winMgr.CaptureByIndex(paneId, j, m_hwnd);
+            break;
           }
-        } else {
-          m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd,
-                                           fav.toggleAction, fav.actionCommand);
         }
         RefreshLayout();
         SaveState();
+      } else if (found && !fav.isKnown) {
+        // Arbitrary window found — check if it's a dock frame or inner window.
+        // Always go through CaptureQueue so dock frame wait logic applies.
+        char foundTitle[512];
+        GetWindowText(found, foundTitle, sizeof(foundTitle));
+        bool isDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
+        if (isDockFrame) {
+          // Dock frame found — capture directly, it has the UI
+          DBG("[ReDockIt] FAV CLICK: dock frame found, capturing directly\n");
+          m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd,
+                                           fav.toggleAction, fav.actionCommand);
+          RefreshLayout();
+          SaveState();
+        } else {
+          // Inner window found — enqueue via CaptureQueue to wait for dock frame
+          DBG("[ReDockIt] FAV CLICK: inner window found, enqueue to wait for dock frame\n");
+          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, fav.toggleAction, fav.actionCommand);
+          StartCaptureTimer();
+        }
       } else if (fav.toggleAction > 0) {
         DBG("[ReDockIt] FAV CLICK: window not found, has toggle action=%d -> enqueue + fire action\n",
             fav.toggleAction);

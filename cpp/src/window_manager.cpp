@@ -75,18 +75,24 @@ static BOOL CALLBACK FindChildWindowEnumProc(HWND hwnd, LPARAM lParam)
   if (!buf[0]) return TRUE;
 
   if (strstr(buf, "toolbar") || strstr(buf, "Toolbar")) return TRUE;
-  if (strstr(buf, "(docked)")) return TRUE;
 
   // Skip windows inside our container
   if (data->skipContainer && (hwnd == data->skipContainer || IsChild(data->skipContainer, hwnd)))
     return TRUE;
 
-  if (strstr(buf, data->searchTitle) == buf) {
+  // Strip " (docked)" suffix for matching (ReaImGui dock frames)
+  char matchBuf[512];
+  strncpy(matchBuf, buf, sizeof(matchBuf) - 1);
+  matchBuf[sizeof(matchBuf) - 1] = '\0';
+  char* dockedSuffix = strstr(matchBuf, " (docked)");
+  if (dockedSuffix) *dockedSuffix = '\0';
+
+  if (strstr(matchBuf, data->searchTitle) == matchBuf) {
     DBG("[ReDockIt] EnumChildWindows: PREFIX match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
   }
-  if (strstr(buf, data->searchTitle)) {
+  if (strstr(matchBuf, data->searchTitle)) {
     DBG("[ReDockIt] EnumChildWindows: SUBSTR match '%s' for '%s' hwnd=%p\n", buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
@@ -136,7 +142,41 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
   }
 
   // 4. Search child windows of REAPER main window
+  //    First pass: look for dock frame "Title (docked)" among children
+  //    Second pass: look for inner window "Title" among children
+  //    This ensures we prefer dock frames (which have rendered UI) over inner windows
   if (g_reaperMainHwnd) {
+    // 4a. Search for dock frame among direct children
+    {
+      char dockedTitle[512];
+      snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", title);
+      FindWindowData dockData = { dockedTitle, nullptr, skipContainer };
+      EnumChildWindows(g_reaperMainHwnd, FindChildWindowEnumProc, (LPARAM)&dockData);
+      if (dockData.result) {
+        DBG("[ReDockIt] FindReaperWindow: DOCKED FRAME child match hwnd=%p\n", (void*)dockData.result);
+        return dockData.result;
+      }
+    }
+
+    // 4b. Search for dock frame among grandchildren (inside REAPER_dock containers)
+    {
+      char dockedTitle[512];
+      snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", title);
+      FindWindowData dockData = { dockedTitle, nullptr, skipContainer };
+      HWND dockChild = nullptr;
+      while ((dockChild = FindWindowEx(g_reaperMainHwnd, dockChild, nullptr, nullptr)) != nullptr) {
+        if (skipContainer && (dockChild == skipContainer || IsChild(skipContainer, dockChild)))
+          continue;
+        dockData.result = nullptr;
+        EnumChildWindows(dockChild, FindChildWindowEnumProc, (LPARAM)&dockData);
+        if (dockData.result) {
+          DBG("[ReDockIt] FindReaperWindow: DOCKED FRAME grandchild match hwnd=%p\n", (void*)dockData.result);
+          return dockData.result;
+        }
+      }
+    }
+
+    // 4c. Fallback: search for inner window among direct children
     data.result = nullptr;
     EnumChildWindows(g_reaperMainHwnd, FindChildWindowEnumProc, (LPARAM)&data);
     if (data.result) {
