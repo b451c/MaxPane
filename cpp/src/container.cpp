@@ -451,10 +451,10 @@ bool ReDockItContainer::IsOnTabCloseButton(int paneId, int tabIndex, int x, int 
   int tabRight = paneRect.left + (tabIndex + 1) * tabWidth;
   if (tabRight > paneRect.right) tabRight = paneRect.right;
 
-  int closeRight = tabRight - 4;
-  int closeLeft = closeRight - 12;
-  int closeTop = tabBarTop + 3;
-  int closeBottom = tabBarTop + TAB_BAR_HEIGHT - 3;
+  int closeRight = tabRight - CLOSE_BTN_RIGHT_MARGIN;
+  int closeLeft = closeRight - CLOSE_BTN_WIDTH;
+  int closeTop = tabBarTop + CLOSE_BTN_VERT_MARGIN;
+  int closeBottom = tabBarTop + TAB_BAR_HEIGHT - CLOSE_BTN_VERT_MARGIN;
 
   return (x >= closeLeft && x <= closeRight && y >= closeTop && y <= closeBottom);
 }
@@ -482,7 +482,7 @@ void ReDockItContainer::UpdateTabDrag(int x, int y)
     int dy = y - m_dragState.startPt.y;
     int adx = dx < 0 ? -dx : dx;
     int ady = dy < 0 ? -dy : dy;
-    if (adx < 15 && ady < 15) return;
+    if (adx < DRAG_THRESHOLD_PX && ady < DRAG_THRESHOLD_PX) return;
     m_dragState.dragStarted = true;
     m_dragState.active = true;
   }
@@ -589,12 +589,12 @@ void ReDockItContainer::OnPaint(HDC hdc)
       RECT headerRect = paneRect;
       headerRect.bottom = headerRect.top + TAB_BAR_HEIGHT;
 
-      HBRUSH headerBrush = CreateSolidBrush(RGB(50, 50, 50));
+      HBRUSH headerBrush = CreateSolidBrush(COLOR_EMPTY_HEADER_BG);
       FillRect(hdc, &headerRect, headerBrush);
       DeleteObject(headerBrush);
 
       SetBkMode(hdc, TRANSPARENT);
-      SetTextColor(hdc, RGB(180, 180, 180));
+      SetTextColor(hdc, COLOR_EMPTY_HEADER_TEXT);
       char headerText[128];
       if (m_captureMode.active && m_captureMode.targetPaneId == paneId) {
         snprintf(headerText, sizeof(headerText), " Click a window to capture...");
@@ -617,7 +617,7 @@ void ReDockItContainer::OnPaint(HDC hdc)
   // Drag highlight
   if (m_dragState.active && m_dragState.dragStarted && m_dragState.highlightPaneId >= 0) {
     const RECT& r = m_tree.GetPaneRect(m_dragState.highlightPaneId);
-    HPEN highlightPen = CreatePen(PS_SOLID, 3, RGB(80, 140, 255));
+    HPEN highlightPen = CreatePen(PS_SOLID, 3, COLOR_DRAG_HIGHLIGHT);
     HPEN oldPen = (HPEN)SelectObject(hdc, highlightPen);
     HBRUSH oldBrush = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
     Rectangle(hdc, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1);
@@ -637,7 +637,7 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
   int paneWidth = paneRect.right - paneRect.left;
 
   RECT barRect = { paneRect.left, tabBarTop, paneRect.right, tabBarBottom };
-  HBRUSH barBg = CreateSolidBrush(RGB(40, 40, 40));
+  HBRUSH barBg = CreateSolidBrush(COLOR_TAB_BAR_BG);
   FillRect(hdc, &barRect, barBg);
   DeleteObject(barBg);
 
@@ -663,7 +663,7 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
           bgColor = RGB(tc.r / 2, tc.g / 2, tc.b / 2);
         }
       } else {
-        bgColor = (t == ps->activeTab) ? RGB(80, 80, 80) : RGB(50, 50, 50);
+        bgColor = (t == ps->activeTab) ? COLOR_TAB_ACTIVE_BG : COLOR_TAB_INACTIVE_BG;
       }
       HBRUSH tabBrush = CreateSolidBrush(bgColor);
       FillRect(hdc, &tabRect, tabBrush);
@@ -671,19 +671,19 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
     }
 
     SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, (t == ps->activeTab) ? RGB(220, 220, 220) : RGB(160, 160, 160));
+    SetTextColor(hdc, (t == ps->activeTab) ? COLOR_TAB_ACTIVE_TEXT : COLOR_TAB_INACTIVE_TEXT);
     RECT textRect = tabRect;
-    textRect.left += 4;
-    textRect.right -= 16;
+    textRect.left += TAB_TEXT_LEFT_PAD;
+    textRect.right -= TAB_TEXT_RIGHT_MARGIN;
     const char* tabName = ps->tabs[t].name ? ps->tabs[t].name : "?";
     DrawText(hdc, tabName, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-    SetTextColor(hdc, RGB(150, 150, 150));
+    SetTextColor(hdc, COLOR_TAB_CLOSE_TEXT);
     RECT closeRect = { tabRight - 16, tabBarTop + 2, tabRight - 2, tabBarBottom - 2 };
     DrawText(hdc, "x", 1, &closeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
     if (t < ps->tabCount - 1) {
-      HPEN sepPen = CreatePen(PS_SOLID, 1, RGB(30, 30, 30));
+      HPEN sepPen = CreatePen(PS_SOLID, 1, COLOR_TAB_SEPARATOR);
       HPEN oldPen = (HPEN)SelectObject(hdc, sepPen);
       MoveToEx(hdc, tabRight, tabBarTop + 2, nullptr);
       LineTo(hdc, tabRight, tabBarBottom - 2);
@@ -1322,7 +1322,7 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
           if (self->m_captureQueue->Tick(self->m_hwnd, self->m_winMgr)) {
             self->RefreshLayout();
             // Grace period: reparenting may temporarily hide our docker
-            self->m_shutdownGraceTicks = 10;  // ~5s at 500ms timer
+            self->m_shutdownGraceTicks = SHUTDOWN_GRACE_TICKS;
           }
           if (!self->m_captureQueue->HasPending()) {
             self->StopCaptureTimerIfIdle();

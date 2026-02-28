@@ -85,3 +85,53 @@ static const WindowDef KNOWN_WINDOWS[] = {
 };
 
 static const int NUM_KNOWN_WINDOWS = sizeof(KNOWN_WINDOWS) / sizeof(KNOWN_WINDOWS[0]);
+
+// Maximum favorites
+static const int MAX_FAVORITES = 32;
+
+// =========================================================================
+// UI color constants
+// =========================================================================
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#ifndef SWELL_PROVIDED_BY_APP
+#define SWELL_PROVIDED_BY_APP
+#endif
+#include "swell/swell.h"
+#endif
+
+// Empty pane header
+static const COLORREF COLOR_EMPTY_HEADER_BG   = RGB(50, 50, 50);
+static const COLORREF COLOR_EMPTY_HEADER_TEXT  = RGB(180, 180, 180);
+
+// Tab bar
+static const COLORREF COLOR_TAB_BAR_BG        = RGB(40, 40, 40);
+static const COLORREF COLOR_TAB_ACTIVE_BG     = RGB(80, 80, 80);
+static const COLORREF COLOR_TAB_INACTIVE_BG   = RGB(50, 50, 50);
+static const COLORREF COLOR_TAB_ACTIVE_TEXT    = RGB(220, 220, 220);
+static const COLORREF COLOR_TAB_INACTIVE_TEXT  = RGB(160, 160, 160);
+static const COLORREF COLOR_TAB_CLOSE_TEXT     = RGB(150, 150, 150);
+static const COLORREF COLOR_TAB_SEPARATOR      = RGB(30, 30, 30);
+
+// Drag highlight
+static const COLORREF COLOR_DRAG_HIGHLIGHT     = RGB(80, 140, 255);
+
+// =========================================================================
+// UI geometry constants
+// =========================================================================
+
+static const int DRAG_THRESHOLD_PX      = 15;
+static const int CLOSE_BTN_WIDTH        = 12;
+static const int CLOSE_BTN_RIGHT_MARGIN = 4;
+static const int CLOSE_BTN_VERT_MARGIN  = 3;
+static const int TAB_TEXT_LEFT_PAD      = 4;
+static const int TAB_TEXT_RIGHT_MARGIN  = 16;
+
+// =========================================================================
+// Timing constants
+// =========================================================================
+
+static const int SHUTDOWN_GRACE_TICKS   = 10;    // ~5s at 500ms timer
+static const int STARTUP_DELAY_TICKS    = 15;    // ~450ms at 30ms timer

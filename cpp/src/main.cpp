@@ -39,7 +39,7 @@ static int g_cmdId = 0;
 static int g_startupCounter = 0;
 static void startupTimerFunc()
 {
-  if (++g_startupCounter < 15) return; // ~450ms delay
+  if (++g_startupCounter < STARTUP_DELAY_TICKS) return;
   g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
 
   if (IsAutoOpenEnabled()) {

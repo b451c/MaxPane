@@ -1,6 +1,5 @@
 #pragma once
-
-static const int MAX_FAVORITES = 32;
+#include "config.h"
 
 struct FavoriteEntry {
   char name[256];
