@@ -657,14 +657,6 @@ int WindowManager::GetTabCount(int paneId) const
   return m_panes[paneId].tabCount;
 }
 
-bool WindowManager::IsAnyCaptured() const
-{
-  for (int i = 0; i < MAX_PANES; i++) {
-    if (m_panes[i].tabCount > 0) return true;
-  }
-  return false;
-}
-
 bool WindowManager::IsWindowCaptured(HWND hwnd) const
 {
   if (!hwnd) return false;

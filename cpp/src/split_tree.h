@@ -114,7 +114,6 @@ private:
   int AllocNode();
   void FreeNode(int idx);
   void RecalcNode(int idx, const RECT& area);
-  void BuildLists(int idx);
 
   static void SplitRectV(const RECT& parent, float ratio,
                           RECT& outLeft, RECT& outSplitter, RECT& outRight);

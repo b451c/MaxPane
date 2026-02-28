@@ -316,12 +316,6 @@ void SplitTree::RecalcNode(int idx, const RECT& area)
   }
 }
 
-void SplitTree::BuildLists(int idx)
-{
-  // Not used separately — integrated into RecalcNode
-  (void)idx;
-}
-
 // =========================================================================
 // Hit testing
 // =========================================================================

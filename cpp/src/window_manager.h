@@ -51,7 +51,6 @@ public:
   const TabEntry* GetActiveTabEntry(int paneId) const;
   const TabEntry* GetTab(int paneId, int tabIndex) const;
   int GetTabCount(int paneId) const;
-  bool IsAnyCaptured() const;
   bool IsWindowCaptured(HWND hwnd) const;
 
   static HWND FindReaperWindow(const char* title, HWND skipContainer = nullptr);
