@@ -28,6 +28,7 @@
 #define REAPERAPI_WANT_EnumProjects
 #define REAPERAPI_WANT_GetProjExtState
 #define REAPERAPI_WANT_SetProjExtState
+#define REAPERAPI_WANT_MarkProjectDirty
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
@@ -131,6 +132,7 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_EnumProjects = EnumProjects;
   g_GetProjExtState = GetProjExtState;
   g_SetProjExtState = SetProjExtState;
+  g_MarkProjectDirty = MarkProjectDirty;
 
   g_cmdId = rec->Register("command_id", (void*)"ReDockIt_OpenContainer");
   if (!g_cmdId) return 0;

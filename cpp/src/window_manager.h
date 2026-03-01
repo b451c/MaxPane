@@ -41,8 +41,8 @@ public:
   void SetTabColor(int paneId, int tabIndex, int colorIndex);
 
   // Release all tabs in a pane
-  void ReleaseWindow(int paneId);
-  void ReleaseAll();
+  void ReleaseWindow(int paneId, bool toggleOff = true);
+  void ReleaseAll(bool toggleOff = true);
   void RepositionAll(const SplitTree& tree);
   void CheckAlive(HWND containerHwnd);
 
@@ -60,5 +60,5 @@ public:
 private:
   PaneState m_panes[MAX_PANES];
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
-  void DoRelease(TabEntry& tab);
+  void DoRelease(TabEntry& tab, bool toggleOff = true);
 };

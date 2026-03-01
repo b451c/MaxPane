@@ -16,3 +16,4 @@ const char* (*g_ReverseNamedCommandLookup)(int) = nullptr;
 ReaProject* (*g_EnumProjects)(int, char*, int) = nullptr;
 int (*g_GetProjExtState)(ReaProject*, const char*, const char*, char*, int) = nullptr;
 int (*g_SetProjExtState)(ReaProject*, const char*, const char*, const char*) = nullptr;
+void (*g_MarkProjectDirty)(ReaProject*) = nullptr;

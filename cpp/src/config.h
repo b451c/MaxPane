@@ -118,6 +118,9 @@ static const COLORREF COLOR_TAB_SEPARATOR      = RGB(30, 30, 30);
 // Drag highlight
 static const COLORREF COLOR_DRAG_HIGHLIGHT     = RGB(80, 140, 255);
 
+// Splitter hover highlight
+static const COLORREF COLOR_SPLITTER_HIGHLIGHT = RGB(160, 160, 165);
+
 // =========================================================================
 // UI geometry constants
 // =========================================================================

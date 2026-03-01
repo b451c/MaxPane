@@ -32,6 +32,7 @@ extern int (*g_GetProjExtState)(ReaProject* proj, const char* extname, const cha
                                  char* valOut, int valOut_sz);
 extern int (*g_SetProjExtState)(ReaProject* proj, const char* extname, const char* key,
                                  const char* value);
+extern void (*g_MarkProjectDirty)(ReaProject* proj);
 
 // Safe string copy: always null-terminates, handles null src
 inline void safe_strncpy(char* dst, const char* src, size_t dst_size)

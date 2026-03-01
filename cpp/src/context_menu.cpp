@@ -376,15 +376,28 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // --- Known windows ---
-  for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::KNOWN_BASE + i;
-    mi.dwTypeData = (char*)KNOWN_WINDOWS[i].name;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  // --- Known windows submenu ---
+  {
+    HMENU knownMenu = CreatePopupMenu();
+    if (knownMenu) {
+      for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::KNOWN_BASE + i;
+        mi.dwTypeData = (char*)KNOWN_WINDOWS[i].name;
+        InsertMenuItem(knownMenu, i, TRUE, &mi);
+      }
+
+      MENUITEMINFO knownMi = {};
+      knownMi.cbSize = sizeof(knownMi);
+      knownMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      knownMi.fType = MFT_STRING;
+      knownMi.hSubMenu = knownMenu;
+      knownMi.dwTypeData = (char*)"Known Windows";
+      InsertMenuItem(menu, insertPos++, TRUE, &knownMi);
+    }
   }
 
   // --- Separator ---

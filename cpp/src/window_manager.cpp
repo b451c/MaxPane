@@ -353,11 +353,17 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   return true;
 }
 
-void WindowManager::DoRelease(TabEntry& tab)
+void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
 {
-  if (!tab.captured || !tab.hwnd) return;
+  if (!tab.captured) return;
 
-  if (IsWindow(tab.hwnd)) {
+  DBG("[ReDockIt] DoRelease: '%s' hwnd=%p toggleOff=%d action=%d alive=%d\n",
+      tab.name ? tab.name : "(null)", tab.hwnd, toggleOff, tab.toggleAction,
+      (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
+
+  if (tab.hwnd && IsWindow(tab.hwnd)) {
+    ShowWindow(tab.hwnd, SW_HIDE);
+
     HWND restoreParent = tab.originalParent;
     if (!restoreParent || !IsWindow(restoreParent)) {
       restoreParent = g_reaperMainHwnd;
@@ -365,14 +371,14 @@ void WindowManager::DoRelease(TabEntry& tab)
     SetParent(tab.hwnd, restoreParent);
     SetWindowLong(tab.hwnd, GWL_STYLE, tab.originalStyle);
     SetWindowLong(tab.hwnd, GWL_EXSTYLE, tab.originalExStyle);
+  }
 
-    if (tab.toggleAction > 0 && !tab.isArbitrary) {
-      if (g_Main_OnCommand) {
-        g_Main_OnCommand(tab.toggleAction, 0);
-      }
-    } else {
-      ShowWindow(tab.hwnd, SW_HIDE);
-    }
+  // Toggle off so REAPER knows the window is closed.
+  // Runs even if the window is already destroyed — Main_OnCommand
+  // operates on REAPER's internal state, not the HWND.
+  if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand) {
+    DBG("[ReDockIt] DoRelease: toggling off action %d\n", tab.toggleAction);
+    g_Main_OnCommand(tab.toggleAction, 0);
   }
 
   tab.hwnd = nullptr;
@@ -503,21 +509,21 @@ void WindowManager::SetTabColor(int paneId, int tabIndex, int colorIndex)
 // Release
 // =========================================================================
 
-void WindowManager::ReleaseWindow(int paneId)
+void WindowManager::ReleaseWindow(int paneId, bool toggleOff)
 {
   if (paneId < 0 || paneId >= MAX_PANES) return;
   PaneState& ps = m_panes[paneId];
   for (int t = 0; t < ps.tabCount; t++) {
-    DoRelease(ps.tabs[t]);
+    DoRelease(ps.tabs[t], toggleOff);
   }
   ps.tabCount = 0;
   ps.activeTab = -1;
 }
 
-void WindowManager::ReleaseAll()
+void WindowManager::ReleaseAll(bool toggleOff)
 {
   for (int i = 0; i < MAX_PANES; i++) {
-    ReleaseWindow(i);
+    ReleaseWindow(i, toggleOff);
   }
 }
 

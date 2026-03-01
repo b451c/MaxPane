@@ -389,6 +389,16 @@ void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
   }
   WriteTreeNodes("", snap, nodeCount, projState);
   WritePaneTabs("", nullptr, MAX_PANES, &winMgr, projState);
+
+  DBG("[ReDockIt] SaveProjectState: saved %d nodes to proj=%p\n", nodeCount, proj);
+
+  // Mark project dirty so REAPER saves ProjExtState to RPP
+  if (g_MarkProjectDirty) {
+    g_MarkProjectDirty(proj);
+    DBG("[ReDockIt] SaveProjectState: MarkProjectDirty called on proj=%p\n", proj);
+  } else {
+    DBG("[ReDockIt] SaveProjectState: WARNING — MarkProjectDirty is NULL!\n");
+  }
 }
 
 bool WorkspaceManager::LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap,
@@ -421,9 +431,18 @@ bool WorkspaceManager::HasProjectState(ReaProject* proj) const
 {
   if (!g_GetProjExtState || !proj) return false;
 
-  ProjectStateAccessor projState(proj);
-  const char* val = projState.Get(EXT_SECTION, "tree_version");
-  return (val != nullptr);
+  // Try both our section name and uppercase variant
+  char rawBuf[64] = {};
+  int rawRet = g_GetProjExtState(proj, EXT_SECTION, "tree_version", rawBuf, sizeof(rawBuf));
+
+  // Also try uppercase section + key in case REAPER needs exact RPP case after reload
+  char rawBuf2[64] = {};
+  int rawRet2 = g_GetProjExtState(proj, "REDOCKIT_CPP", "TREE_VERSION", rawBuf2, sizeof(rawBuf2));
+
+  DBG("[ReDockIt] HasProjectState: proj=%p mixed='%s'(ret=%d) upper='%s'(ret=%d)\n",
+      proj, rawBuf, rawRet, rawBuf2, rawRet2);
+
+  return (rawBuf[0] != '\0' || rawBuf2[0] != '\0');
 }
 
 // =========================================================================
