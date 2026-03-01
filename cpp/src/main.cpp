@@ -60,6 +60,15 @@ static void startupTimerFunc()
 
 static bool hookCommandProc(int command, int flag)
 {
+  // Intercept Quit — toggle off captured windows BEFORE REAPER saves reaper.ini.
+  // Without this, REAPER remembers windows as open (wnd_vis=1) and they float on restart.
+  if (command == 40004 && g_container && g_container->GetHwnd()) {
+    g_container->SaveState();
+    g_container->GetWinMgr().ReleaseAll(true);  // toggle off → REAPER sees wnd_vis=0
+    // Don't call Shutdown() here — REAPER will call ReaperPluginEntry(NULL) next
+    return false;  // let REAPER continue with quit
+  }
+
   if (command == g_cmdId) {
     // During startup, REAPER's docker system restores docked windows by calling this hook.
     // Only restore if ReDockIT was visible when REAPER last closed.
