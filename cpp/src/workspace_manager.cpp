@@ -34,76 +34,74 @@ const WorkspaceEntry* WorkspaceManager::Find(const char* name) const
 // Shared serialization helpers
 // =========================================================================
 
-void WorkspaceManager::WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count)
+void WorkspaceManager::WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count,
+                                      StateAccessor& state)
 {
-  if (!g_SetExtState) return;
-
   char buf[256];
   char key[128];
 
   snprintf(key, sizeof(key), "%stree_node_count", prefix);
   snprintf(buf, sizeof(buf), "%d", count);
-  g_SetExtState(EXT_SECTION, key, buf, true);
+  state.Set(EXT_SECTION, key, buf, true);
 
   for (int i = 0; i < count; i++) {
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
     snprintf(buf, sizeof(buf), "%d", (int)snap[i].type);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
     snprintf(buf, sizeof(buf), "%d", (int)snap[i].orient);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
     snprintf(buf, sizeof(buf), "%.4f", snap[i].ratio);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].childA);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].childB);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].paneId);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].parent);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    state.Set(EXT_SECTION, key, buf, true);
   }
 
   // Clear any stale nodes beyond current count
   for (int i = count; i < MAX_TREE_NODES; i++) {
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
-    const char* val = g_GetExtState ? g_GetExtState(EXT_SECTION, key) : nullptr;
-    if (!val || !val[0]) break;  // no more stale data
-    g_SetExtState(EXT_SECTION, key, "", true);
+    const char* val = state.Get(EXT_SECTION, key);
+    if (!val) break;  // no more stale data
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
-    g_SetExtState(EXT_SECTION, key, "", true);
+    state.Set(EXT_SECTION, key, "", true);
   }
 }
 
-int WorkspaceManager::ReadTreeNodes(const char* prefix, NodeSnapshot* snap)
+int WorkspaceManager::ReadTreeNodes(const char* prefix, NodeSnapshot* snap,
+                                    StateAccessor& state)
 {
-  if (!g_GetExtState) return 0;
-
   char key[128];
   snprintf(key, sizeof(key), "%stree_node_count", prefix);
-  const char* ncStr = g_GetExtState(EXT_SECTION, key);
-  int count = (ncStr && ncStr[0]) ? atoi(ncStr) : 0;
+  const char* ncStr = state.Get(EXT_SECTION, key);
+  int count = ncStr ? atoi(ncStr) : 0;
   if (count < 0) count = 0;
   if (count > MAX_TREE_NODES) count = MAX_TREE_NODES;
 
@@ -111,42 +109,41 @@ int WorkspaceManager::ReadTreeNodes(const char* prefix, NodeSnapshot* snap)
     const char* val;
 
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].type = (val && val[0]) ? (SplitNodeType)atoi(val) : NODE_EMPTY;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].type = val ? (SplitNodeType)atoi(val) : NODE_EMPTY;
 
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].orient = (val && val[0]) ? (SplitterOrientation)atoi(val) : SPLIT_VERTICAL;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].orient = val ? (SplitterOrientation)atoi(val) : SPLIT_VERTICAL;
 
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].ratio = (val && val[0]) ? (float)atof(val) : 0.5f;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].ratio = val ? (float)atof(val) : 0.5f;
 
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].childA = (val && val[0]) ? atoi(val) : -1;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].childA = val ? atoi(val) : -1;
 
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].childB = (val && val[0]) ? atoi(val) : -1;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].childB = val ? atoi(val) : -1;
 
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].paneId = (val && val[0]) ? atoi(val) : -1;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].paneId = val ? atoi(val) : -1;
 
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
-    val = g_GetExtState(EXT_SECTION, key);
-    snap[i].parent = (val && val[0]) ? atoi(val) : -1;
+    val = state.Get(EXT_SECTION, key);
+    snap[i].parent = val ? atoi(val) : -1;
   }
 
   return count;
 }
 
 void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* panes,
-                                     int maxPanes, const WindowManager* winMgr)
+                                     int maxPanes, const WindowManager* winMgr,
+                                     StateAccessor& state)
 {
-  if (!g_SetExtState) return;
-
   char buf[256];
   char key[128];
 
@@ -158,11 +155,11 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
 
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
       snprintf(buf, sizeof(buf), "%d", ps->tabCount);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      state.Set(EXT_SECTION, key, buf, true);
 
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
       snprintf(buf, sizeof(buf), "%d", ps->activeTab);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      state.Set(EXT_SECTION, key, buf, true);
 
       for (int t = 0; t < ps->tabCount; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
@@ -178,34 +175,34 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
             }
             char val[512];
             snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, tab.name);
-            g_SetExtState(EXT_SECTION, key, val, true);
+            state.Set(EXT_SECTION, key, val, true);
           } else {
-            g_SetExtState(EXT_SECTION, key, tab.name, true);
+            state.Set(EXT_SECTION, key, tab.name, true);
           }
         } else {
-          g_SetExtState(EXT_SECTION, key, "", true);
+          state.Set(EXT_SECTION, key, "", true);
         }
         // Save tab color
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
         snprintf(buf, sizeof(buf), "%d", tab.colorIndex);
-        g_SetExtState(EXT_SECTION, key, buf, true);
+        state.Set(EXT_SECTION, key, buf, true);
       }
       // Clear any leftover tabs from previous state
       for (int t = ps->tabCount; t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
-        g_SetExtState(EXT_SECTION, key, "", true);
+        state.Set(EXT_SECTION, key, "", true);
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
-        g_SetExtState(EXT_SECTION, key, "", true);
+        state.Set(EXT_SECTION, key, "", true);
       }
     } else {
       // Saving from snapshot data
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
       snprintf(buf, sizeof(buf), "%d", panes[p].tabCount);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      state.Set(EXT_SECTION, key, buf, true);
 
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
       snprintf(buf, sizeof(buf), "%d", panes[p].activeTab);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      state.Set(EXT_SECTION, key, buf, true);
 
       for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
@@ -214,35 +211,38 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
             ? panes[p].tabs[t].actionCommand : "0";
           char val[512];
           snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, panes[p].tabs[t].name);
-          g_SetExtState(EXT_SECTION, key, val, true);
+          state.Set(EXT_SECTION, key, val, true);
         } else {
-          g_SetExtState(EXT_SECTION, key, panes[p].tabs[t].name, true);
+          state.Set(EXT_SECTION, key, panes[p].tabs[t].name, true);
         }
+        // Save tab color from snapshot
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
+        snprintf(buf, sizeof(buf), "%d", panes[p].tabs[t].colorIndex);
+        state.Set(EXT_SECTION, key, buf, true);
       }
     }
   }
 }
 
-void WorkspaceManager::ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes)
+void WorkspaceManager::ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes,
+                                    StateAccessor& state)
 {
-  if (!g_GetExtState) return;
-
   char key[128];
 
   for (int p = 0; p < maxPanes && p < MAX_PANES; p++) {
     snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
-    const char* val = g_GetExtState(EXT_SECTION, key);
-    panes[p].tabCount = (val && val[0]) ? atoi(val) : 0;
+    const char* val = state.Get(EXT_SECTION, key);
+    panes[p].tabCount = val ? atoi(val) : 0;
 
     snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
-    val = g_GetExtState(EXT_SECTION, key);
-    panes[p].activeTab = (val && val[0]) ? atoi(val) : 0;
+    val = state.Get(EXT_SECTION, key);
+    panes[p].activeTab = val ? atoi(val) : 0;
 
     for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
       snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
-      val = g_GetExtState(EXT_SECTION, key);
+      val = state.Get(EXT_SECTION, key);
       DBG("[ReDockIt] ReadPaneTabs: %s = '%s'\n", key, val ? val : "(null)");
-      if (val && val[0]) {
+      if (val) {
         if (strncmp(val, "arb:", 4) == 0) {
           panes[p].tabs[t].isArbitrary = true;
           // Format: "arb:cmdstr:name" (cmdstr = "_RSxxx" or "12345" or "0")
@@ -285,6 +285,10 @@ void WorkspaceManager::ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int
           }
         }
       }
+      // Read tab color
+      snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
+      val = state.Get(EXT_SECTION, key);
+      panes[p].tabs[t].colorIndex = val ? atoi(val) : 0;
     }
   }
 }
@@ -297,8 +301,10 @@ void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManag
 {
   if (!g_SetExtState) return;
 
+  GlobalStateAccessor globalState;
+
   // Save tree version marker
-  g_SetExtState(EXT_SECTION, "tree_version", "2", true);
+  globalState.Set(EXT_SECTION, "tree_version", "2", true);
 
   // Save tree nodes
   NodeSnapshot snap[MAX_TREE_NODES];
@@ -318,10 +324,10 @@ void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManag
     DBG("[ReDockIt] SaveCurrentState: corrupt tree detected, skipping save\n");
     return;
   }
-  WriteTreeNodes("", snap, nodeCount);
+  WriteTreeNodes("", snap, nodeCount, globalState);
 
   // Save pane tab assignments for all used paneIds
-  WritePaneTabs("", nullptr, MAX_PANES, &winMgr);
+  WritePaneTabs("", nullptr, MAX_PANES, &winMgr, globalState);
 }
 
 bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount,
@@ -330,13 +336,15 @@ bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount
 {
   if (!g_GetExtState) return false;
 
+  GlobalStateAccessor globalState;
+
   // Check tree version
-  const char* treeVer = g_GetExtState(EXT_SECTION, "tree_version");
+  const char* treeVer = globalState.Get(EXT_SECTION, "tree_version");
   outHasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
 
   if (outHasTreeFormat) {
     memset(outSnap, 0, sizeof(NodeSnapshot) * MAX_TREE_NODES);
-    outNodeCount = ReadTreeNodes("", outSnap);
+    outNodeCount = ReadTreeNodes("", outSnap, globalState);
     if (outNodeCount < 1) return false;
   } else {
     // Legacy format: caller must handle preset loading
@@ -345,7 +353,7 @@ bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount
 
   // Read pane tabs (format is the same regardless of tree version)
   memset(outPanes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-  ReadPaneTabs("", outPanes, MAX_PANES);
+  ReadPaneTabs("", outPanes, MAX_PANES, globalState);
 
   return true;
 }
@@ -390,6 +398,7 @@ void WorkspaceManager::Save(const char* name, const SplitTree& tree, const Windo
       const TabEntry& tab = ps->tabs[t];
       ws.panes[p].tabs[t].isArbitrary = tab.isArbitrary;
       ws.panes[p].tabs[t].toggleAction = tab.toggleAction;
+      ws.panes[p].tabs[t].colorIndex = tab.colorIndex;
       if (tab.isArbitrary && tab.arbitraryActionCmd[0]) {
         safe_strncpy(ws.panes[p].tabs[t].actionCommand, tab.arbitraryActionCmd,
                      sizeof(ws.panes[p].tabs[t].actionCommand));
@@ -434,6 +443,8 @@ void WorkspaceManager::LoadList()
 
   if (!g_GetExtState) return;
 
+  GlobalStateAccessor globalState;
+
   const char* countStr = g_GetExtState(EXT_SECTION, "ws_count");
   if (!countStr || !countStr[0]) return;
 
@@ -462,7 +473,7 @@ void WorkspaceManager::LoadList()
       // Load tree snapshot using shared helper
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      ws.nodeCount = ReadTreeNodes(prefix, ws.nodes);
+      ws.nodeCount = ReadTreeNodes(prefix, ws.nodes, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
@@ -484,7 +495,7 @@ void WorkspaceManager::LoadList()
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    ReadPaneTabs(prefix, ws.panes, maxPanes);
+    ReadPaneTabs(prefix, ws.panes, maxPanes, globalState);
 
     m_count++;
   }
@@ -493,6 +504,8 @@ void WorkspaceManager::LoadList()
 void WorkspaceManager::SaveList()
 {
   if (!g_SetExtState) return;
+
+  GlobalStateAccessor globalState;
 
   char buf[256];
   char key[128];
@@ -513,7 +526,7 @@ void WorkspaceManager::SaveList()
     if (ws.treeVersion == 2) {
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      WriteTreeNodes(prefix, ws.nodes, ws.nodeCount);
+      WriteTreeNodes(prefix, ws.nodes, ws.nodeCount, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
@@ -535,6 +548,6 @@ void WorkspaceManager::SaveList()
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    WritePaneTabs(prefix, ws.panes, maxPanes, nullptr);
+    WritePaneTabs(prefix, ws.panes, maxPanes, nullptr, globalState);
   }
 }

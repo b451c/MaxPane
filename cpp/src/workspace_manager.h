@@ -1,6 +1,7 @@
 #pragma once
 #include "split_tree.h"
 #include "window_manager.h"
+#include "state_accessor.h"
 
 // Per-pane tab snapshot for workspace persistence
 struct PaneSnapshot {
@@ -11,6 +12,7 @@ struct PaneSnapshot {
     char name[256];
     int toggleAction;
     char actionCommand[128];  // stable command string
+    int colorIndex;
   } tabs[MAX_TABS_PER_PANE];
 };
 
@@ -56,9 +58,13 @@ private:
   int m_count;
 
   // Shared serialization helpers (DRY — used by both state + workspace)
-  static void WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count);
-  static int  ReadTreeNodes(const char* prefix, NodeSnapshot* snap);
+  static void WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count,
+                             StateAccessor& state);
+  static int  ReadTreeNodes(const char* prefix, NodeSnapshot* snap,
+                            StateAccessor& state);
   static void WritePaneTabs(const char* prefix, const PaneSnapshot* panes,
-                            int maxPanes, const WindowManager* winMgr);
-  static void ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes);
+                            int maxPanes, const WindowManager* winMgr,
+                            StateAccessor& state);
+  static void ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes,
+                           StateAccessor& state);
 };
