@@ -59,6 +59,10 @@ bool ReDockItContainer::Create()
   ShowWindow(m_hwnd, SW_SHOW);
   m_visible = true;
 
+  if (g_SetExtState) {
+    g_SetExtState("ReDockIt_cpp", "was_visible", "1", true);
+  }
+
   return true;
 }
 
@@ -96,6 +100,10 @@ void ReDockItContainer::Show()
 void ReDockItContainer::Toggle()
 {
   if (!m_hwnd) { Create(); return; }
+  // User explicitly closing — mark as not visible for next startup
+  if (g_SetExtState) {
+    g_SetExtState("ReDockIt_cpp", "was_visible", "0", true);
+  }
   Shutdown();
 }
 

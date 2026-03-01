@@ -34,6 +34,7 @@
 
 static std::unique_ptr<ReDockItContainer> g_container;
 static int g_cmdId = 0;
+static bool g_startupComplete = false;
 
 // Deferred startup timer — fires on REAPER main loop, auto-opens container if enabled
 static int g_startupCounter = 0;
@@ -41,6 +42,7 @@ static void startupTimerFunc()
 {
   if (++g_startupCounter < STARTUP_DELAY_TICKS) return;
   g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
+  g_startupComplete = true;
 
   if (IsAutoOpenEnabled()) {
     if (!g_container) {
@@ -55,6 +57,15 @@ static void startupTimerFunc()
 static bool hookCommandProc(int command, int flag)
 {
   if (command == g_cmdId) {
+    // During startup, REAPER's docker system restores docked windows by calling this hook.
+    // Only restore if ReDockIT was visible when REAPER last closed.
+    if (!g_startupComplete && g_GetExtState) {
+      const char* vis = g_GetExtState("ReDockIt_cpp", "was_visible");
+      if (vis && vis[0] == '0') {
+        return true;  // User closed ReDockIT before last exit — don't restore
+      }
+    }
+
     if (!g_container) {
       g_container = std::make_unique<ReDockItContainer>();
     }
@@ -84,6 +95,11 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 {
   if (!rec) {
     if (g_container) {
+      // Save visibility state before shutdown — if open, mark for restore on next start
+      if (g_SetExtState) {
+        g_SetExtState("ReDockIt_cpp", "was_visible",
+                       g_container->IsVisible() ? "1" : "0", true);
+      }
       g_container->Shutdown();
       g_container.reset();
     }
