@@ -66,10 +66,6 @@ private:
   std::unique_ptr<WorkspaceManager> m_wsMgr;
   int m_hoverSplitter;      // branch index of splitter under mouse, -1 when none
   int m_shutdownGraceTicks;  // countdown after capture completes before allowing shutdown
-  int m_deferredLoadTicks;   // retry counter for deferred per-project state load
-  bool m_deferredLoadActive; // true while deferred load timer is running (blocks SaveProjectState)
-  int m_deferredOldActions[MAX_PANES * MAX_TABS_PER_PANE];  // toggle actions to clean up after deferred load
-  int m_deferredOldActionCount;
   ReaProject* m_currentProject;
 
   void ApplyPaneState(const PaneSnapshot* panes, int maxPanes, bool deferActions);

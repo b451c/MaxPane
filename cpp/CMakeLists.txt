@@ -18,6 +18,7 @@ add_library(reaper_redockit SHARED
   src/favorites_manager.cpp
   src/workspace_manager.cpp
   src/context_menu.cpp
+  src/project_state.cpp
 )
 
 target_include_directories(reaper_redockit PRIVATE

@@ -29,16 +29,21 @@
 #define REAPERAPI_WANT_GetProjExtState
 #define REAPERAPI_WANT_SetProjExtState
 #define REAPERAPI_WANT_MarkProjectDirty
+#define REAPERAPI_WANT_GetCurrentProjectInLoadSave
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #include "globals.h"
 #include "container.h"
+#include "project_state.h"
 #include <memory>
 
 static std::unique_ptr<ReDockItContainer> g_container;
 static int g_cmdId = 0;
 static bool g_startupComplete = false;
+
+// Used by project_state.cpp to access current container for save
+ReDockItContainer* GetContainer() { return g_container.get(); }
 
 // Deferred startup timer — fires on REAPER main loop, auto-opens container if enabled
 static int g_startupCounter = 0;
@@ -151,6 +156,15 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   rec->Register("gaccel", &accel);
   rec->Register("hookcommand", (void*)hookCommandProc);
   rec->Register("toggleaction", (void*)toggleActionCallback);
+
+  // Register project_config_extension_t for synchronous RPP state I/O
+  static project_config_extension_t s_projConfig = {
+    OnProcessExtensionLine,
+    OnSaveExtensionConfig,
+    OnBeginLoadProjectState,
+    nullptr  // userData
+  };
+  rec->Register("projectconfig", &s_projConfig);
 
   // Deferred auto-open on startup
   g_plugin_register("timer", (void*)(void(*)())startupTimerFunc);

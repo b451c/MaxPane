@@ -59,18 +59,18 @@ public:
   int GetCount() const { return m_count; }
   const WorkspaceEntry& Get(int index) const;
 
+  // Shared serialization helpers (DRY — used by state, workspace, and RPP I/O)
+  static void WriteTreeNodesStatic(const char* prefix, const NodeSnapshot* snap, int count,
+                                   StateAccessor& state);
+  static int  ReadTreeNodesStatic(const char* prefix, NodeSnapshot* snap,
+                                  StateAccessor& state);
+  static void WritePaneTabsStatic(const char* prefix, const PaneSnapshot* panes,
+                                  int maxPanes, const WindowManager* winMgr,
+                                  StateAccessor& state);
+  static void ReadPaneTabsStatic(const char* prefix, PaneSnapshot* panes, int maxPanes,
+                                 StateAccessor& state);
+
 private:
   WorkspaceEntry m_workspaces[MAX_WORKSPACES];
   int m_count;
-
-  // Shared serialization helpers (DRY — used by both state + workspace)
-  static void WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count,
-                             StateAccessor& state);
-  static int  ReadTreeNodes(const char* prefix, NodeSnapshot* snap,
-                            StateAccessor& state);
-  static void WritePaneTabs(const char* prefix, const PaneSnapshot* panes,
-                            int maxPanes, const WindowManager* winMgr,
-                            StateAccessor& state);
-  static void ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes,
-                           StateAccessor& state);
 };

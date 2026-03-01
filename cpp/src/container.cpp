@@ -6,6 +6,8 @@
 #include "favorites_manager.h"
 #include "workspace_manager.h"
 #include "context_menu.h"
+#include "project_state.h"
+#include "state_accessor.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -14,9 +16,6 @@
 #define TIMER_INTERVAL 500
 #define TIMER_ID_CAPTURE 2
 #define TIMER_CAPTURE_INTERVAL 50
-#define TIMER_ID_DEFERRED_LOAD 3
-#define TIMER_DEFERRED_LOAD_INTERVAL 500
-#define DEFERRED_LOAD_MAX_TICKS 20  // try for ~10s
 
 // =========================================================================
 // Constructor / lifecycle
@@ -30,9 +29,6 @@ ReDockItContainer::ReDockItContainer()
   , m_wsMgr(std::make_unique<WorkspaceManager>())
   , m_hoverSplitter(-1)
   , m_shutdownGraceTicks(0)
-  , m_deferredLoadTicks(0)
-  , m_deferredLoadActive(false)
-  , m_deferredOldActionCount(0)
   , m_currentProject(nullptr)
 {
   m_captureMode.active = false;
@@ -79,13 +75,8 @@ void ReDockItContainer::Shutdown()
 {
   if (!m_hwnd) return;
 
-  DBG("[ReDockIt] Shutdown: starting, hwnd=%p, deferredActive=%d\n", m_hwnd, m_deferredLoadActive);
+  DBG("[ReDockIt] Shutdown: starting, hwnd=%p\n", m_hwnd);
 
-  // Kill deferred load timer — on shutdown we save current state as-is
-  if (m_deferredLoadActive) {
-    KillTimer(m_hwnd, TIMER_ID_DEFERRED_LOAD);
-    m_deferredLoadActive = false;
-  }
   SaveState();
 
   if (m_captureMode.active) {
@@ -224,12 +215,13 @@ void ReDockItContainer::MergePane(int paneId)
 void ReDockItContainer::SaveState()
 {
   m_wsMgr->SaveCurrentState(m_tree, m_winMgr);  // global (default + backward compat)
-  // Don't save per-project state while deferred load is active — writing empty panes
-  // would overwrite the RPP's EXTSTATE before we've had a chance to read it.
-  if (!m_deferredLoadActive && g_EnumProjects) {
+  // Per-project state is now saved via project_config_extension_t (SaveExtensionConfig)
+  // which REAPER calls automatically when saving the RPP file.
+  // We still save to ProjExtState for immediate in-session state (e.g., project switch).
+  if (g_EnumProjects) {
     ReaProject* proj = g_EnumProjects(-1, nullptr, 0);
     if (proj)
-      m_wsMgr->SaveProjectState(proj, m_tree, m_winMgr);  // per-project (stored in RPP)
+      m_wsMgr->SaveProjectState(proj, m_tree, m_winMgr);
   }
 }
 
@@ -242,21 +234,34 @@ void ReDockItContainer::LoadState()
   PaneSnapshot panes[MAX_PANES];
   bool hasTreeFormat = false;
 
-  // Try per-project state first, fall back to global
+  // Try pending RPP state (from project_config_extension_t), then ProjExtState, then global
   bool loadedProject = false;
-  if (g_EnumProjects) {
+  if (g_pendingProjectState.valid) {
+    DBG("[ReDockIt] LoadState: using pending RPP state (%d lines)\n",
+        g_pendingProjectState.lineCount);
+    RppReadAccessor rppAcc(g_pendingProjectState.lines, g_pendingProjectState.lineCount);
+    const char* treeVer = rppAcc.Get(EXT_SECTION, "tree_version");
+    hasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
+    if (hasTreeFormat) {
+      memset(snap, 0, sizeof(snap));
+      nodeCount = WorkspaceManager::ReadTreeNodesStatic("", snap, rppAcc);
+      if (nodeCount > 0) {
+        memset(panes, 0, sizeof(panes));
+        WorkspaceManager::ReadPaneTabsStatic("", panes, MAX_PANES, rppAcc);
+        loadedProject = true;
+        DBG("[ReDockIt] LoadState: loaded RPP state (nodes=%d)\n", nodeCount);
+      }
+    }
+    g_pendingProjectState.valid = false;  // consumed
+  }
+
+  if (!loadedProject && g_EnumProjects) {
     ReaProject* proj = g_EnumProjects(-1, nullptr, 0);
     DBG("[ReDockIt] LoadState: project=%p, hasState=%d\n",
         proj, proj ? m_wsMgr->HasProjectState(proj) : -1);
     if (proj && m_wsMgr->HasProjectState(proj)) {
       loadedProject = m_wsMgr->LoadProjectState(proj, snap, nodeCount, panes, hasTreeFormat);
-      DBG("[ReDockIt] LoadState: loaded per-project state (nodes=%d)\n", nodeCount);
-      for (int p = 0; p < MAX_PANES; p++) {
-        if (panes[p].tabCount > 0) {
-          DBG("[ReDockIt] LoadState: pane %d has %d tabs, first='%s'\n",
-              p, panes[p].tabCount, panes[p].tabs[0].name);
-        }
-      }
+      DBG("[ReDockIt] LoadState: loaded per-project ProjExtState (nodes=%d)\n", nodeCount);
     }
   }
 
@@ -291,15 +296,6 @@ void ReDockItContainer::LoadState()
   // OnProjectSwitch for the same project we just loaded.
   if (g_EnumProjects) {
     m_currentProject = g_EnumProjects(-1, nullptr, 0);
-  }
-
-  // If per-project state wasn't available yet (REAPER may still be loading RPP),
-  // start a deferred retry timer to check again once the project is fully loaded
-  if (!loadedProject && m_currentProject) {
-    m_deferredLoadTicks = 0;
-    m_deferredLoadActive = true;
-    SetTimer(m_hwnd, TIMER_ID_DEFERRED_LOAD, TIMER_DEFERRED_LOAD_INTERVAL, nullptr);
-    DBG("[ReDockIt] LoadState: per-project state not ready, starting deferred load timer\n");
   }
 }
 
@@ -777,11 +773,6 @@ void ReDockItContainer::OnTimer()
       DBG("[ReDockIt] OnTimer: window not visible but capture queue active, skipping shutdown\n");
       return;
     }
-    // Don't shut down while deferred load is active — REAPER may still
-    // be loading the RPP, and shutting down now would lose the state
-    if (m_deferredLoadActive) {
-      return;
-    }
     // Don't shut down if we have captured windows in any pane.
     // Docker reparenting can make us temporarily invisible, but we must
     // not release our captured windows. Only shut down if all panes are empty.
@@ -823,18 +814,11 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
 {
   DBG("[ReDockIt] OnProjectSwitch: %p -> %p\n", oldProj, newProj);
 
-  // Save current layout to old project (if valid) and global.
-  // Skip per-project save if deferred load is active — we haven't loaded
-  // the real state yet, so saving would overwrite RPP data with empty panes.
-  if (oldProj && !m_deferredLoadActive) {
+  // Save current layout to old project (if valid) and global
+  if (oldProj) {
     m_wsMgr->SaveProjectState(oldProj, m_tree, m_winMgr);
   }
   m_wsMgr->SaveCurrentState(m_tree, m_winMgr);
-  // Kill deferred timer from previous project — the new project needs its own
-  if (m_deferredLoadActive) {
-    KillTimer(m_hwnd, TIMER_ID_DEFERRED_LOAD);
-    m_deferredLoadActive = false;
-  }
 
   // Collect toggle actions of currently captured windows (before release)
   int oldActions[MAX_PANES * MAX_TABS_PER_PANE];
@@ -853,16 +837,37 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
   m_captureQueue->CancelAll();
   m_winMgr.ReleaseAll(false);
 
-  // Load new project's layout
+  // Load new project's layout — try RPP pending state first, then ProjExtState
   NodeSnapshot snap[MAX_TREE_NODES];
   int nodeCount = 0;
   PaneSnapshot panes[MAX_PANES];
   bool hasTreeFormat = false;
 
   bool loaded = false;
-  if (newProj && m_wsMgr->HasProjectState(newProj)) {
+
+  // Check if project_config_extension_t already parsed state from RPP
+  if (g_pendingProjectState.valid) {
+    DBG("[ReDockIt] OnProjectSwitch: using pending RPP state (%d lines)\n",
+        g_pendingProjectState.lineCount);
+    RppReadAccessor rppAcc(g_pendingProjectState.lines, g_pendingProjectState.lineCount);
+    const char* treeVer = rppAcc.Get(EXT_SECTION, "tree_version");
+    hasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
+    if (hasTreeFormat) {
+      memset(snap, 0, sizeof(snap));
+      nodeCount = WorkspaceManager::ReadTreeNodesStatic("", snap, rppAcc);
+      if (nodeCount > 0) {
+        memset(panes, 0, sizeof(panes));
+        WorkspaceManager::ReadPaneTabsStatic("", panes, MAX_PANES, rppAcc);
+        loaded = true;
+        DBG("[ReDockIt] OnProjectSwitch: loaded RPP state (nodes=%d)\n", nodeCount);
+      }
+    }
+    g_pendingProjectState.valid = false;  // consumed
+  }
+
+  if (!loaded && newProj && m_wsMgr->HasProjectState(newProj)) {
     loaded = m_wsMgr->LoadProjectState(newProj, snap, nodeCount, panes, hasTreeFormat);
-    DBG("[ReDockIt] OnProjectSwitch: loaded per-project state (nodes=%d)\n", nodeCount);
+    DBG("[ReDockIt] OnProjectSwitch: loaded per-project ProjExtState (nodes=%d)\n", nodeCount);
   }
 
   if (loaded && hasTreeFormat && nodeCount > 0) {
@@ -881,7 +886,7 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
   m_winMgr.RepositionAll(m_tree);
   InvalidateRect(m_hwnd, nullptr, TRUE);
 
-  // Toggle off old windows that are not captured in the new project state.
+  // Toggle off old windows that are not captured in the new project state
   for (int i = 0; i < oldActionCount; i++) {
     bool stillCaptured = false;
     for (int p = 0; p < MAX_PANES && !stillCaptured; p++) {
@@ -898,21 +903,6 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
       DBG("[ReDockIt] OnProjectSwitch: toggling off orphaned action %d\n", oldActions[i]);
       g_Main_OnCommand(oldActions[i], 0);
     }
-  }
-
-  // If per-project state wasn't found, REAPER may not have parsed EXTSTATE yet.
-  // Start deferred retry timer (same as LoadState).
-  if (!loaded && newProj) {
-    memcpy(m_deferredOldActions, oldActions, oldActionCount * sizeof(int));
-    m_deferredOldActionCount = oldActionCount;
-    m_deferredLoadTicks = 0;
-    m_deferredLoadActive = true;
-    SetTimer(m_hwnd, TIMER_ID_DEFERRED_LOAD, TIMER_DEFERRED_LOAD_INTERVAL, nullptr);
-    DBG("[ReDockIt] OnProjectSwitch: no state yet, starting deferred load timer\n");
-  } else {
-    KillTimer(m_hwnd, TIMER_ID_DEFERRED_LOAD);
-    m_deferredLoadActive = false;
-    m_deferredOldActionCount = 0;
   }
 }
 
@@ -1479,77 +1469,6 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
         }
         else {
           self->StopCaptureTimerIfIdle();
-        }
-      }
-      else if (self && wParam == TIMER_ID_DEFERRED_LOAD) {
-        self->m_deferredLoadTicks++;
-        ReaProject* proj = g_EnumProjects ? g_EnumProjects(-1, nullptr, 0) : nullptr;
-        if (proj && self->m_wsMgr->HasProjectState(proj)) {
-          // ProjExtState now available — reload from project
-          KillTimer(hwnd, TIMER_ID_DEFERRED_LOAD);
-          self->m_deferredLoadActive = false;
-          DBG("[ReDockIt] DeferredLoad: project state ready at tick %d, reloading\n",
-              self->m_deferredLoadTicks);
-
-          self->m_captureQueue->CancelAll();
-          self->m_winMgr.ReleaseAll(false);
-
-          NodeSnapshot snap[MAX_TREE_NODES];
-          int nodeCount = 0;
-          PaneSnapshot panes[MAX_PANES];
-          bool hasTreeFormat = false;
-          if (self->m_wsMgr->LoadProjectState(proj, snap, nodeCount, panes, hasTreeFormat)) {
-            if (hasTreeFormat && nodeCount > 0) {
-              self->m_tree.LoadSnapshot(snap, nodeCount);
-            }
-            RECT rc;
-            GetClientRect(hwnd, &rc);
-            self->m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
-            self->ApplyPaneState(panes, MAX_PANES, true);
-            self->m_winMgr.RepositionAll(self->m_tree);
-            InvalidateRect(hwnd, nullptr, TRUE);
-
-            // Toggle off orphan windows from project switch that aren't
-            // captured in the newly loaded project state.
-            for (int i = 0; i < self->m_deferredOldActionCount; i++) {
-              bool stillCaptured = false;
-              for (int p = 0; p < MAX_PANES && !stillCaptured; p++) {
-                const PaneState* ps = self->m_winMgr.GetPaneState(p);
-                if (!ps) continue;
-                for (int t = 0; t < ps->tabCount; t++) {
-                  if (ps->tabs[t].captured && ps->tabs[t].toggleAction == self->m_deferredOldActions[i]) {
-                    stillCaptured = true;
-                    break;
-                  }
-                }
-              }
-              if (!stillCaptured && g_Main_OnCommand && g_GetToggleCommandState) {
-                if (g_GetToggleCommandState(self->m_deferredOldActions[i]) == 1) {
-                  DBG("[ReDockIt] DeferredLoad: closing floating orphan action %d\n", self->m_deferredOldActions[i]);
-                  g_Main_OnCommand(self->m_deferredOldActions[i], 0);
-                }
-              }
-            }
-            self->m_deferredOldActionCount = 0;
-          }
-        }
-        else if (self->m_deferredLoadTicks >= DEFERRED_LOAD_MAX_TICKS) {
-          KillTimer(hwnd, TIMER_ID_DEFERRED_LOAD);
-          self->m_deferredLoadActive = false;
-          DBG("[ReDockIt] DeferredLoad: gave up after %d ticks, no per-project state\n",
-              self->m_deferredLoadTicks);
-          // Toggle off orphans from project switch (not startup —
-          // at startup m_deferredOldActionCount is 0).
-          for (int i = 0; i < self->m_deferredOldActionCount; i++) {
-            if (g_Main_OnCommand && g_GetToggleCommandState) {
-              if (g_GetToggleCommandState(self->m_deferredOldActions[i]) == 1) {
-                DBG("[ReDockIt] DeferredLoad: toggling off orphan action %d (gave up)\n",
-                    self->m_deferredOldActions[i]);
-                g_Main_OnCommand(self->m_deferredOldActions[i], 0);
-              }
-            }
-          }
-          self->m_deferredOldActionCount = 0;
         }
       }
       return 0;

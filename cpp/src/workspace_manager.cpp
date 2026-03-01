@@ -34,7 +34,7 @@ const WorkspaceEntry* WorkspaceManager::Find(const char* name) const
 // Shared serialization helpers
 // =========================================================================
 
-void WorkspaceManager::WriteTreeNodes(const char* prefix, const NodeSnapshot* snap, int count,
+void WorkspaceManager::WriteTreeNodesStatic(const char* prefix, const NodeSnapshot* snap, int count,
                                       StateAccessor& state)
 {
   char buf[256];
@@ -95,7 +95,7 @@ void WorkspaceManager::WriteTreeNodes(const char* prefix, const NodeSnapshot* sn
   }
 }
 
-int WorkspaceManager::ReadTreeNodes(const char* prefix, NodeSnapshot* snap,
+int WorkspaceManager::ReadTreeNodesStatic(const char* prefix, NodeSnapshot* snap,
                                     StateAccessor& state)
 {
   char key[128];
@@ -140,7 +140,7 @@ int WorkspaceManager::ReadTreeNodes(const char* prefix, NodeSnapshot* snap,
   return count;
 }
 
-void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* panes,
+void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapshot* panes,
                                      int maxPanes, const WindowManager* winMgr,
                                      StateAccessor& state)
 {
@@ -224,7 +224,7 @@ void WorkspaceManager::WritePaneTabs(const char* prefix, const PaneSnapshot* pan
   }
 }
 
-void WorkspaceManager::ReadPaneTabs(const char* prefix, PaneSnapshot* panes, int maxPanes,
+void WorkspaceManager::ReadPaneTabsStatic(const char* prefix, PaneSnapshot* panes, int maxPanes,
                                     StateAccessor& state)
 {
   char key[128];
@@ -324,10 +324,10 @@ void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManag
     DBG("[ReDockIt] SaveCurrentState: corrupt tree detected, skipping save\n");
     return;
   }
-  WriteTreeNodes("", snap, nodeCount, globalState);
+  WriteTreeNodesStatic("", snap, nodeCount, globalState);
 
   // Save pane tab assignments for all used paneIds
-  WritePaneTabs("", nullptr, MAX_PANES, &winMgr, globalState);
+  WritePaneTabsStatic("", nullptr, MAX_PANES, &winMgr, globalState);
 }
 
 bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount,
@@ -344,7 +344,7 @@ bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount
 
   if (outHasTreeFormat) {
     memset(outSnap, 0, sizeof(NodeSnapshot) * MAX_TREE_NODES);
-    outNodeCount = ReadTreeNodes("", outSnap, globalState);
+    outNodeCount = ReadTreeNodesStatic("", outSnap, globalState);
     if (outNodeCount < 1) return false;
   } else {
     // Legacy format: caller must handle preset loading
@@ -353,7 +353,7 @@ bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount
 
   // Read pane tabs (format is the same regardless of tree version)
   memset(outPanes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-  ReadPaneTabs("", outPanes, MAX_PANES, globalState);
+  ReadPaneTabsStatic("", outPanes, MAX_PANES, globalState);
 
   return true;
 }
@@ -387,8 +387,8 @@ void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
     DBG("[ReDockIt] SaveProjectState: corrupt tree detected, skipping save\n");
     return;
   }
-  WriteTreeNodes("", snap, nodeCount, projState);
-  WritePaneTabs("", nullptr, MAX_PANES, &winMgr, projState);
+  WriteTreeNodesStatic("", snap, nodeCount, projState);
+  WritePaneTabsStatic("", nullptr, MAX_PANES, &winMgr, projState);
 
   DBG("[ReDockIt] SaveProjectState: saved %d nodes to proj=%p\n", nodeCount, proj);
 
@@ -414,7 +414,7 @@ bool WorkspaceManager::LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap,
 
   if (outHasTreeFormat) {
     memset(outSnap, 0, sizeof(NodeSnapshot) * MAX_TREE_NODES);
-    outNodeCount = ReadTreeNodes("", outSnap, projState);
+    outNodeCount = ReadTreeNodesStatic("", outSnap, projState);
     if (outNodeCount < 1) return false;
   } else {
     outNodeCount = 0;
@@ -422,7 +422,7 @@ bool WorkspaceManager::LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap,
   }
 
   memset(outPanes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-  ReadPaneTabs("", outPanes, MAX_PANES, projState);
+  ReadPaneTabsStatic("", outPanes, MAX_PANES, projState);
 
   return true;
 }
@@ -560,7 +560,7 @@ void WorkspaceManager::LoadList()
       // Load tree snapshot using shared helper
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      ws.nodeCount = ReadTreeNodes(prefix, ws.nodes, globalState);
+      ws.nodeCount = ReadTreeNodesStatic(prefix, ws.nodes, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
@@ -582,7 +582,7 @@ void WorkspaceManager::LoadList()
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    ReadPaneTabs(prefix, ws.panes, maxPanes, globalState);
+    ReadPaneTabsStatic(prefix, ws.panes, maxPanes, globalState);
 
     m_count++;
   }
@@ -613,7 +613,7 @@ void WorkspaceManager::SaveList()
     if (ws.treeVersion == 2) {
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      WriteTreeNodes(prefix, ws.nodes, ws.nodeCount, globalState);
+      WriteTreeNodesStatic(prefix, ws.nodes, ws.nodeCount, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
@@ -635,6 +635,6 @@ void WorkspaceManager::SaveList()
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    WritePaneTabs(prefix, ws.panes, maxPanes, nullptr, globalState);
+    WritePaneTabsStatic(prefix, ws.panes, maxPanes, nullptr, globalState);
   }
 }
