@@ -254,8 +254,10 @@ void WorkspaceManager::ReadPaneTabsStatic(const char* prefix, PaneSnapshot* pane
             int cmdLen = (int)(secondColon - afterArb);
             if (cmdLen >= (int)sizeof(panes[p].tabs[t].actionCommand))
               cmdLen = (int)sizeof(panes[p].tabs[t].actionCommand) - 1;
-            strncpy(panes[p].tabs[t].actionCommand, afterArb, cmdLen);
-            panes[p].tabs[t].actionCommand[cmdLen] = '\0';
+            char cmdBuf[128];
+            safe_strncpy(cmdBuf, afterArb, sizeof(cmdBuf));
+            cmdBuf[cmdLen < (int)sizeof(cmdBuf) - 1 ? cmdLen : (int)sizeof(cmdBuf) - 1] = '\0';
+            safe_strncpy(panes[p].tabs[t].actionCommand, cmdBuf, sizeof(panes[p].tabs[t].actionCommand));
             // Treat "0" as no action (legacy/empty marker)
             if (strcmp(panes[p].tabs[t].actionCommand, "0") == 0) {
               panes[p].tabs[t].actionCommand[0] = '\0';
@@ -443,14 +445,14 @@ bool WorkspaceManager::HasProjectState(ReaProject* proj) const
 
   // Try both our section name and uppercase variant
   char rawBuf[64] = {};
-  int rawRet = g_GetProjExtState(proj, EXT_SECTION, "tree_version", rawBuf, sizeof(rawBuf));
+  g_GetProjExtState(proj, EXT_SECTION, "tree_version", rawBuf, sizeof(rawBuf));
 
   // Also try uppercase section + key in case REAPER needs exact RPP case after reload
   char rawBuf2[64] = {};
-  int rawRet2 = g_GetProjExtState(proj, "REDOCKIT_CPP", "TREE_VERSION", rawBuf2, sizeof(rawBuf2));
+  g_GetProjExtState(proj, "REDOCKIT_CPP", "TREE_VERSION", rawBuf2, sizeof(rawBuf2));
 
-  DBG("[ReDockIt] HasProjectState: proj=%p mixed='%s'(ret=%d) upper='%s'(ret=%d)\n",
-      proj, rawBuf, rawRet, rawBuf2, rawRet2);
+  DBG("[ReDockIt] HasProjectState: proj=%p mixed='%s' upper='%s'\n",
+      (void*)proj, rawBuf, rawBuf2);
 
   return (rawBuf[0] != '\0' || rawBuf2[0] != '\0');
 }
@@ -542,8 +544,8 @@ void WorkspaceManager::LoadList()
 
   GlobalStateAccessor globalState;
 
-  const char* countStr = g_GetExtState(EXT_SECTION, "ws_count");
-  if (!countStr || !countStr[0]) return;
+  const char* countStr = globalState.Get(EXT_SECTION, "ws_count");
+  if (!countStr) return;
 
   int count = atoi(countStr);
   if (count < 0) count = 0;
@@ -553,8 +555,8 @@ void WorkspaceManager::LoadList()
 
   for (int w = 0; w < count; w++) {
     snprintf(key, sizeof(key), "ws_%d_name", w);
-    const char* name = g_GetExtState(EXT_SECTION, key);
-    if (!name || !name[0]) continue;
+    const char* name = globalState.Get(EXT_SECTION, key);
+    if (!name) continue;
 
     WorkspaceEntry& ws = m_workspaces[m_count];
     memset(&ws, 0, sizeof(WorkspaceEntry));
@@ -563,8 +565,8 @@ void WorkspaceManager::LoadList()
 
     // Check if workspace uses tree format
     snprintf(key, sizeof(key), "ws_%d_tree_version", w);
-    const char* tvStr = g_GetExtState(EXT_SECTION, key);
-    ws.treeVersion = (tvStr && tvStr[0]) ? atoi(tvStr) : 0;
+    const char* tvStr = globalState.Get(EXT_SECTION, key);
+    ws.treeVersion = tvStr ? atoi(tvStr) : 0;
 
     if (ws.treeVersion == 2) {
       // Load tree snapshot using shared helper
@@ -574,18 +576,18 @@ void WorkspaceManager::LoadList()
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
-      const char* val = g_GetExtState(EXT_SECTION, key);
-      ws.layoutPreset = (val && val[0]) ? atoi(val) : 0;
+      const char* val = globalState.Get(EXT_SECTION, key);
+      ws.layoutPreset = val ? atoi(val) : 0;
 
       for (int r = 0; r < MAX_SPLITTERS; r++) {
         snprintf(key, sizeof(key), "ws_%d_ratio_%d", w, r);
-        val = g_GetExtState(EXT_SECTION, key);
-        ws.ratios[r] = (val && val[0]) ? (float)atof(val) : 0.5f;
+        val = globalState.Get(EXT_SECTION, key);
+        ws.ratios[r] = val ? (float)atof(val) : 0.5f;
       }
 
       snprintf(key, sizeof(key), "ws_%d_pane_count", w);
-      val = g_GetExtState(EXT_SECTION, key);
-      ws.paneCount = (val && val[0]) ? atoi(val) : 0;
+      val = globalState.Get(EXT_SECTION, key);
+      ws.paneCount = val ? atoi(val) : 0;
     }
 
     // Load pane tab data using shared helper
@@ -608,17 +610,17 @@ void WorkspaceManager::SaveList()
   char key[128];
 
   snprintf(buf, sizeof(buf), "%d", m_count);
-  g_SetExtState(EXT_SECTION, "ws_count", buf, true);
+  globalState.Set(EXT_SECTION, "ws_count", buf, true);
 
   for (int w = 0; w < m_count; w++) {
     WorkspaceEntry& ws = m_workspaces[w];
 
     snprintf(key, sizeof(key), "ws_%d_name", w);
-    g_SetExtState(EXT_SECTION, key, ws.name, true);
+    globalState.Set(EXT_SECTION, key, ws.name, true);
 
     snprintf(key, sizeof(key), "ws_%d_tree_version", w);
     snprintf(buf, sizeof(buf), "%d", ws.treeVersion);
-    g_SetExtState(EXT_SECTION, key, buf, true);
+    globalState.Set(EXT_SECTION, key, buf, true);
 
     if (ws.treeVersion == 2) {
       char prefix[32];
@@ -628,17 +630,17 @@ void WorkspaceManager::SaveList()
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
       snprintf(buf, sizeof(buf), "%d", ws.layoutPreset);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      globalState.Set(EXT_SECTION, key, buf, true);
 
       for (int r = 0; r < MAX_SPLITTERS; r++) {
         snprintf(key, sizeof(key), "ws_%d_ratio_%d", w, r);
         snprintf(buf, sizeof(buf), "%.4f", ws.ratios[r]);
-        g_SetExtState(EXT_SECTION, key, buf, true);
+        globalState.Set(EXT_SECTION, key, buf, true);
       }
 
       snprintf(key, sizeof(key), "ws_%d_pane_count", w);
       snprintf(buf, sizeof(buf), "%d", ws.paneCount);
-      g_SetExtState(EXT_SECTION, key, buf, true);
+      globalState.Set(EXT_SECTION, key, buf, true);
     }
 
     // Save pane tab data using shared helper
