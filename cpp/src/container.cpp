@@ -16,6 +16,7 @@
 #define TIMER_INTERVAL 500
 #define TIMER_ID_CAPTURE 2
 #define TIMER_CAPTURE_INTERVAL 50
+#define TIMER_ID_HOVER 3
 
 // =========================================================================
 // Constructor / lifecycle
@@ -28,6 +29,8 @@ ReDockItContainer::ReDockItContainer()
   , m_favMgr(std::make_unique<FavoritesManager>())
   , m_wsMgr(std::make_unique<WorkspaceManager>())
   , m_hoverSplitter(-1)
+  , m_hoverPane(-1)
+  , m_hoverTab(-1)
   , m_shutdownGraceTicks(0)
   , m_pendingRppLoad(false)
 {
@@ -594,7 +597,18 @@ void ReDockItContainer::OnPaint(HDC hdc)
   for (int i = 0; i < m_tree.GetBranchCount(); i++) {
     int branchIdx = m_tree.GetBranchList()[i];
     const SplitNode& n = m_tree.GetNode(branchIdx);
-    FillRect(hdc, &n.splitterRect, branchIdx == m_hoverSplitter ? hoverBrush : splitterBrush);
+    FillRect(hdc, &n.splitterRect, splitterBrush);
+    if (branchIdx == m_hoverSplitter) {
+      RECT hr = n.splitterRect;
+      if (n.orient == SPLIT_VERTICAL) {
+        hr.left += SPLITTER_HIGHLIGHT_INSET;
+        hr.right -= SPLITTER_HIGHLIGHT_INSET;
+      } else {
+        hr.top += SPLITTER_HIGHLIGHT_INSET;
+        hr.bottom -= SPLITTER_HIGHLIGHT_INSET;
+      }
+      FillRect(hdc, &hr, hoverBrush);
+    }
   }
   DeleteObject(hoverBrush);
   DeleteObject(splitterBrush);
@@ -690,6 +704,12 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
       } else {
         bgColor = (t == ps->activeTab) ? COLOR_TAB_ACTIVE_BG : COLOR_TAB_INACTIVE_BG;
       }
+      if (paneId == m_hoverPane && t == m_hoverTab) {
+        int r = GetRValue(bgColor) + TAB_HOVER_LIGHTEN;
+        int g = GetGValue(bgColor) + TAB_HOVER_LIGHTEN;
+        int b = GetBValue(bgColor) + TAB_HOVER_LIGHTEN;
+        bgColor = RGB(r < 255 ? r : 255, g < 255 ? g : 255, b < 255 ? b : 255);
+      }
       HBRUSH tabBrush = CreateSolidBrush(bgColor);
       FillRect(hdc, &tabRect, tabBrush);
       DeleteObject(tabBrush);
@@ -739,6 +759,28 @@ void ReDockItContainer::OnMouseMove(int x, int y)
   if (hover != m_hoverSplitter) {
     m_hoverSplitter = hover;
     InvalidateRect(m_hwnd, nullptr, TRUE);
+    if (hover >= 0)
+      SetTimer(m_hwnd, TIMER_ID_HOVER, 60, nullptr);
+    else
+      KillTimer(m_hwnd, TIMER_ID_HOVER);
+  }
+
+  // Hover highlight for tabs
+  int hPane = -1, hTab = -1;
+  for (int i = 0; i < m_tree.GetLeafCount(); i++) {
+    int paneId = m_tree.GetPaneId(m_tree.GetLeafList()[i]);
+    if (paneId < 0) continue;
+    int t = TabHitTest(paneId, x, y);
+    if (t >= 0) { hPane = paneId; hTab = t; break; }
+  }
+  if (hPane != m_hoverPane || hTab != m_hoverTab) {
+    m_hoverPane = hPane;
+    m_hoverTab = hTab;
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+    if (hTab >= 0 && m_hoverSplitter < 0)
+      SetTimer(m_hwnd, TIMER_ID_HOVER, 60, nullptr);
+    else if (hTab < 0 && m_hoverSplitter < 0)
+      KillTimer(m_hwnd, TIMER_ID_HOVER);
   }
 }
 
@@ -1293,6 +1335,20 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
     case WM_TIMER: {
       if (self && wParam == TIMER_ID_CHECK) {
         self->OnTimer();
+      }
+      else if (self && wParam == TIMER_ID_HOVER) {
+        POINT pt;
+        GetCursorPos(&pt);
+        ScreenToClient(hwnd, &pt);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        if (pt.x < rc.left || pt.x >= rc.right || pt.y < rc.top || pt.y >= rc.bottom) {
+          self->m_hoverSplitter = -1;
+          self->m_hoverPane = -1;
+          self->m_hoverTab = -1;
+          KillTimer(hwnd, TIMER_ID_HOVER);
+          InvalidateRect(hwnd, nullptr, TRUE);
+        }
       }
       else if (self && wParam == TIMER_ID_CAPTURE) {
         // Handle capture-by-click mode

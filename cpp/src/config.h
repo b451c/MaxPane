@@ -110,6 +110,7 @@ static const COLORREF COLOR_EMPTY_HEADER_TEXT  = RGB(180, 180, 180);
 static const COLORREF COLOR_TAB_BAR_BG        = RGB(40, 40, 40);
 static const COLORREF COLOR_TAB_ACTIVE_BG     = RGB(80, 80, 80);
 static const COLORREF COLOR_TAB_INACTIVE_BG   = RGB(50, 50, 50);
+static const int TAB_HOVER_LIGHTEN            = 25;  // added to each RGB channel on hover
 static const COLORREF COLOR_TAB_ACTIVE_TEXT    = RGB(220, 220, 220);
 static const COLORREF COLOR_TAB_INACTIVE_TEXT  = RGB(160, 160, 160);
 static const COLORREF COLOR_TAB_CLOSE_TEXT     = RGB(150, 150, 150);
@@ -119,7 +120,8 @@ static const COLORREF COLOR_TAB_SEPARATOR      = RGB(30, 30, 30);
 static const COLORREF COLOR_DRAG_HIGHLIGHT     = RGB(80, 140, 255);
 
 // Splitter hover highlight
-static const COLORREF COLOR_SPLITTER_HIGHLIGHT = RGB(160, 160, 165);
+static const COLORREF COLOR_SPLITTER_HIGHLIGHT = RGB(255, 255, 255);
+static const int SPLITTER_HIGHLIGHT_INSET = 1;
 
 // =========================================================================
 // UI geometry constants
