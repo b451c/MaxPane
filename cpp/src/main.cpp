@@ -42,36 +42,21 @@
 static std::unique_ptr<ReDockItContainer> g_container;
 static int g_cmdId = 0;
 static bool g_startupComplete = false;
+extern "C" bool g_atexitSaved = false;  // prevent Shutdown from overwriting atexit state
 
 // atexit callback — REAPER calls this before main window destroy.
-// Save list of captured toggle actions so startup can close any that REAPER
-// incorrectly reopens (REAPER caches wnd_vis before atexit, so toggle here is futile).
+// Just save state. REAPER already cached wnd_vis before this callback,
+// so the windows will reopen on restart and ReDockIt will recapture them.
 static void onAtExit()
 {
   DBG("[ReDockIt] onAtExit: called, container=%p hwnd=%p\n",
       (void*)g_container.get(), g_container ? (void*)g_container->GetHwnd() : nullptr);
-  if (g_container && g_container->GetHwnd() && g_SetExtState) {
-    // Save captured action IDs so startup can close orphans if needed.
-    // REAPER caches wnd_vis BEFORE atexit, so these windows will reopen on restart.
-    // If the session has RPP state, rppReadyTimerFunc recaptures them (no problem).
-    // If not (clean session), orphan cleanup closes them.
-    char buf[1024] = {};
-    int pos = 0;
-    const WindowManager& wm = g_container->GetWinMgr();
-    for (int p = 0; p < MAX_PANES; p++) {
-      const PaneState* ps = wm.GetPaneState(p);
-      if (!ps) continue;
-      for (int t = 0; t < ps->tabCount; t++) {
-        if (ps->tabs[t].captured && ps->tabs[t].toggleAction > 0) {
-          if (pos > 0 && pos < (int)sizeof(buf) - 1) buf[pos++] = ',';
-          pos += snprintf(buf + pos, sizeof(buf) - pos, "%d", ps->tabs[t].toggleAction);
-        }
-      }
-    }
-    g_SetExtState("ReDockIt_cpp", "captured_actions", buf, true);
-    DBG("[ReDockIt] onAtExit: saved captured_actions='%s'\n", buf);
-
+  if (g_container && g_container->GetHwnd()) {
     g_container->SaveState();
+    g_atexitSaved = true;  // prevent Shutdown's SaveState from overwriting with empty panes
+    // Reparent windows back to REAPER so they're properly cleaned up during quit.
+    // Don't toggle off — REAPER already cached wnd_vis, and we WANT them to reopen
+    // on restart so ReDockIt can recapture them.
     g_container->GetWinMgr().ReleaseAll(false);
     DBG("[ReDockIt] onAtExit: ReleaseAll(false) done\n");
   }
@@ -80,62 +65,13 @@ static void onAtExit()
 // Used by project_state.cpp to access current container for save
 ReDockItContainer* GetContainer() { return g_container.get(); }
 
-// Close windows that REAPER reopened from cached wnd_vis but that belong
-// to a ReDockIt session that is NOT being loaded (clean session).
-// Called as a deferred one-shot timer AFTER startup — gives rppReadyTimerFunc
-// a chance to fire first and cancel this cleanup.
-static bool g_orphanCleanupCancelled = false;
-static void orphanCleanupTimerFunc()
-{
-  g_plugin_register("-timer", (void*)(void(*)())orphanCleanupTimerFunc);
-
-  if (g_orphanCleanupCancelled) {
-    DBG("[ReDockIt] orphanCleanup: cancelled (RPP state will recapture)\n");
-    return;
-  }
-
-  if (!g_GetExtState || !g_Main_OnCommand || !g_GetToggleCommandState) return;
-
-  const char* actions = g_GetExtState("ReDockIt_cpp", "captured_actions");
-  if (!actions || !actions[0]) return;
-
-  DBG("[ReDockIt] orphanCleanup: closing orphaned windows '%s'\n", actions);
-
-  char buf[1024];
-  safe_strncpy(buf, actions, sizeof(buf));
-  char* p = buf;
-  while (*p) {
-    int actionId = atoi(p);
-    if (actionId > 0) {
-      int state = g_GetToggleCommandState(actionId);
-      if (state == 1) {
-        DBG("[ReDockIt] orphanCleanup: closing action %d\n", actionId);
-        g_Main_OnCommand(actionId, 0);
-      }
-    }
-    while (*p && *p != ',') p++;
-    if (*p == ',') p++;
-  }
-
-  if (g_SetExtState) {
-    g_SetExtState("ReDockIt_cpp", "captured_actions", "", true);
-  }
-}
-
 // One-shot timer: fired by ProcessExtensionLine when RPP state arrives.
 // Creates the container on next main-loop tick (safe context for UI creation).
-// Cancels orphan cleanup — the windows will be recaptured by the container.
+// Project RPP state always takes priority — if a project defines a ReDockIt layout,
+// load it regardless of was_visible (the project defines the intent).
 static void rppReadyTimerFunc()
 {
   g_plugin_register("-timer", (void*)(void(*)())rppReadyTimerFunc);
-
-  // Cancel orphan cleanup — these windows will be recaptured, not closed
-  g_orphanCleanupCancelled = true;
-
-  // Clear the saved list since we're recapturing
-  if (g_SetExtState) {
-    g_SetExtState("ReDockIt_cpp", "captured_actions", "", true);
-  }
 
   if (!g_pendingProjectState.valid) return;  // already consumed
 
@@ -184,12 +120,6 @@ static void startupTimerFunc()
       g_container->Create();
     }
   }
-
-  // Schedule deferred orphan cleanup.
-  // This runs on the NEXT tick, giving rppReadyTimerFunc a chance to cancel it.
-  // If the session has RPP state → rppReadyTimerFunc fires first → cancels cleanup.
-  // If clean session (no RPP) → cleanup fires → closes windows REAPER reopened from wnd_vis.
-  g_plugin_register("timer", (void*)(void(*)())orphanCleanupTimerFunc);
 }
 
 static bool hookCommandProc(int command, int flag)

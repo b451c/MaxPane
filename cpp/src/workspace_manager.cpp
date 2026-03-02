@@ -164,7 +164,7 @@ void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapsho
       for (int t = 0; t < ps->tabCount; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
         const TabEntry& tab = ps->tabs[t];
-        if (tab.captured && tab.name) {
+        if (tab.name && tab.name[0]) {
           if (tab.isArbitrary) {
             // Get stable action command string
             char cmdStr[128] = "0";
@@ -328,6 +328,16 @@ void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManag
 
   // Save pane tab assignments for all used paneIds
   WritePaneTabsStatic("", nullptr, MAX_PANES, &winMgr, globalState);
+
+  // Verify what was saved
+  for (int p = 0; p < MAX_PANES; p++) {
+    const PaneState* ps = winMgr.GetPaneState(p);
+    if (ps && ps->tabCount > 0) {
+      DBG("[ReDockIt] SaveCurrentState: pane %d has %d tabs, tab0='%s' captured=%d\n",
+          p, ps->tabCount, ps->tabs[0].name ? ps->tabs[0].name : "(null)",
+          ps->tabs[0].captured);
+    }
+  }
 }
 
 bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount,

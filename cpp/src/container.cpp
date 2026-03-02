@@ -70,13 +70,18 @@ bool ReDockItContainer::Create()
   return true;
 }
 
+// Defined in main.cpp — set by onAtExit to prevent Shutdown from overwriting with empty panes
+extern "C" bool g_atexitSaved;
+
 void ReDockItContainer::Shutdown()
 {
   if (!m_hwnd) return;
 
-  DBG("[ReDockIt] Shutdown: starting, hwnd=%p\n", m_hwnd);
+  DBG("[ReDockIt] Shutdown: starting, hwnd=%p atexitSaved=%d\n", m_hwnd, g_atexitSaved);
 
-  SaveState();
+  if (!g_atexitSaved) {
+    SaveState();
+  }
 
   if (m_captureMode.active) {
     KillTimer(m_hwnd, TIMER_ID_CAPTURE);
@@ -123,6 +128,7 @@ void ReDockItContainer::Show()
 void ReDockItContainer::Toggle()
 {
   if (!m_hwnd) { Create(); return; }
+  DBG("[ReDockIt] Toggle: closing\n");
   // User explicitly closing — mark as not visible for next startup
   if (g_SetExtState) {
     g_SetExtState("ReDockIt_cpp", "was_visible", "0", true);
@@ -270,13 +276,10 @@ void ReDockItContainer::LoadState()
   if (!loaded) {
     loaded = m_wsMgr->LoadCurrentState(snap, nodeCount, panes, hasTreeFormat);
     DBG("[ReDockIt] LoadState: loaded global state (nodes=%d)\n", nodeCount);
-    // Global state = only tree layout, not windows.
-    // Windows are per-project — don't carry over from last session.
-    memset(panes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-    // REAPER may not have parsed the RPP chunk yet — set flag to check in OnTimer.
-    // If RPP data arrives later, OnTimer will apply it.
+    // Restore panes from global state — recapture the same windows as last session.
+    // If RPP data arrives later, OnTimer will override with project-specific state.
     m_pendingRppLoad = true;
-    DBG("[ReDockIt] LoadState: RPP not yet available, will check in OnTimer\n");
+    DBG("[ReDockIt] LoadState: will recapture from global state, RPP may override later\n");
   }
 
   if (hasTreeFormat) {
@@ -1370,7 +1373,7 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
 
     case WM_COMMAND: {
       if (self && LOWORD(wParam) == IDCANCEL) {
-        self->Shutdown();
+        self->Toggle();  // Toggle handles was_visible + captured_actions + Shutdown
         return 0;
       }
       break;
@@ -1378,7 +1381,7 @@ INT_PTR CALLBACK ReDockItContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, 
 
     case WM_CLOSE: {
       if (self) {
-        self->Shutdown();
+        self->Toggle();  // Toggle handles was_visible + captured_actions + Shutdown
       }
       return 0;
     }

@@ -154,7 +154,7 @@ void OnSaveExtensionConfig(ProjectStateContext* ctx, bool isUndo,
       for (int t = 0; t < ps->tabCount; t++) {
         const TabEntry& tab = ps->tabs[t];
         snprintf(key, sizeof(key), "pane_%d_tab_%d", p, t);
-        if (tab.captured && tab.name) {
+        if (tab.name && tab.name[0]) {
           if (tab.isArbitrary) {
             char cmdStr[128] = "0";
             if (tab.arbitraryActionCmd[0]) {
