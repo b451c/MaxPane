@@ -448,9 +448,9 @@ void WindowManager::CloseTab(int paneId, int tabIndex)
 
   if (ps.tabCount == 0) {
     ps.activeTab = -1;
+  } else if (tabIndex < ps.activeTab) {
+    ps.activeTab--;
   } else if (ps.activeTab >= ps.tabCount) {
-    ps.activeTab = ps.tabCount - 1;
-  } else if (ps.activeTab == tabIndex && ps.activeTab >= ps.tabCount) {
     ps.activeTab = ps.tabCount - 1;
   }
 
@@ -500,6 +500,7 @@ void WindowManager::MoveTab(int srcPane, int srcTab, int dstPane)
   if (src.tabCount == 0) {
     src.activeTab = -1;
   } else {
+    if (srcTab < src.activeTab) src.activeTab--;
     if (src.activeTab >= src.tabCount) src.activeTab = src.tabCount - 1;
     TabEntry& curSrc = src.tabs[src.activeTab];
     if (curSrc.captured && curSrc.hwnd && IsWindow(curSrc.hwnd)) {
@@ -599,8 +600,9 @@ void WindowManager::CheckAlive(HWND containerHwnd)
         memset(&ps.tabs[ps.tabCount], 0, sizeof(TabEntry));
         if (ps.tabCount == 0) {
           ps.activeTab = -1;
-        } else if (ps.activeTab >= ps.tabCount) {
-          ps.activeTab = ps.tabCount - 1;
+        } else {
+          if (t < ps.activeTab) ps.activeTab--;
+          if (ps.activeTab >= ps.tabCount) ps.activeTab = ps.tabCount - 1;
         }
       }
     }
