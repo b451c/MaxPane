@@ -1,5 +1,6 @@
 #pragma once
 #include "config.h"
+#include <cassert>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -65,9 +66,18 @@ public:
 
   // Accessors
   int GetRootIndex() const { return m_root; }
-  const SplitNode& GetNode(int idx) const { return m_nodes[idx]; }
-  int GetPaneId(int nodeIdx) const { return m_nodes[nodeIdx].paneId; }
-  const RECT& GetPaneRect(int paneId) const { return m_paneRects[paneId]; }
+  const SplitNode& GetNode(int idx) const {
+    assert(idx >= 0 && idx < MAX_TREE_NODES);
+    return m_nodes[idx];
+  }
+  int GetPaneId(int nodeIdx) const {
+    assert(nodeIdx >= 0 && nodeIdx < MAX_TREE_NODES);
+    return m_nodes[nodeIdx].paneId;
+  }
+  const RECT& GetPaneRect(int paneId) const {
+    assert(paneId >= 0 && paneId < MAX_PANES);
+    return m_paneRects[paneId];
+  }
   SplitterOrientation GetSplitterOrientation(int nodeIdx) const { return m_nodes[nodeIdx].orient; }
 
   // Leaf/branch lists (rebuilt each Recalculate)
