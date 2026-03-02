@@ -134,8 +134,8 @@ make
 ## Requirements
 
 - **REAPER** 7.0+ (tested on 7.62)
-- **macOS** arm64 (Apple Silicon) or x86_64 — primary platform
-- **Windows** x64 — builds provided, testing in progress
+- **macOS** arm64 (Apple Silicon) — primary platform, tested on macOS 26.3 Tahoe / Apple M1 Pro
+- **Windows** x64 — architecture in place, **requires testing before release**
 - **Linux** x86_64 — builds provided, testing in progress
 
 ## Architecture
