@@ -395,7 +395,7 @@ void ReDockItContainer::LoadWorkspace(const char* name)
   const WorkspaceEntry* ws = m_wsMgr->Find(name);
   if (!ws) return;
 
-  m_winMgr.ReleaseAll();
+  m_winMgr.ReleaseAll(false);  // just reparent, don't toggle off
 
   if (ws->treeVersion == 2) {
     m_tree.LoadSnapshot(ws->nodes, ws->nodeCount);
