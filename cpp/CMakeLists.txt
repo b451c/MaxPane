@@ -11,6 +11,7 @@ set(WDL_DIR "${CMAKE_SOURCE_DIR}/WDL/WDL")
 add_library(reaper_redockit SHARED
   src/main.cpp
   src/globals.cpp
+  src/config.cpp
   src/container.cpp
   src/split_tree.cpp
   src/window_manager.cpp
