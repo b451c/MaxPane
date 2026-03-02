@@ -285,9 +285,10 @@ void SplitTree::Recalculate(int w, int h)
   RecalcNode(m_root, full);
 }
 
-void SplitTree::RecalcNode(int idx, const RECT& area)
+void SplitTree::RecalcNode(int idx, const RECT& area, int depth)
 {
   if (idx < 0 || idx >= MAX_TREE_NODES) return;
+  if (depth > MAX_TREE_NODES) return;  // cycle protection
   SplitNode& node = m_nodes[idx];
   node.rect = area;
 
@@ -311,8 +312,8 @@ void SplitTree::RecalcNode(int idx, const RECT& area)
     }
     node.splitterRect = splitter;
 
-    RecalcNode(node.childA, partA);
-    RecalcNode(node.childB, partB);
+    RecalcNode(node.childA, partA, depth + 1);
+    RecalcNode(node.childB, partB, depth + 1);
   }
 }
 
@@ -480,13 +481,84 @@ void SplitTree::SaveSnapshot(NodeSnapshot* out, int& nodeCount) const
 
 bool SplitTree::LoadSnapshot(const NodeSnapshot* in, int nodeCount)
 {
-  // Validate snapshot: branches must have distinct children
+  // Root must exist
+  if (nodeCount < 1 || in[0].type == NODE_EMPTY) {
+    DBG("[ReDockIt] LoadSnapshot: empty or rootless snapshot (nodeCount=%d)\n", nodeCount);
+    Reset();
+    return false;
+  }
+
+  // Validate snapshot: branches must have valid, distinct children
   for (int i = 0; i < nodeCount && i < MAX_TREE_NODES; i++) {
-    if (in[i].type == NODE_BRANCH && in[i].childA == in[i].childB) {
-      DBG("[ReDockIt] LoadSnapshot: corrupt node %d (childA==childB==%d), falling back to Reset\n",
-          i, in[i].childA);
-      Reset();
-      return false;
+    if (in[i].type == NODE_BRANCH) {
+      if (in[i].childA == in[i].childB) {
+        DBG("[ReDockIt] LoadSnapshot: corrupt node %d (childA==childB==%d)\n", i, in[i].childA);
+        Reset();
+        return false;
+      }
+      if (in[i].childA < 0 || in[i].childA >= MAX_TREE_NODES ||
+          in[i].childB < 0 || in[i].childB >= MAX_TREE_NODES) {
+        DBG("[ReDockIt] LoadSnapshot: corrupt node %d (child out of range)\n", i);
+        Reset();
+        return false;
+      }
+      if (in[i].childA == i || in[i].childB == i) {
+        DBG("[ReDockIt] LoadSnapshot: corrupt node %d (self-reference)\n", i);
+        Reset();
+        return false;
+      }
+    }
+  }
+
+  // Tree validation: indegree check + DFS reachability
+  {
+    int indegree[MAX_TREE_NODES] = {};
+    for (int i = 0; i < nodeCount && i < MAX_TREE_NODES; i++) {
+      if (in[i].type == NODE_BRANCH) {
+        int cA = in[i].childA, cB = in[i].childB;
+        if (cA >= 0 && cA < nodeCount) indegree[cA]++;
+        if (cB >= 0 && cB < nodeCount) indegree[cB]++;
+      }
+    }
+    for (int i = 0; i < nodeCount && i < MAX_TREE_NODES; i++) {
+      if (in[i].type == NODE_EMPTY) continue;
+      if (i == 0 && indegree[i] != 0) {
+        DBG("[ReDockIt] LoadSnapshot: root has indegree %d (expect 0)\n", indegree[i]);
+        Reset(); return false;
+      }
+      if (i != 0 && indegree[i] != 1) {
+        DBG("[ReDockIt] LoadSnapshot: node %d has indegree %d (expect 1)\n", i, indegree[i]);
+        Reset(); return false;
+      }
+    }
+
+    // DFS reachability from root
+    bool visited[MAX_TREE_NODES] = {};
+    int stack[MAX_TREE_NODES];
+    int sp = 0;
+    stack[sp++] = 0;
+    while (sp > 0) {
+      int n = stack[--sp];
+      if (n < 0 || n >= nodeCount) continue;
+      if (visited[n]) {
+        DBG("[ReDockIt] LoadSnapshot: node %d visited twice (corrupt)\n", n);
+        Reset(); return false;
+      }
+      visited[n] = true;
+      if (in[n].type == NODE_BRANCH) {
+        if (sp + 2 > MAX_TREE_NODES) {
+          DBG("[ReDockIt] LoadSnapshot: DFS stack overflow (corrupt tree)\n");
+          Reset(); return false;
+        }
+        stack[sp++] = in[n].childA;
+        stack[sp++] = in[n].childB;
+      }
+    }
+    for (int i = 0; i < nodeCount && i < MAX_TREE_NODES; i++) {
+      if (in[i].type != NODE_EMPTY && !visited[i]) {
+        DBG("[ReDockIt] LoadSnapshot: node %d unreachable from root\n", i);
+        Reset(); return false;
+      }
     }
   }
 
@@ -501,7 +573,8 @@ bool SplitTree::LoadSnapshot(const NodeSnapshot* in, int nodeCount)
   for (int i = 0; i < nodeCount && i < MAX_TREE_NODES; i++) {
     m_nodes[i].type = in[i].type;
     m_nodes[i].orient = in[i].orient;
-    m_nodes[i].ratio = in[i].ratio;
+    m_nodes[i].ratio = (in[i].type == NODE_BRANCH && in[i].ratio < 0.05f) ? 0.1f :
+                       (in[i].type == NODE_BRANCH && in[i].ratio > 0.95f) ? 0.9f : in[i].ratio;
     m_nodes[i].childA = in[i].childA;
     m_nodes[i].childB = in[i].childB;
     m_nodes[i].paneId = in[i].paneId;
