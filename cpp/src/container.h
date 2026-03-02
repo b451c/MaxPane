@@ -68,6 +68,16 @@ private:
   int m_hoverTab;           // tab index under mouse, -1 when none
   bool m_pendingRppLoad;     // true if waiting for RPP state to become available
 
+  // GDI brush cache (created once in constructor, destroyed in destructor)
+  HBRUSH m_brushTabBarBg = nullptr;
+  HBRUSH m_brushTabActive = nullptr;
+  HBRUSH m_brushTabInactive = nullptr;
+  HBRUSH m_brushEmptyHeader = nullptr;
+
+  static void SafeDeleteBrush(HBRUSH& brush) {
+    if (brush) { DeleteObject(brush); brush = nullptr; }
+  }
+
   void ApplyPaneState(const PaneSnapshot* panes, int maxPanes, bool deferActions);
   void RefreshLayout();
   void StartCaptureTimer();

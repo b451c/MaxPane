@@ -39,11 +39,21 @@ ReDockItContainer::ReDockItContainer()
   m_dragState.sourcePaneId = -1;
   m_dragState.highlightPaneId = -1;
   m_winMgr.Init();
+
+  // Create cached GDI brushes for static colors
+  m_brushTabBarBg = CreateSolidBrush(COLOR_TAB_BAR_BG);
+  m_brushTabActive = CreateSolidBrush(COLOR_TAB_ACTIVE_BG);
+  m_brushTabInactive = CreateSolidBrush(COLOR_TAB_INACTIVE_BG);
+  m_brushEmptyHeader = CreateSolidBrush(COLOR_EMPTY_HEADER_BG);
 }
 
 ReDockItContainer::~ReDockItContainer()
 {
   Shutdown();
+  SafeDeleteBrush(m_brushTabBarBg);
+  SafeDeleteBrush(m_brushTabActive);
+  SafeDeleteBrush(m_brushTabInactive);
+  SafeDeleteBrush(m_brushEmptyHeader);
 }
 
 bool ReDockItContainer::Create()
@@ -627,9 +637,7 @@ void ReDockItContainer::OnPaint(HDC hdc)
       RECT headerRect = paneRect;
       headerRect.bottom = headerRect.top + TAB_BAR_HEIGHT;
 
-      HBRUSH headerBrush = CreateSolidBrush(COLOR_EMPTY_HEADER_BG);
-      FillRect(hdc, &headerRect, headerBrush);
-      DeleteObject(headerBrush);
+      if (m_brushEmptyHeader) FillRect(hdc, &headerRect, m_brushEmptyHeader);
 
       SetBkMode(hdc, TRANSPARENT);
       SetTextColor(hdc, COLOR_EMPTY_HEADER_TEXT);
@@ -675,9 +683,7 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
   int paneWidth = paneRect.right - paneRect.left;
 
   RECT barRect = { paneRect.left, tabBarTop, paneRect.right, tabBarBottom };
-  HBRUSH barBg = CreateSolidBrush(COLOR_TAB_BAR_BG);
-  FillRect(hdc, &barRect, barBg);
-  DeleteObject(barBg);
+  if (m_brushTabBarBg) FillRect(hdc, &barRect, m_brushTabBarBg);
 
   int tabWidth = paneWidth / ps->tabCount;
   if (tabWidth < TAB_MIN_WIDTH) tabWidth = TAB_MIN_WIDTH;
@@ -692,26 +698,35 @@ void ReDockItContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
 
     {
       int ci = ps->tabs[t].colorIndex;
-      COLORREF bgColor;
-      if (ci > 0 && ci < TAB_COLOR_COUNT) {
-        const TabColor& tc = TAB_COLORS[ci];
-        if (t == ps->activeTab) {
-          bgColor = RGB(tc.r, tc.g, tc.b);
-        } else {
-          bgColor = RGB(tc.r / 2, tc.g / 2, tc.b / 2);
-        }
+      bool isHover = (paneId == m_hoverPane && t == m_hoverTab);
+      bool hasCustomColor = (ci > 0 && ci < TAB_COLOR_COUNT);
+      if (!isHover && !hasCustomColor) {
+        // Fast path: use cached brush for default colors
+        HBRUSH cached = (t == ps->activeTab) ? m_brushTabActive : m_brushTabInactive;
+        if (cached) FillRect(hdc, &tabRect, cached);
       } else {
-        bgColor = (t == ps->activeTab) ? COLOR_TAB_ACTIVE_BG : COLOR_TAB_INACTIVE_BG;
+        // Dynamic color: custom tab color and/or hover highlight
+        COLORREF bgColor;
+        if (hasCustomColor) {
+          const TabColor& tc = TAB_COLORS[ci];
+          if (t == ps->activeTab) {
+            bgColor = RGB(tc.r, tc.g, tc.b);
+          } else {
+            bgColor = RGB(tc.r / 2, tc.g / 2, tc.b / 2);
+          }
+        } else {
+          bgColor = (t == ps->activeTab) ? COLOR_TAB_ACTIVE_BG : COLOR_TAB_INACTIVE_BG;
+        }
+        if (isHover) {
+          int r = GetRValue(bgColor) + TAB_HOVER_LIGHTEN;
+          int g = GetGValue(bgColor) + TAB_HOVER_LIGHTEN;
+          int b = GetBValue(bgColor) + TAB_HOVER_LIGHTEN;
+          bgColor = RGB(r < 255 ? r : 255, g < 255 ? g : 255, b < 255 ? b : 255);
+        }
+        HBRUSH tabBrush = CreateSolidBrush(bgColor);
+        FillRect(hdc, &tabRect, tabBrush);
+        DeleteObject(tabBrush);
       }
-      if (paneId == m_hoverPane && t == m_hoverTab) {
-        int r = GetRValue(bgColor) + TAB_HOVER_LIGHTEN;
-        int g = GetGValue(bgColor) + TAB_HOVER_LIGHTEN;
-        int b = GetBValue(bgColor) + TAB_HOVER_LIGHTEN;
-        bgColor = RGB(r < 255 ? r : 255, g < 255 ? g : 255, b < 255 ? b : 255);
-      }
-      HBRUSH tabBrush = CreateSolidBrush(bgColor);
-      FillRect(hdc, &tabRect, tabBrush);
-      DeleteObject(tabBrush);
     }
 
     SetBkMode(hdc, TRANSPARENT);
