@@ -367,6 +367,22 @@ void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
 {
   if (!g_SetProjExtState || !proj) return;
 
+  // Don't save empty state — if no windows are captured, clear any existing state
+  bool hasCaptured = false;
+  for (int p = 0; p < MAX_PANES && !hasCaptured; p++) {
+    const PaneState* ps = winMgr.GetPaneState(p);
+    if (!ps) continue;
+    for (int t = 0; t < ps->tabCount; t++) {
+      if (ps->tabs[t].captured) { hasCaptured = true; break; }
+    }
+  }
+  if (!hasCaptured) {
+    // Clear existing per-project state so HasProjectState returns false
+    g_SetProjExtState(proj, EXT_SECTION, "tree_version", "");
+    DBG("[ReDockIt] SaveProjectState: no captured windows, cleared state for proj=%p\n", proj);
+    return;
+  }
+
   ProjectStateAccessor projState(proj);
 
   projState.Set(EXT_SECTION, "tree_version", "2", true);

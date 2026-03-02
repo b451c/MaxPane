@@ -51,7 +51,10 @@ static void onAtExit()
   DBG("[ReDockIt] onAtExit: called, container=%p hwnd=%p\n",
       (void*)g_container.get(), g_container ? (void*)g_container->GetHwnd() : nullptr);
   if (g_container && g_container->GetHwnd() && g_SetExtState) {
-    // Collect all captured toggle actions
+    // Save captured action IDs so startup can close orphans if needed.
+    // REAPER caches wnd_vis BEFORE atexit, so these windows will reopen on restart.
+    // If the session has RPP state, rppReadyTimerFunc recaptures them (no problem).
+    // If not (clean session), orphan cleanup closes them.
     char buf[1024] = {};
     int pos = 0;
     const WindowManager& wm = g_container->GetWinMgr();
@@ -69,8 +72,7 @@ static void onAtExit()
     DBG("[ReDockIt] onAtExit: saved captured_actions='%s'\n", buf);
 
     g_container->SaveState();
-    // Release without toggle — REAPER will cache wnd_vis before we can change it
-    g_container->GetWinMgr().ReleaseAll(false);  // toggleOff=false
+    g_container->GetWinMgr().ReleaseAll(false);
     DBG("[ReDockIt] onAtExit: ReleaseAll(false) done\n");
   }
 }
@@ -78,18 +80,27 @@ static void onAtExit()
 // Used by project_state.cpp to access current container for save
 ReDockItContainer* GetContainer() { return g_container.get(); }
 
-// Close windows that REAPER incorrectly reopened from cached wnd_vis.
-// Called once at startup tick 1, before container auto-open.
-static void closeOrphanedWindows()
+// Close windows that REAPER reopened from cached wnd_vis but that belong
+// to a ReDockIt session that is NOT being loaded (clean session).
+// Called as a deferred one-shot timer AFTER startup — gives rppReadyTimerFunc
+// a chance to fire first and cancel this cleanup.
+static bool g_orphanCleanupCancelled = false;
+static void orphanCleanupTimerFunc()
 {
+  g_plugin_register("-timer", (void*)(void(*)())orphanCleanupTimerFunc);
+
+  if (g_orphanCleanupCancelled) {
+    DBG("[ReDockIt] orphanCleanup: cancelled (RPP state will recapture)\n");
+    return;
+  }
+
   if (!g_GetExtState || !g_Main_OnCommand || !g_GetToggleCommandState) return;
 
   const char* actions = g_GetExtState("ReDockIt_cpp", "captured_actions");
   if (!actions || !actions[0]) return;
 
-  DBG("[ReDockIt] closeOrphanedWindows: captured_actions='%s'\n", actions);
+  DBG("[ReDockIt] orphanCleanup: closing orphaned windows '%s'\n", actions);
 
-  // Parse comma-separated action IDs
   char buf[1024];
   safe_strncpy(buf, actions, sizeof(buf));
   char* p = buf;
@@ -97,41 +108,69 @@ static void closeOrphanedWindows()
     int actionId = atoi(p);
     if (actionId > 0) {
       int state = g_GetToggleCommandState(actionId);
-      DBG("[ReDockIt] closeOrphanedWindows: action %d state=%d\n", actionId, state);
       if (state == 1) {
-        // REAPER reopened this window — close it
-        DBG("[ReDockIt] closeOrphanedWindows: closing action %d\n", actionId);
+        DBG("[ReDockIt] orphanCleanup: closing action %d\n", actionId);
         g_Main_OnCommand(actionId, 0);
       }
     }
-    // Skip to next comma or end
     while (*p && *p != ',') p++;
     if (*p == ',') p++;
   }
 
-  // Clear the list so we don't re-close on next startup if user opens them manually
   if (g_SetExtState) {
     g_SetExtState("ReDockIt_cpp", "captured_actions", "", true);
   }
 }
 
-// Deferred startup timer — fires on REAPER main loop, auto-opens container if enabled
-static int g_startupCounter = 0;
-static bool g_orphansCleanedUp = false;
-static void startupTimerFunc()
+// One-shot timer: fired by ProcessExtensionLine when RPP state arrives.
+// Creates the container on next main-loop tick (safe context for UI creation).
+// Cancels orphan cleanup — the windows will be recaptured by the container.
+static void rppReadyTimerFunc()
 {
-  // Close orphaned windows on first tick — as early as possible
-  if (!g_orphansCleanedUp) {
-    g_orphansCleanedUp = true;
-    closeOrphanedWindows();
+  g_plugin_register("-timer", (void*)(void(*)())rppReadyTimerFunc);
+
+  // Cancel orphan cleanup — these windows will be recaptured, not closed
+  g_orphanCleanupCancelled = true;
+
+  // Clear the saved list since we're recapturing
+  if (g_SetExtState) {
+    g_SetExtState("ReDockIt_cpp", "captured_actions", "", true);
   }
 
+  if (!g_pendingProjectState.valid) return;  // already consumed
+
+  DBG("[ReDockIt] rppReadyTimer: RPP state available (%d lines), ensuring container\n",
+      g_pendingProjectState.lineCount);
+
+  if (!g_container) {
+    g_container = std::make_unique<ReDockItContainer>();
+  }
+  if (!g_container->GetHwnd()) {
+    g_container->Create();  // Create() → LoadState() consumes pending RPP data
+  }
+  // If container already has hwnd, its OnTimer will pick up the pending RPP state
+}
+
+// Called from ProcessExtensionLine (project_state.cpp) when <REDOCKIT_STATE> is parsed.
+// Defers container creation to next main-loop tick via one-shot timer.
+void OnRppStateReady()
+{
+  if (g_plugin_register) {
+    g_plugin_register("timer", (void*)(void(*)())rppReadyTimerFunc);
+  }
+}
+
+// Deferred startup timer — fires on REAPER main loop, auto-opens container if enabled
+static int g_startupCounter = 0;
+static void startupTimerFunc()
+{
   if (++g_startupCounter < STARTUP_DELAY_TICKS) return;
   g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
   g_startupComplete = true;
 
   // Only auto-open if enabled AND was visible when REAPER last closed.
   // If user explicitly closed ReDockIt ([x]), was_visible="0" → don't reopen.
+  // If the project has RPP state, rppReadyTimerFunc will handle it separately.
   bool wasVisible = true;
   if (g_GetExtState) {
     const char* vis = g_GetExtState("ReDockIt_cpp", "was_visible");
@@ -145,6 +184,12 @@ static void startupTimerFunc()
       g_container->Create();
     }
   }
+
+  // Schedule deferred orphan cleanup.
+  // This runs on the NEXT tick, giving rppReadyTimerFunc a chance to cancel it.
+  // If the session has RPP state → rppReadyTimerFunc fires first → cancels cleanup.
+  // If clean session (no RPP) → cleanup fires → closes windows REAPER reopened from wnd_vis.
+  g_plugin_register("timer", (void*)(void(*)())orphanCleanupTimerFunc);
 }
 
 static bool hookCommandProc(int command, int flag)

@@ -12,7 +12,7 @@
 #include "reaper_plugin.h"
 
 // Buffer for lines read from RPP <REDOCKIT_STATE> chunk
-static const int RPP_MAX_LINES = 256;
+static const int RPP_MAX_LINES = 512;
 static const int RPP_MAX_LINE_LEN = 512;
 
 struct PendingProjectState {

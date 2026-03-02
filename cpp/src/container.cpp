@@ -30,6 +30,7 @@ ReDockItContainer::ReDockItContainer()
   , m_hoverSplitter(-1)
   , m_shutdownGraceTicks(0)
   , m_currentProject(nullptr)
+  , m_pendingRppLoad(false)
 {
   m_captureMode.active = false;
   m_captureMode.targetPaneId = -1;
@@ -121,14 +122,36 @@ void ReDockItContainer::Show()
   m_visible = true;
 }
 
+void ReDockItContainer::Hide()
+{
+  if (!m_hwnd) return;
+  DBG("[ReDockIt] Hide: saving state and releasing windows\n");
+  SaveState();
+  m_captureQueue->CancelAll();
+  m_winMgr.ReleaseAll();
+  ShowWindow(m_hwnd, SW_HIDE);
+  m_visible = false;
+}
+
 void ReDockItContainer::Toggle()
 {
   if (!m_hwnd) { Create(); return; }
-  // User explicitly closing — mark as not visible for next startup
-  if (g_SetExtState) {
-    g_SetExtState("ReDockIt_cpp", "was_visible", "0", true);
+  if (m_visible) {
+    // User explicitly closing — mark as not visible for next startup
+    if (g_SetExtState) {
+      g_SetExtState("ReDockIt_cpp", "was_visible", "0", true);
+    }
+    Hide();
+  } else {
+    // Re-show and reload state
+    if (g_SetExtState) {
+      g_SetExtState("ReDockIt_cpp", "was_visible", "1", true);
+    }
+    ShowWindow(m_hwnd, SW_SHOW);
+    m_visible = true;
+    LoadState();
+    RefreshLayout();
   }
-  Shutdown();
 }
 
 bool ReDockItContainer::IsVisible() const
@@ -253,6 +276,7 @@ void ReDockItContainer::LoadState()
       }
     }
     g_pendingProjectState.valid = false;  // consumed
+    m_pendingRppLoad = false;
   }
 
   if (!loadedProject && g_EnumProjects) {
@@ -262,6 +286,7 @@ void ReDockItContainer::LoadState()
     if (proj && m_wsMgr->HasProjectState(proj)) {
       loadedProject = m_wsMgr->LoadProjectState(proj, snap, nodeCount, panes, hasTreeFormat);
       DBG("[ReDockIt] LoadState: loaded per-project ProjExtState (nodes=%d)\n", nodeCount);
+      m_pendingRppLoad = false;
     }
   }
 
@@ -272,6 +297,10 @@ void ReDockItContainer::LoadState()
     // Global state = only tree layout, not windows.
     // Windows are per-project — don't carry over from last session.
     memset(panes, 0, sizeof(PaneSnapshot) * MAX_PANES);
+    // REAPER may not have parsed the RPP chunk yet — set flag to check in OnTimer.
+    // If RPP data arrives later, OnTimer will apply it.
+    m_pendingRppLoad = true;
+    DBG("[ReDockIt] LoadState: RPP not yet available, will check in OnTimer\n");
   }
 
   if (hasTreeFormat) {
@@ -755,6 +784,53 @@ void ReDockItContainer::OnLButtonUp(int x, int y)
 
 void ReDockItContainer::OnTimer()
 {
+  // Check if deferred RPP state has become available.
+  // REAPER parses the RPP <REDOCKIT_STATE> chunk asynchronously —
+  // it may arrive after Create()/LoadState() already ran.
+  if (m_pendingRppLoad && g_pendingProjectState.valid) {
+    DBG("[ReDockIt] OnTimer: deferred RPP state now available (%d lines), applying\n",
+        g_pendingProjectState.lineCount);
+    m_pendingRppLoad = false;
+
+    RppReadAccessor rppAcc(g_pendingProjectState.lines, g_pendingProjectState.lineCount);
+    const char* treeVer = rppAcc.Get(EXT_SECTION, "tree_version");
+    bool hasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
+    if (hasTreeFormat) {
+      NodeSnapshot snap[MAX_TREE_NODES];
+      memset(snap, 0, sizeof(snap));
+      int nodeCount = WorkspaceManager::ReadTreeNodesStatic("", snap, rppAcc);
+      if (nodeCount > 0) {
+        PaneSnapshot panes[MAX_PANES];
+        memset(panes, 0, sizeof(panes));
+        WorkspaceManager::ReadPaneTabsStatic("", panes, MAX_PANES, rppAcc);
+
+        // Release any windows from default state before applying RPP state
+        m_captureQueue->CancelAll();
+        m_winMgr.ReleaseAll(false);
+
+        if (!m_tree.LoadSnapshot(snap, nodeCount)) {
+          DBG("[ReDockIt] OnTimer: deferred RPP tree corrupt, resetting\n");
+          m_tree.Reset();
+        }
+
+        RECT rc;
+        GetClientRect(m_hwnd, &rc);
+        m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+        ApplyPaneState(panes, MAX_PANES, true);
+        m_winMgr.RepositionAll(m_tree);
+        InvalidateRect(m_hwnd, nullptr, TRUE);
+
+        // Update current project tracking
+        if (g_EnumProjects) {
+          m_currentProject = g_EnumProjects(-1, nullptr, 0);
+        }
+
+        DBG("[ReDockIt] OnTimer: deferred RPP state applied (nodes=%d)\n", nodeCount);
+      }
+    }
+    g_pendingProjectState.valid = false;  // consumed
+  }
+
   // Always detect project switches, even if our window isn't visible.
   // REAPER dockers may hide us behind another tab, but we still need
   // to track the active project for state persistence.
@@ -766,48 +842,10 @@ void ReDockItContainer::OnTimer()
     }
   }
 
-  if (m_hwnd && !IsWindowVisible(m_hwnd)) {
-    // Don't shut down while capture queue is active — toggle actions
-    // may temporarily hide the docker that contains us
-    if (m_captureQueue->HasPending()) {
-      DBG("[ReDockIt] OnTimer: window not visible but capture queue active, skipping shutdown\n");
-      return;
-    }
-    // Don't shut down if we have captured windows in any pane.
-    // Docker reparenting can make us temporarily invisible, but we must
-    // not release our captured windows. Only shut down if all panes are empty.
-    bool hasCaptured = false;
-    for (int p = 0; p < MAX_PANES; p++) {
-      const PaneState* ps = m_winMgr.GetPaneState(p);
-      if (ps) {
-        for (int t = 0; t < ps->tabCount; t++) {
-          if (ps->tabs[t].captured) {
-            hasCaptured = true;
-            break;
-          }
-        }
-      }
-      if (hasCaptured) break;
-    }
-    if (hasCaptured) {
-      // We have captured windows — do NOT shut down, just wait.
-      // The docker will become visible again after reparenting settles.
-      return;
-    }
-    // Don't shut down during grace period after capture — docker reparenting
-    // may temporarily make us invisible
-    if (m_shutdownGraceTicks > 0) {
-      m_shutdownGraceTicks--;
-      DBG("[ReDockIt] OnTimer: window not visible but grace period active (%d left), skipping shutdown\n",
-          m_shutdownGraceTicks);
-      return;
-    }
-    DBG("[ReDockIt] OnTimer: window no longer visible and no captured windows, shutting down\n");
-    Shutdown();
-    return;
+  // Only check alive / reposition if visible
+  if (m_hwnd && IsWindowVisible(m_hwnd)) {
+    m_winMgr.CheckAlive(m_hwnd);
   }
-
-  m_winMgr.CheckAlive(m_hwnd);
 }
 
 void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj)
@@ -833,7 +871,7 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
     }
   }
 
-  // Cancel pending captures and release windows (no toggle — just reparent back)
+  // Release currently captured windows (no toggle — just reparent back)
   m_captureQueue->CancelAll();
   m_winMgr.ReleaseAll(false);
 
@@ -875,7 +913,7 @@ void ReDockItContainer::OnProjectSwitch(ReaProject* oldProj, ReaProject* newProj
       m_tree.Reset();
     }
   } else {
-    DBG("[ReDockIt] OnProjectSwitch: no per-project state, keeping layout, clearing panes\n");
+    DBG("[ReDockIt] OnProjectSwitch: no per-project state, showing empty panes\n");
     memset(panes, 0, sizeof(panes));
   }
 
