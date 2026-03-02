@@ -1,5 +1,6 @@
 #pragma once
 #include "globals.h"
+#include "state_limits.h"
 #include <cstring>
 
 class StateAccessor {
@@ -38,9 +39,6 @@ public:
 };
 
 // RPP write accessor — collects key=value pairs for writing to RPP chunk
-static const int RPP_KV_MAX = 512;
-static const int RPP_KV_KEY_LEN = 128;
-static const int RPP_KV_VAL_LEN = 512;
 
 class RppWriteAccessor : public StateAccessor {
   struct KV {
@@ -66,11 +64,11 @@ public:
 
 // RPP read accessor — parses "KEY VALUE" lines from buffered RPP chunk data
 class RppReadAccessor : public StateAccessor {
-  const char (*m_lines)[512];  // pointer to array of lines
+  const char (*m_lines)[RPP_MAX_LINE_LEN];  // pointer to array of lines
   int m_lineCount;
   mutable char m_buf[RPP_KV_VAL_LEN];
 public:
-  RppReadAccessor(const char lines[][512], int lineCount)
+  RppReadAccessor(const char lines[][RPP_MAX_LINE_LEN], int lineCount)
     : m_lines(lines), m_lineCount(lineCount) { m_buf[0] = '\0'; }
 
   void Set(const char*, const char*, const char*, bool) override { /* read-only */ }
