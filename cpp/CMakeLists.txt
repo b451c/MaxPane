@@ -13,6 +13,9 @@ add_library(reaper_redockit SHARED
   src/globals.cpp
   src/config.cpp
   src/container.cpp
+  src/container_paint.cpp
+  src/container_input.cpp
+  src/container_state.cpp
   src/split_tree.cpp
   src/window_manager.cpp
   src/capture_queue.cpp

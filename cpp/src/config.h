@@ -107,3 +107,10 @@ static const int TAB_TEXT_RIGHT_MARGIN  = 16;
 // =========================================================================
 
 static const int STARTUP_DELAY_TICKS    = 15;    // ~450ms at 30ms timer
+
+// Container timer IDs and intervals
+static const int TIMER_ID_CHECK           = 1;
+static const int TIMER_INTERVAL           = 500;   // ms — CheckAlive + RPP poll
+static const int TIMER_ID_CAPTURE         = 2;
+static const int TIMER_CAPTURE_INTERVAL   = 50;    // ms — CaptureQueue tick
+static const int TIMER_ID_HOVER           = 3;

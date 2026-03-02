@@ -610,7 +610,7 @@ Logika dock-frame detection jest **funkcjonalnie poprawna** i pokrywa znane scen
 | 4.2 Targeted InvalidateRect | OTWARTE | Profile-first — wymaga benchmarku przed optymalizacją |
 | 4.3 Tab overflow UI | OTWARTE | Feature request — zaplanować jako osobna feature |
 | 4.4 NOMINMAX | ZREALIZOWANE | Wdrożone w ramach audytu (commit 10) |
-| 4.5 Container.cpp split | OTWARTE | Refaktor architektury — po stabilizacji v1.1.x |
+| 4.5 Container.cpp split | ZREALIZOWANE | Rozbite na 4 pliki: container, _paint, _input, _state |
 | 4.7 SaveState debounce | ODROCZONE | Re-weryfikacja wykazała brak problemu (event-driven, in-memory) |
 | C1 Win64 portability | OTWARTE | Do naprawy przy uruchomieniu Windows buildu |
 
