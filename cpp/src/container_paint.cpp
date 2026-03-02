@@ -13,7 +13,7 @@ void ReDockItContainer::OnPaint(HDC hdc)
   GetClientRect(m_hwnd, &rc);
 
   // Background
-  HBRUSH bgBrush = CreateSolidBrush(GetSysColor(COLOR_3DFACE));
+  HBRUSH bgBrush = CreateSolidBrush(COLOR_PANE_BG);
   FillRect(hdc, &rc, bgBrush);
   DeleteObject(bgBrush);
 

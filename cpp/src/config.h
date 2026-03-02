@@ -70,6 +70,9 @@ static const int MAX_FAVORITES = 32;
 #include "swell/swell.h"
 #endif
 
+// Pane background (captured windows have no own background — parent color shows through)
+static const COLORREF COLOR_PANE_BG           = RGB(172, 172, 172);
+
 // Empty pane header
 static const COLORREF COLOR_EMPTY_HEADER_BG   = RGB(50, 50, 50);
 static const COLORREF COLOR_EMPTY_HEADER_TEXT  = RGB(180, 180, 180);
