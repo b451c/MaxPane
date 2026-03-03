@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <index version="1" name="MaxPane">
   <category name="Extensions">
-    <reapack name="reaper_maxpane" type="extension" desc="MaxPane - Nested Docker Layouts for REAPER">
+    <reapack name="reaper_maxpane" type="extension" desc="MaxPane: Nested Docker Layouts for REAPER">
       <metadata>
         <link rel="website">https://github.com/b451c/MaxPane</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-hero.png</link>
