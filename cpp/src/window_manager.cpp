@@ -61,10 +61,10 @@ static LRESULT CALLBACK ToolbarSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, 
 static void SubclassToolbar(HWND hwnd)
 {
   if (GetProp(hwnd, kOrigWndProcProp)) return;  // already subclassed
-  WNDPROC orig = (WNDPROC)GetWindowLong(hwnd, GWL_WNDPROC);
+  WNDPROC orig = (WNDPROC)GetWindowLongPtr(hwnd, GWLP_WNDPROC);
   if (orig && orig != ToolbarSubclassProc) {
     SetProp(hwnd, kOrigWndProcProp, (HANDLE)(INT_PTR)orig);
-    SetWindowLong(hwnd, GWL_WNDPROC, (LONG_PTR)ToolbarSubclassProc);
+    SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)ToolbarSubclassProc);
     DBG("[MaxPane] SubclassToolbar: hwnd=%p orig=%p\n", (void*)hwnd, (void*)orig);
   }
 }
@@ -73,7 +73,7 @@ static void UnsubclassToolbar(HWND hwnd)
 {
   WNDPROC orig = (WNDPROC)(INT_PTR)GetProp(hwnd, kOrigWndProcProp);
   if (orig) {
-    SetWindowLong(hwnd, GWL_WNDPROC, (LONG_PTR)orig);
+    SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)orig);
     RemoveProp(hwnd, kOrigWndProcProp);
     DBG("[MaxPane] UnsubclassToolbar: hwnd=%p restored=%p\n", (void*)hwnd, (void*)orig);
   }

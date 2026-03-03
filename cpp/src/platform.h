@@ -18,6 +18,9 @@
   #ifndef GWLP_USERDATA
     #define GWLP_USERDATA GWL_USERDATA
   #endif
+  #ifndef GWLP_WNDPROC
+    #define GWLP_WNDPROC GWL_WNDPROC
+  #endif
   #ifndef SetWindowLongPtr
     #define SetWindowLongPtr SetWindowLong
   #endif
