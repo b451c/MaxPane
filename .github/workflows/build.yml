@@ -1,0 +1,123 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: darwin-arm64
+            artifact: reaper_maxpane-arm64.dylib
+            build_file: reaper_maxpane.dylib
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+          - os: macos-14
+            platform: darwin-x86_64
+            artifact: reaper_maxpane-x86_64.dylib
+            build_file: reaper_maxpane.dylib
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+          - os: windows-latest
+            platform: win-x64
+            artifact: reaper_maxpane-x64.dll
+            build_file: Release/reaper_maxpane.dll
+            cmake_flags: ""
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            artifact: reaper_maxpane-x86_64.so
+            build_file: reaper_maxpane.so
+            cmake_flags: ""
+
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest' }}
+    name: Build (${{ matrix.platform }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone REAPER SDK
+        run: git clone --depth 1 https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
+
+      - name: Clone WDL
+        run: git clone --depth 1 https://github.com/justinfrankel/WDL.git cpp/WDL
+
+      - name: Create build directory
+        shell: bash
+        run: mkdir -p cpp/build
+
+      - name: Configure (macOS / Linux)
+        if: runner.os != 'Windows'
+        working-directory: cpp/build
+        run: cmake .. -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        working-directory: cpp/build
+        run: cmake .. -G "Visual Studio 17 2022" -A x64
+
+      - name: Build (macOS / Linux)
+        if: runner.os != 'Windows'
+        working-directory: cpp/build
+        shell: bash
+        run: make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: cpp/build
+        run: cmake --build . --config Release
+
+      - name: Rename artifact
+        working-directory: cpp/build
+        shell: bash
+        run: cp "${{ matrix.build_file }}" "${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: cpp/build/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: reaper_maxpane-*
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: false
+          body: |
+            ## MaxPane ${{ github.ref_name }}
+
+            Native C++ extension for REAPER — tiling window manager with tabs, workspaces, and drag-and-drop.
+
+            ### Downloads
+
+            | Platform | File |
+            |----------|------|
+            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` |
+            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` |
+            | Windows x64 | `reaper_maxpane-x64.dll` |
+            | Linux x86_64 | `reaper_maxpane-x86_64.so` |
+
+            ### Installation
+
+            Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
+
+            See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
+
+            ---
+            *Support development: [Ko-fi](https://ko-fi.com/quickmd) · [Buy Me a Coffee](https://buymeacoffee.com/bsroczynskh) · [PayPal](https://paypal.me/b451c)*

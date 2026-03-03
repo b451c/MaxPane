@@ -1,0 +1,29 @@
+# Build artifacts
+cpp/build/
+
+# External dependencies (cloned separately)
+cpp/sdk/
+cpp/WDL/
+
+# Compiled binaries
+*.dylib
+*.dll
+*.so
+*.o
+*.obj
+
+# macOS
+.DS_Store
+
+# IDE / Editor
+.vscode/
+.idea/
+*.xcodeproj/
+*.swp
+*~
+
+# Debug logs
+maxpane_debug.log
+
+# Claude Code project files
+.claude/
