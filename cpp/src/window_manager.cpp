@@ -370,32 +370,27 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       tab.name ? tab.name : "(null)", tab.hwnd, toggleOff, tab.toggleAction,
       (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
 
-  // Check toggle state NOW, before any manipulation — accurate while captured.
-  int toggleState = -1;
-  if (toggleOff && tab.toggleAction > 0 && g_GetToggleCommandState) {
-    toggleState = g_GetToggleCommandState(tab.toggleAction);
-    DBG("[ReDockIt] DoRelease: pre-toggle state=%d for action %d\n",
-        toggleState, tab.toggleAction);
-  }
-
-  // Reparent back to REAPER so it recognizes the window for toggle.
   if (tab.hwnd && IsWindow(tab.hwnd)) {
-    HWND restoreParent = tab.originalParent;
-    if (!restoreParent || !IsWindow(restoreParent)) {
-      restoreParent = g_reaperMainHwnd;
+    if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand) {
+      // Restore the window to a true top-level NSWindow before toggling.
+      // While WS_CHILD in our container SWELL destroys the NSWindow; calling
+      // g_Main_OnCommand without a real NSWindow causes REAPER to open a NEW
+      // floating window instead of closing the existing one (state stays 1).
+      // SetParent(nullptr) recreates the NSWindow so REAPER can close it
+      // properly and set the toggle state to 0.
+      SetParent(tab.hwnd, nullptr);
+      int toggleState = g_GetToggleCommandState ? g_GetToggleCommandState(tab.toggleAction) : -1;
+      DBG("[ReDockIt] DoRelease: restored to top-level, toggle state=%d action=%d\n",
+          toggleState, tab.toggleAction);
+      if (toggleState != 0)
+        g_Main_OnCommand(tab.toggleAction, 0);
+    } else {
+      // No toggle — reparent to REAPER main and hide.
+      HWND restoreParent = tab.originalParent;
+      if (!restoreParent || !IsWindow(restoreParent)) restoreParent = g_reaperMainHwnd;
+      SetParent(tab.hwnd, restoreParent);
+      DBG("[ReDockIt] DoRelease: reparented to %p\n", (void*)restoreParent);
     }
-    SetParent(tab.hwnd, restoreParent);
-    DBG("[ReDockIt] DoRelease: reparented to %p\n", (void*)restoreParent);
-  }
-
-  // Toggle off immediately after reparent — window is in REAPER's hierarchy.
-  if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand && toggleState != 0) {
-    DBG("[ReDockIt] DoRelease: toggling off action %d\n", tab.toggleAction);
-    g_Main_OnCommand(tab.toggleAction, 0);
-  }
-
-  // Safety: ensure window is hidden even if toggle didn't close it
-  if (tab.hwnd && IsWindow(tab.hwnd)) {
     ShowWindow(tab.hwnd, SW_HIDE);
   }
 
