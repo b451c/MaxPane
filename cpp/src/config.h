@@ -73,6 +73,10 @@ static const int MAX_FAVORITES = 32;
 // Pane background (captured windows have no own background — parent color shows through)
 static const COLORREF COLOR_PANE_BG           = RGB(172, 172, 172);
 
+// Subtle vertical lines drawn in empty panes (disappear when a window is captured)
+static const COLORREF COLOR_PANE_GRID_LINE    = RGB(158, 158, 158);
+static const int      PANE_GRID_SPACING       = 24;
+
 // Empty pane header
 static const COLORREF COLOR_EMPTY_HEADER_BG   = RGB(50, 50, 50);
 static const COLORREF COLOR_EMPTY_HEADER_TEXT  = RGB(180, 180, 180);

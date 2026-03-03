@@ -71,6 +71,33 @@ void ReDockItContainer::OnPaint(HDC hdc)
 
       RECT contentRect = paneRect;
       contentRect.top += TAB_BAR_HEIGHT;
+
+      // Subtle diagonal lines in empty panes (45°, disappear when window is captured)
+      {
+        HPEN gridPen = CreatePen(PS_SOLID, 1, COLOR_PANE_GRID_LINE);
+        HPEN oldPen  = (HPEN)SelectObject(hdc, gridPen);
+
+        int cx = contentRect.left, cy = contentRect.top;
+        int cw = contentRect.right - contentRect.left;
+        int ch = contentRect.bottom - contentRect.top;
+
+        for (int ox = -ch; ox < cw; ox += PANE_GRID_SPACING) {
+          // Full line: (cx+ox, cy+ch) → (cx+ox+ch, cy) at 45° (\\ → /)
+          // Clip horizontally: x stays within [cx, cx+cw)
+          int x1 = cx + ox,      y1 = cy + ch;
+          int x2 = cx + ox + ch, y2 = cy;
+          if (x1 < cx) { y1 -= (cx - x1); x1 = cx; }
+          if (x2 > cx + cw) { y2 += (x2 - (cx + cw)); x2 = cx + cw; }
+          if (x1 < x2) {
+            MoveToEx(hdc, x1, y1, nullptr);
+            LineTo  (hdc, x2, y2);
+          }
+        }
+
+        SelectObject(hdc, oldPen);
+        DeleteObject(gridPen);
+      }
+
       SetTextColor(hdc, RGB(80, 80, 80));
       DrawText(hdc, "Click header to assign a window", -1, &contentRect,
                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
