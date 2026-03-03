@@ -5,6 +5,80 @@
 #include <cstring>
 #include <cstdio>
 
+// =========================================================================
+// Toolbar subclass — block background drag (REAPER's undock-by-drag)
+// =========================================================================
+// REAPER toolbars initiate a drag-to-undock operation when you click+hold
+// on the toolbar background (empty area between buttons).  When a toolbar
+// is reparented as WS_CHILD inside MaxPane, this drag breaks rendering
+// (buttons disappear, grey rectangle).
+//
+// Fix: subclass captured toolbar windows and eat WM_LBUTTONDOWN when the
+// click is on the background (not on a child control / button).
+// On macOS/SWELL, subview button clicks never reach the parent WndProc,
+// but we add a child-hit guard for cross-platform safety.
+
+static const char* const kOrigWndProcProp = "MaxPane_OrigWndProc";
+
+static bool PointHitsChild(HWND parent, int x, int y)
+{
+  HWND child = GetWindow(parent, GW_CHILD);
+  while (child) {
+    if (IsWindowVisible(child)) {
+      RECT cr;
+      GetWindowRect(child, &cr);
+      // Convert screen rect to parent client coords
+      POINT tl = { cr.left, cr.top };
+      POINT br = { cr.right, cr.bottom };
+      ScreenToClient(parent, &tl);
+      ScreenToClient(parent, &br);
+      if (x >= tl.x && x < br.x && y >= tl.y && y < br.y)
+        return true;
+    }
+    child = GetWindow(child, GW_HWNDNEXT);
+  }
+  return false;
+}
+
+static LRESULT CALLBACK ToolbarSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  WNDPROC origProc = (WNDPROC)(INT_PTR)GetProp(hwnd, kOrigWndProcProp);
+  if (!origProc) return DefWindowProc(hwnd, msg, wParam, lParam);
+
+  if (msg == WM_LBUTTONDOWN) {
+    int x = (short)LOWORD(lParam);
+    int y = (short)HIWORD(lParam);
+    if (!PointHitsChild(hwnd, x, y)) {
+      // Click on toolbar background — eat it to prevent REAPER's drag-to-undock
+      DBG("[MaxPane] ToolbarSubclass: ate WM_LBUTTONDOWN on background at (%d,%d)\n", x, y);
+      return 0;
+    }
+  }
+
+  return CallWindowProc(origProc, hwnd, msg, wParam, lParam);
+}
+
+static void SubclassToolbar(HWND hwnd)
+{
+  if (GetProp(hwnd, kOrigWndProcProp)) return;  // already subclassed
+  WNDPROC orig = (WNDPROC)GetWindowLong(hwnd, GWL_WNDPROC);
+  if (orig && orig != ToolbarSubclassProc) {
+    SetProp(hwnd, kOrigWndProcProp, (HANDLE)(INT_PTR)orig);
+    SetWindowLong(hwnd, GWL_WNDPROC, (LONG_PTR)ToolbarSubclassProc);
+    DBG("[MaxPane] SubclassToolbar: hwnd=%p orig=%p\n", (void*)hwnd, (void*)orig);
+  }
+}
+
+static void UnsubclassToolbar(HWND hwnd)
+{
+  WNDPROC orig = (WNDPROC)(INT_PTR)GetProp(hwnd, kOrigWndProcProp);
+  if (orig) {
+    SetWindowLong(hwnd, GWL_WNDPROC, (LONG_PTR)orig);
+    RemoveProp(hwnd, kOrigWndProcProp);
+    DBG("[MaxPane] UnsubclassToolbar: hwnd=%p restored=%p\n", (void*)hwnd, (void*)orig);
+  }
+}
+
 // Known dynamic-title window prefixes.
 // Windows whose titles start with one of these change their title at runtime
 // (e.g. MIDI Editor title changes per MIDI item / project tab).
@@ -458,6 +532,10 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   // Routing Matrix grid) may have stale frames from before reparent.
   ForceViewLayoutAndDisplay(targetHwnd);
 
+  // Subclass toolbar windows to prevent REAPER's drag-to-undock on background click
+  if (GetToolbarToggleAction(targetTitle) > 0) {
+    SubclassToolbar(targetHwnd);
+  }
 
   DBG("[MaxPane] DoCapture: DONE hwnd=%p captured=true\n", (void*)targetHwnd);
   return true;
@@ -472,6 +550,9 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
 
   if (tab.hwnd && IsWindow(tab.hwnd)) {
+    // Remove toolbar subclass before reparenting
+    UnsubclassToolbar(tab.hwnd);
+
     if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand) {
       // Restore the window to a true top-level NSWindow before toggling.
       // While WS_CHILD in our container SWELL destroys the NSWindow; calling
