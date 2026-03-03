@@ -13,6 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 - **Visual glitches** — Hide close button on narrow tabs (< 60px); splitter hover timer now uses full hit testing; hover state cleared when context menu closes; adaptive text color (black on bright tab colors like yellow/cyan). ([#7](https://github.com/b451c/MaxPane/issues/7))
 - **Toolbar rendering and docking in MaxPane** — Toolbars can now be properly captured and displayed. Removed toolbar filter from `FindWindowEnumProc`. ([#6](https://github.com/b451c/MaxPane/issues/6))
 - **Workspace switching: stale windows floating after restart** — Windows from previous workspaces (toolbars, Actions, FX Browser, ReaImGui scripts) no longer appear as floating windows after switching workspaces and restarting REAPER. State-specific cleanup: double-toggle for state=0 windows, ShowWindow fallback for stubborn HWNDs, skip-toggle for script actions (state=-1). ([#6](https://github.com/b451c/MaxPane/issues/6))
+- **Toolbar icons disappearing on background click** — Subclassed captured toolbar windows to block REAPER's internal drag-to-undock behavior. Clicking and holding on toolbar background no longer causes icons to vanish. ([#6](https://github.com/b451c/MaxPane/issues/6))
 - **Auto-detect toggle action** — `LookupToggleAction` now auto-detects the REAPER toggle action ID for any window title (toolbars + known windows), ensuring proper state management for windows captured via Open Windows menu.
 
 ---

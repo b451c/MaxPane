@@ -46,6 +46,7 @@
 - Visual glitches: narrow tab close button, hover sticking, adaptive text color (#7)
 - Fix toolbar rendering and docking (#6)
 - Fix stale windows floating after workspace switch + restart (#6)
+- Fix toolbar icons disappearing on background click (#6)
 - Auto-detect toggle action for Open Windows captures
 ]]></changelog>
         <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.2/reaper_maxpane-arm64.dylib</source>
