@@ -15,6 +15,20 @@ const char* GetDynamicTitlePrefix(const char* title)
   return nullptr;
 }
 
+// Detect REAPER toggle action for toolbar windows by title.
+// Returns action ID or 0 if not a toolbar.
+// Toolbar 1-16: action 41679 + (N-1).  Toolbar Docker: 41084.
+int GetToolbarToggleAction(const char* title)
+{
+  if (!title) return 0;
+  if (strcmp(title, "Toolbar Docker") == 0) return 41084;
+  if (strncmp(title, "Toolbar ", 8) == 0) {
+    int n = atoi(title + 8);
+    if (n >= 1 && n <= 16) return 41678 + n;
+  }
+  return 0;
+}
+
 WindowManager::WindowManager()
   : m_containerHwnd(nullptr)
 {
@@ -386,7 +400,12 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   // Reparent to our container
   SetParent(targetHwnd, containerHwnd);
 
-  LONG_PTR newStyle = WS_CHILD | WS_VISIBLE;
+  // Preserve original style bits, just add WS_CHILD | WS_VISIBLE and strip
+  // top-level window chrome.  Stripping all styles breaks frameless windows
+  // like toolbars whose rendering depends on flags like WS_CLIPCHILDREN.
+  LONG_PTR origStyle = GetWindowLongPtr(targetHwnd, GWL_STYLE);
+  LONG_PTR stripMask = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU;
+  LONG_PTR newStyle = (origStyle & ~stripMask) | WS_CHILD | WS_VISIBLE;
   SetWindowLongPtr(targetHwnd, GWL_STYLE, newStyle);
 
   tab.hwnd = targetHwnd;

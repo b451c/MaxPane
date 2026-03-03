@@ -19,6 +19,9 @@ struct TabEntry {
 // or nullptr if the window has a static title.
 const char* GetDynamicTitlePrefix(const char* title);
 
+// Returns the REAPER toggle action ID for a toolbar window, or 0 if not a toolbar.
+int GetToolbarToggleAction(const char* title);
+
 struct PaneState {
   TabEntry tabs[MAX_TABS_PER_PANE];
   int tabCount;   // 0 = empty pane

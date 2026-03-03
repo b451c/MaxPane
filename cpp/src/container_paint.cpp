@@ -13,8 +13,37 @@ void MaxPaneContainer::OnPaint(HDC hdc)
   RECT rc;
   GetClientRect(m_hwnd, &rc);
 
-  // Background
-  FillRect(hdc, &rc, m_brushPaneBg);
+  // Background — paint only areas NOT occupied by captured child windows.
+  // SWELL doesn't implement WS_CLIPCHILDREN, so a full-area FillRect would
+  // overwrite child windows that don't repaint frequently (e.g. toolbars).
+  // We fill: splitter rects, tab bar areas, and content areas of empty panes.
+  // Content areas of panes with a visible captured child are left untouched.
+  for (int i = 0; i < m_tree.GetLeafCount(); i++) {
+    int nodeIdx = m_tree.GetLeafList()[i];
+    int paneId = m_tree.GetPaneId(nodeIdx);
+    if (paneId < 0 || paneId >= MAX_PANES) continue;
+    const RECT& pr = m_tree.GetPaneRect(paneId);
+    // Tab bar area — always paint
+    RECT tabBarRect = { pr.left, pr.top, pr.right, pr.top + TAB_BAR_HEIGHT };
+    FillRect(hdc, &tabBarRect, m_brushPaneBg);
+    // Content area — only paint if pane has no visible captured child
+    const PaneState* ps = m_winMgr.GetPaneState(paneId);
+    bool hasVisibleChild = false;
+    if (ps && ps->activeTab >= 0 && ps->activeTab < ps->tabCount) {
+      const TabEntry* tab = &ps->tabs[ps->activeTab];
+      hasVisibleChild = (tab->captured && tab->hwnd && IsWindow(tab->hwnd));
+    }
+    if (!hasVisibleChild) {
+      RECT contentRect = { pr.left, pr.top + TAB_BAR_HEIGHT, pr.right, pr.bottom };
+      FillRect(hdc, &contentRect, m_brushPaneBg);
+    }
+  }
+  // Splitter rects
+  for (int i = 0; i < m_tree.GetBranchCount(); i++) {
+    int branchIdx = m_tree.GetBranchList()[i];
+    const SplitNode& n = m_tree.GetNode(branchIdx);
+    FillRect(hdc, &n.splitterRect, m_brushPaneBg);
+  }
 
   // Draw splitter bars
   for (int i = 0; i < m_tree.GetBranchCount(); i++) {

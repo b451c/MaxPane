@@ -37,7 +37,6 @@ static BOOL CALLBACK EnumOpenWindowsProc(HWND hwnd, LPARAM lParam)
   GetWindowText(hwnd, buf, sizeof(buf));
   if (!buf[0]) return TRUE;
 
-  if (strstr(buf, "toolbar") || strstr(buf, "Toolbar")) return TRUE;
   if (hwnd == data->containerHwnd) return TRUE;
   if (hwnd == g_reaperMainHwnd) return TRUE;
   if (data->winMgr->IsWindowCaptured(hwnd)) return TRUE;

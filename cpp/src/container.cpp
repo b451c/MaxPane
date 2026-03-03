@@ -551,7 +551,8 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
         }
       }
       if (targetHwnd && IsWindow(targetHwnd)) {
-        m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title, m_hwnd);
+        int toolbarAction = GetToolbarToggleAction(title);
+        m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title, m_hwnd, toolbarAction);
 
         if (dockFrame && IsWindow(dockFrame)) {
           ShowWindow(dockFrame, SW_HIDE);
@@ -781,6 +782,20 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         HDC hdc = BeginPaint(hwnd, &ps);
         self->OnPaint(hdc);
         EndPaint(hwnd, &ps);
+        // After parent paint, tell captured children to redraw.
+        // SWELL doesn't implement WS_CLIPCHILDREN, so the Cocoa drawRect:
+        // cycle on the parent view may clear areas under child views.
+        for (int i = 0; i < self->m_tree.GetLeafCount(); i++) {
+          int pid = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[i]);
+          if (pid < 0 || pid >= MAX_PANES) continue;
+          const PaneState* pps = self->m_winMgr.GetPaneState(pid);
+          if (pps && pps->activeTab >= 0 && pps->activeTab < pps->tabCount) {
+            const TabEntry* tab = &pps->tabs[pps->activeTab];
+            if (tab->captured && tab->hwnd && IsWindow(tab->hwnd)) {
+              InvalidateRect(tab->hwnd, nullptr, FALSE);
+            }
+          }
+        }
       }
       return 0;
     }
@@ -1018,7 +1033,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
                     }
                   }
                   int pId = self->m_captureMode.targetPaneId;
-                  self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd);
+                  int toolbarAction = GetToolbarToggleAction(title);
+                  self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toolbarAction);
 
                   if (dockFrame && IsWindow(dockFrame)) {
                     ShowWindow(dockFrame, SW_HIDE);
