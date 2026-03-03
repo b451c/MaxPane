@@ -15,13 +15,15 @@
 {\pard \ql \f0 \sa180 \li0 \fi0 A native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Features\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Flexible split layouts (up to 16 panes)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Tabbed windows with drag-and-drop between panes\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Tabbed windows with drag-and-drop and reorder\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Solo/maximize pane - expand any pane to fill the container\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab 15 known REAPER windows with one-click capture\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Arbitrary window capture (including ReaImGui scripts)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Keyboard shortcuts - 5 REAPER actions bindable in Actions dialog\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Named workspaces (save/restore complete layouts)\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Favorites, tab colors, layout presets\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS dark mode support\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Per-project state saved inside .RPP files\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Full state persistence across REAPER restarts\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Dockable into REAPER's native docker system\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Zero dependencies - pure C++ extension\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
