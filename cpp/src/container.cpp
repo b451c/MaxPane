@@ -373,7 +373,11 @@ void MaxPaneContainer::OnTimer()
     g_pendingProjectState.valid = false;  // consumed
   }
 
-  m_winMgr.CheckAlive();
+  if (m_winMgr.CheckAlive()) {
+    m_winMgr.RepositionAll(m_tree);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+    SaveState();
+  }
 }
 
 // =========================================================================

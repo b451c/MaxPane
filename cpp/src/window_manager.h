@@ -4,15 +4,20 @@
 
 struct TabEntry {
   char name[256];                // always owned (display name)
-  char searchTitle[256];         // always owned (window search title)
+  char searchTitle[256];         // always owned (window search title, or prefix for dynamicTitle)
   int toggleAction;
   HWND hwnd;
   HWND originalParent;
   bool captured;
   bool isArbitrary;
+  bool dynamicTitle;             // title changes at runtime (e.g. MIDI Editor) — use searchTitle as prefix
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
 };
+
+// Returns the stable search prefix for known dynamic-title windows,
+// or nullptr if the window has a static title.
+const char* GetDynamicTitlePrefix(const char* title);
 
 struct PaneState {
   TabEntry tabs[MAX_TABS_PER_PANE];
@@ -41,7 +46,7 @@ public:
   void ReleaseWindow(int paneId, bool toggleOff = true);
   void ReleaseAll(bool toggleOff = true);
   void RepositionAll(const SplitTree& tree);
-  void CheckAlive();
+  bool CheckAlive();  // returns true if any tabs were removed or recaptured
 
   // Accessors
   const PaneState* GetPaneState(int paneId) const;
@@ -56,6 +61,7 @@ public:
 
 private:
   PaneState m_panes[MAX_PANES];
+  HWND m_containerHwnd;  // stored for CheckAlive recapture
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
   void DoRelease(TabEntry& tab, bool toggleOff = true);
 };

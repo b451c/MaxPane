@@ -159,11 +159,14 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
             }
           }
         }
-        HWND h = WindowManager::FindReaperWindow(winName, m_hwnd);
+        // Dynamic-title windows (e.g. MIDI Editor): search by prefix
+        const char* dynPrefix = GetDynamicTitlePrefix(winName);
+        const char* searchName = dynPrefix ? dynPrefix : winName;
+        HWND h = WindowManager::FindReaperWindow(searchName, m_hwnd);
         if (h) {
           m_winMgr.CaptureArbitraryWindow(i, h, winName, m_hwnd, arbAction, arbCmd);
         } else {
-          m_captureQueue->EnqueueArbitrary(i, winName, arbAction, arbCmd, deferActions);
+          m_captureQueue->EnqueueArbitrary(i, searchName, arbAction, arbCmd, deferActions);
           needsCaptureTimer = true;
         }
       } else {

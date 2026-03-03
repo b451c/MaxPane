@@ -5,7 +5,18 @@
 #include <cstring>
 #include <cstdio>
 
+// Known dynamic-title window prefixes.
+// Windows whose titles start with one of these change their title at runtime
+// (e.g. MIDI Editor title changes per MIDI item / project tab).
+const char* GetDynamicTitlePrefix(const char* title)
+{
+  if (!title) return nullptr;
+  if (strncmp(title, "MIDI take:", 10) == 0) return "MIDI take:";
+  return nullptr;
+}
+
 WindowManager::WindowManager()
+  : m_containerHwnd(nullptr)
 {
   memset(m_panes, 0, sizeof(m_panes));
   for (int i = 0; i < MAX_PANES; i++) {
@@ -16,6 +27,7 @@ WindowManager::WindowManager()
 
 void WindowManager::Init()
 {
+  m_containerHwnd = nullptr;
   for (int i = 0; i < MAX_PANES; i++) {
     m_panes[i].tabCount = 0;
     m_panes[i].activeTab = -1;
@@ -233,6 +245,8 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
   if (paneId < 0 || paneId >= MAX_PANES) return false;
   if (knownWindowIndex < 0 || knownWindowIndex >= NUM_KNOWN_WINDOWS) return false;
 
+  m_containerHwnd = containerHwnd;
+
   PaneState& ps = m_panes[paneId];
   if (ps.tabCount >= MAX_TABS_PER_PANE) return false;
 
@@ -283,6 +297,8 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   if (paneId < 0 || paneId >= MAX_PANES) return false;
   if (!targetHwnd || !displayName) return false;
 
+  m_containerHwnd = containerHwnd;
+
   PaneState& ps = m_panes[paneId];
   if (ps.tabCount >= MAX_TABS_PER_PANE) {
     DBG("[MaxPane] CaptureArbitraryWindow: REJECTED pane %d full (tabCount=%d)\n", paneId, ps.tabCount);
@@ -302,6 +318,21 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   tab.isArbitrary = true;
   if (actionCmd && actionCmd[0]) {
     safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
+  }
+
+  // Detect dynamic-title windows (e.g. MIDI Editor "MIDI take: ...")
+  const char* dynPrefix = GetDynamicTitlePrefix(displayName);
+  if (dynPrefix) {
+    tab.dynamicTitle = true;
+    safe_strncpy(tab.searchTitle, dynPrefix, sizeof(tab.searchTitle));
+    // Update display name to actual window title (displayName may be a stale saved name)
+    char actualTitle[256];
+    GetWindowText(targetHwnd, actualTitle, sizeof(actualTitle));
+    if (actualTitle[0]) {
+      safe_strncpy(tab.name, actualTitle, sizeof(tab.name));
+    }
+    DBG("[MaxPane] CaptureArbitraryWindow: dynamic title detected, prefix='%s' actual='%s'\n",
+        dynPrefix, tab.name);
   }
 
   if (DoCapture(tab, targetHwnd, containerHwnd)) {
@@ -631,27 +662,65 @@ void WindowManager::RepositionAll(const SplitTree& tree)
   }
 }
 
-void WindowManager::CheckAlive()
+bool WindowManager::CheckAlive()
 {
+  bool changed = false;
+
   for (int i = 0; i < MAX_PANES; i++) {
     PaneState& ps = m_panes[i];
     for (int t = ps.tabCount - 1; t >= 0; t--) {
       TabEntry& tab = ps.tabs[t];
-      if (!tab.captured) continue;
-      if (!tab.hwnd || !IsWindow(tab.hwnd)) {
-        tab.hwnd = nullptr;
-        tab.captured = false;
-        tab.isArbitrary = false;
-        ShiftTabsLeft(ps.tabs, ps.tabCount, t);
-        if (ps.tabCount == 0) {
-          ps.activeTab = -1;
-        } else {
-          if (t < ps.activeTab) ps.activeTab--;
-          if (ps.activeTab >= ps.tabCount) ps.activeTab = ps.tabCount - 1;
+
+      if (tab.captured) {
+        if (!tab.hwnd || !IsWindow(tab.hwnd)) {
+          if (tab.dynamicTitle) {
+            // Dynamic-title tab lost its HWND (e.g. MIDI Editor on project switch).
+            // Keep the tab entry for recapture on next tick.
+            DBG("[MaxPane] CheckAlive: dynamic tab '%s' lost HWND, waiting for recapture\n", tab.name);
+            tab.hwnd = nullptr;
+            tab.captured = false;
+            changed = true;
+          } else {
+            // Static-title tab — remove as before
+            tab.hwnd = nullptr;
+            tab.captured = false;
+            tab.isArbitrary = false;
+            ShiftTabsLeft(ps.tabs, ps.tabCount, t);
+            if (ps.tabCount == 0) {
+              ps.activeTab = -1;
+            } else {
+              if (t < ps.activeTab) ps.activeTab--;
+              if (ps.activeTab >= ps.tabCount) ps.activeTab = ps.tabCount - 1;
+            }
+            changed = true;
+          }
+        }
+      } else if (tab.dynamicTitle && tab.searchTitle[0]) {
+        // Uncaptured dynamic tab — try to recapture
+        HWND h = FindReaperWindow(tab.searchTitle, m_containerHwnd);
+        if (h && !IsWindowCaptured(h)) {
+          if (DoCapture(tab, h, m_containerHwnd)) {
+            // Update display name to new window title
+            char newTitle[256];
+            GetWindowText(h, newTitle, sizeof(newTitle));
+            if (newTitle[0]) {
+              safe_strncpy(tab.name, newTitle, sizeof(tab.name));
+            }
+            DBG("[MaxPane] CheckAlive: recaptured dynamic tab as '%s' hwnd=%p\n", tab.name, (void*)h);
+            // Show/hide based on activeTab
+            if (t == ps.activeTab) {
+              ShowWindow(h, SW_SHOWNA);
+            } else {
+              ShowWindow(h, SW_HIDE);
+            }
+            changed = true;
+          }
         }
       }
     }
   }
+
+  return changed;
 }
 
 // =========================================================================
