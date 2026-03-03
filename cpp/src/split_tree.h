@@ -52,6 +52,7 @@ public:
   void StartDrag(int branchNodeIndex);
   void Drag(int x, int y, int containerW, int containerH);
   void EndDrag();
+  void ResetRatio(int branchNodeIndex);
   bool IsDragging() const { return m_dragNode >= 0; }
   int DraggingNode() const { return m_dragNode; }
 

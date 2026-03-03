@@ -28,6 +28,7 @@ namespace MenuIds {
   static const int SPLIT_V = 10001;
   static const int MERGE  = 10002;
   static const int DELETE_PANE = 10003;
+  static const int SOLO = 10004;
 }
 
 // Open window entry (populated by BuildPaneContextMenu's enumeration)
@@ -52,4 +53,5 @@ HMENU BuildPaneContextMenu(int paneId,
                            const SplitTree& tree,
                            const WindowManager& winMgr,
                            const FavoritesManager& favMgr,
-                           const WorkspaceManager& wsMgr);
+                           const WorkspaceManager& wsMgr,
+                           bool soloActive = false);

@@ -113,6 +113,7 @@ void MaxPaneContainer::StartTabDrag(int paneId, int tabIndex, int x, int y)
   m_dragState.startPt.y = y;
   m_dragState.highlightPaneId = -1;
   m_dragState.dragStarted = false;
+  m_dragState.insertTabIndex = -1;
   SetCapture(m_hwnd);
 }
 
@@ -129,27 +130,44 @@ void MaxPaneContainer::UpdateTabDrag(int x, int y)
   }
 
   int oldHighlight = m_dragState.highlightPaneId;
-  m_dragState.highlightPaneId = PaneAtPoint(x, y);
+  int oldInsert = m_dragState.insertTabIndex;
+  int targetPane = PaneAtPoint(x, y);
+  m_dragState.insertTabIndex = -1;
 
-  if (m_dragState.highlightPaneId == m_dragState.sourcePaneId) {
+  if (targetPane == m_dragState.sourcePaneId) {
+    // Intra-pane reorder: compute insertion index from mouse position
     m_dragState.highlightPaneId = -1;
-  }
-
-  if (m_dragState.highlightPaneId >= 0) {
-    if (m_winMgr.GetTabCount(m_dragState.highlightPaneId) >= MAX_TABS_PER_PANE) {
-      m_dragState.highlightPaneId = -1;
+    int tabHit = TabHitTest(targetPane, x, y);
+    if (tabHit >= 0 && tabHit != m_dragState.sourceTabIndex) {
+      m_dragState.insertTabIndex = tabHit;
+    }
+  } else {
+    m_dragState.highlightPaneId = targetPane;
+    if (m_dragState.highlightPaneId >= 0) {
+      if (m_winMgr.GetTabCount(m_dragState.highlightPaneId) >= MAX_TABS_PER_PANE) {
+        m_dragState.highlightPaneId = -1;
+      }
     }
   }
 
-  if (m_dragState.highlightPaneId != oldHighlight) {
-    // Targeted: union of old and new highlight pane rects
+  if (m_dragState.highlightPaneId != oldHighlight || m_dragState.insertTabIndex != oldInsert) {
+    // Targeted: union of old and new highlight pane rects + source tab bar
     RECT dirty = {};
     if (oldHighlight >= 0 && m_tree.IsPaneIdUsed(oldHighlight))
       ExpandRect(dirty, m_tree.GetPaneRect(oldHighlight));
     if (m_dragState.highlightPaneId >= 0 && m_tree.IsPaneIdUsed(m_dragState.highlightPaneId))
       ExpandRect(dirty, m_tree.GetPaneRect(m_dragState.highlightPaneId));
-    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, TRUE);
-    else InvalidateRect(m_hwnd, nullptr, TRUE);
+    // Intra-pane: invalidate source pane tab bar for insertion indicator
+    if (m_dragState.insertTabIndex >= 0 || oldInsert >= 0) {
+      int srcPane = m_dragState.sourcePaneId;
+      if (srcPane >= 0 && m_tree.IsPaneIdUsed(srcPane)) {
+        const RECT& pr = m_tree.GetPaneRect(srcPane);
+        RECT tabBar = { pr.left, pr.top, pr.right, pr.top + TAB_BAR_HEIGHT };
+        ExpandRect(dirty, tabBar);
+      }
+    }
+    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
+    else InvalidateRect(m_hwnd, nullptr, FALSE);
   }
 
   short escState = GetAsyncKeyState(VK_ESCAPE);
@@ -171,14 +189,32 @@ void MaxPaneContainer::EndTabDrag(int x, int y)
   // Save positions before clearing state (for targeted invalidation)
   int savedSrc = m_dragState.sourcePaneId;
   int savedHL  = m_dragState.highlightPaneId;
+  int savedInsert = m_dragState.insertTabIndex;
+  int savedSrcTab = m_dragState.sourceTabIndex;
 
   int targetPane = PaneAtPoint(x, y);
+
+  // Intra-pane reorder
+  if (targetPane >= 0 && targetPane == savedSrc && savedInsert >= 0) {
+    m_winMgr.ReorderTab(savedSrc, savedSrcTab, savedInsert);
+    memset(&m_dragState, 0, sizeof(m_dragState));
+    m_dragState.sourcePaneId = -1;
+    m_dragState.highlightPaneId = -1;
+    m_dragState.insertTabIndex = -1;
+    ReleaseCapture();
+    RefreshLayout();
+    SaveState();
+    return;
+  }
+
+  // Cross-pane move
   if (targetPane >= 0 && targetPane != savedSrc) {
     if (m_winMgr.GetTabCount(targetPane) < MAX_TABS_PER_PANE) {
-      m_winMgr.MoveTab(savedSrc, m_dragState.sourceTabIndex, targetPane);
+      m_winMgr.MoveTab(savedSrc, savedSrcTab, targetPane);
       memset(&m_dragState, 0, sizeof(m_dragState));
       m_dragState.sourcePaneId = -1;
       m_dragState.highlightPaneId = -1;
+      m_dragState.insertTabIndex = -1;
       ReleaseCapture();
       RefreshLayout();  // full invalidate inside
       SaveState();
@@ -189,6 +225,7 @@ void MaxPaneContainer::EndTabDrag(int x, int y)
   memset(&m_dragState, 0, sizeof(m_dragState));
   m_dragState.sourcePaneId = -1;
   m_dragState.highlightPaneId = -1;
+  m_dragState.insertTabIndex = -1;
   ReleaseCapture();
 
   // Targeted: source pane tab bar + old highlight pane
@@ -200,8 +237,8 @@ void MaxPaneContainer::EndTabDrag(int x, int y)
   }
   if (savedHL >= 0 && m_tree.IsPaneIdUsed(savedHL))
     ExpandRect(dirty, m_tree.GetPaneRect(savedHL));
-  if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, TRUE);
-  else InvalidateRect(m_hwnd, nullptr, TRUE);
+  if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
+  else InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 void MaxPaneContainer::CancelTabDrag()
@@ -211,6 +248,7 @@ void MaxPaneContainer::CancelTabDrag()
   memset(&m_dragState, 0, sizeof(m_dragState));
   m_dragState.sourcePaneId = -1;
   m_dragState.highlightPaneId = -1;
+  m_dragState.insertTabIndex = -1;
   ReleaseCapture();
 
   // Targeted: source pane tab bar + old highlight pane
@@ -222,8 +260,8 @@ void MaxPaneContainer::CancelTabDrag()
   }
   if (savedHL >= 0 && m_tree.IsPaneIdUsed(savedHL))
     ExpandRect(dirty, m_tree.GetPaneRect(savedHL));
-  if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, TRUE);
-  else InvalidateRect(m_hwnd, nullptr, TRUE);
+  if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
+  else InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 // =========================================================================
@@ -234,7 +272,7 @@ void MaxPaneContainer::OnSize(int cx, int cy)
 {
   m_tree.Recalculate(cx, cy);
   m_winMgr.RepositionAll(m_tree);
-  InvalidateRect(m_hwnd, nullptr, TRUE);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 void MaxPaneContainer::OnMouseMove(int x, int y)
@@ -249,7 +287,7 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
     GetClientRect(m_hwnd, &rc);
     m_tree.Drag(x, y, rc.right - rc.left, rc.bottom - rc.top);
     m_winMgr.RepositionAll(m_tree);
-    InvalidateRect(m_hwnd, nullptr, TRUE);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
     return;
   }
 
@@ -260,7 +298,7 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
     if (m_hoverSplitter >= 0) ExpandRect(dirty, m_tree.GetNode(m_hoverSplitter).splitterRect);
     m_hoverSplitter = hover;
     if (hover >= 0) ExpandRect(dirty, m_tree.GetNode(hover).splitterRect);
-    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, TRUE);
+    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
     if (hover >= 0)
       SetTimer(m_hwnd, TIMER_ID_HOVER, 60, nullptr);
     else
@@ -299,8 +337,8 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
     m_hoverPane = hPane;
     m_hoverTab = hTab;
 
-    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, TRUE);
-    else InvalidateRect(m_hwnd, nullptr, TRUE);
+    if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
+    else InvalidateRect(m_hwnd, nullptr, FALSE);
 
     if (hTab != -1 && m_hoverSplitter < 0)
       SetTimer(m_hwnd, TIMER_ID_HOVER, 60, nullptr);
@@ -320,5 +358,79 @@ void MaxPaneContainer::OnLButtonUp(int x, int y)
     m_tree.EndDrag();
     ReleaseCapture();
     SaveState();
+  }
+}
+
+// =========================================================================
+// Keyboard navigation
+// =========================================================================
+
+void MaxPaneContainer::NextTab()
+{
+  if (!m_tree.IsPaneIdUsed(m_focusedPaneId)) m_focusedPaneId = 0;
+  const PaneState* ps = m_winMgr.GetPaneState(m_focusedPaneId);
+  if (!ps || ps->tabCount < 2) return;
+  int next = (ps->activeTab + 1) % ps->tabCount;
+  m_winMgr.SetActiveTab(m_focusedPaneId, next);
+  m_winMgr.RepositionAll(m_tree);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MaxPaneContainer::PrevTab()
+{
+  if (!m_tree.IsPaneIdUsed(m_focusedPaneId)) m_focusedPaneId = 0;
+  const PaneState* ps = m_winMgr.GetPaneState(m_focusedPaneId);
+  if (!ps || ps->tabCount < 2) return;
+  int prev = (ps->activeTab - 1 + ps->tabCount) % ps->tabCount;
+  m_winMgr.SetActiveTab(m_focusedPaneId, prev);
+  m_winMgr.RepositionAll(m_tree);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MaxPaneContainer::NextPane()
+{
+  int leafCount = m_tree.GetLeafCount();
+  if (leafCount < 2) return;
+  const int* leaves = m_tree.GetLeafList();
+
+  // Find current leaf index
+  int curIdx = 0;
+  for (int i = 0; i < leafCount; i++) {
+    if (m_tree.GetPaneId(leaves[i]) == m_focusedPaneId) {
+      curIdx = i;
+      break;
+    }
+  }
+
+  int nextIdx = (curIdx + 1) % leafCount;
+  m_focusedPaneId = m_tree.GetPaneId(leaves[nextIdx]);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MaxPaneContainer::PrevPane()
+{
+  int leafCount = m_tree.GetLeafCount();
+  if (leafCount < 2) return;
+  const int* leaves = m_tree.GetLeafList();
+
+  int curIdx = 0;
+  for (int i = 0; i < leafCount; i++) {
+    if (m_tree.GetPaneId(leaves[i]) == m_focusedPaneId) {
+      curIdx = i;
+      break;
+    }
+  }
+
+  int prevIdx = (curIdx - 1 + leafCount) % leafCount;
+  m_focusedPaneId = m_tree.GetPaneId(leaves[prevIdx]);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MaxPaneContainer::SoloToggleFocused()
+{
+  if (m_soloActive) {
+    ToggleSolo(m_soloPaneId);
+  } else if (m_tree.IsPaneIdUsed(m_focusedPaneId)) {
+    ToggleSolo(m_focusedPaneId);
   }
 }

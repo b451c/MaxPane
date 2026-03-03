@@ -110,7 +110,7 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
   // Add to Favorites
   {
     const TabEntry* tab = winMgr.GetTab(paneId, tabIndex);
-    bool canAdd = (tab && tab->captured && tab->name);
+    bool canAdd = (tab && tab->captured && tab->name[0]);
     bool alreadyFav = false;
     if (canAdd) {
       for (int i = 0; i < favMgr.GetCount(); i++) {
@@ -203,7 +203,8 @@ HMENU BuildPaneContextMenu(int paneId,
                            const SplitTree& tree,
                            const WindowManager& winMgr,
                            const FavoritesManager& favMgr,
-                           const WorkspaceManager& wsMgr)
+                           const WorkspaceManager& wsMgr,
+                           bool soloActive)
 {
   HMENU menu = CreatePopupMenu();
   if (!menu) return nullptr;
@@ -496,6 +497,21 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.wID = MenuIds::DELETE_PANE;
     mi.dwTypeData = (char*)"Delete Pane";
     mi.fState = canMerge ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Solo Pane (maximize/restore)
+  {
+    const PaneState* ps = winMgr.GetPaneState(paneId);
+    bool hasTabs = (ps && ps->tabCount > 0);
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::SOLO;
+    mi.dwTypeData = soloActive ? (char*)"Exit Solo" : (char*)"Solo Pane";
+    mi.fState = (hasTabs || soloActive) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 

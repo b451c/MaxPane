@@ -162,12 +162,12 @@ void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapsho
       for (int t = 0; t < ps->tabCount; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
         const TabEntry& tab = ps->tabs[t];
-        if (tab.name && tab.name[0]) {
+        if (tab.name[0]) {
           if (tab.isArbitrary) {
             // Get stable action command string
             char cmdStr[128] = "0";
-            if (tab.arbitraryActionCmd[0]) {
-              safe_strncpy(cmdStr, tab.arbitraryActionCmd, sizeof(cmdStr));
+            if (tab.actionCmd[0]) {
+              safe_strncpy(cmdStr, tab.actionCmd, sizeof(cmdStr));
             } else if (tab.toggleAction > 0) {
               GetActionCommandString(tab.toggleAction, cmdStr, sizeof(cmdStr));
             }
@@ -334,7 +334,7 @@ void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManag
     const PaneState* ps = winMgr.GetPaneState(p);
     if (ps && ps->tabCount > 0) {
       DBG("[MaxPane] SaveCurrentState: pane %d has %d tabs, tab0='%s' captured=%d\n",
-          p, ps->tabCount, ps->tabs[0].name ? ps->tabs[0].name : "(null)",
+          p, ps->tabCount, ps->tabs[0].name[0] ? ps->tabs[0].name : "(null)",
           ps->tabs[0].captured);
     }
   }
@@ -496,14 +496,14 @@ void WorkspaceManager::Save(const char* name, const SplitTree& tree, const Windo
       ws.panes[p].tabs[t].isArbitrary = tab.isArbitrary;
       ws.panes[p].tabs[t].toggleAction = tab.toggleAction;
       ws.panes[p].tabs[t].colorIndex = tab.colorIndex;
-      if (tab.isArbitrary && tab.arbitraryActionCmd[0]) {
-        safe_strncpy(ws.panes[p].tabs[t].actionCommand, tab.arbitraryActionCmd,
+      if (tab.isArbitrary && tab.actionCmd[0]) {
+        safe_strncpy(ws.panes[p].tabs[t].actionCommand, tab.actionCmd,
                      sizeof(ws.panes[p].tabs[t].actionCommand));
       } else if (tab.toggleAction > 0) {
         GetActionCommandString(tab.toggleAction, ws.panes[p].tabs[t].actionCommand,
                                sizeof(ws.panes[p].tabs[t].actionCommand));
       }
-      if (tab.name) {
+      if (tab.name[0]) {
         safe_strncpy(ws.panes[p].tabs[t].name, tab.name, sizeof(ws.panes[p].tabs[t].name));
       }
     }

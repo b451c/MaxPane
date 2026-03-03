@@ -254,8 +254,8 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
 
   TabEntry& tab = ps.tabs[ps.tabCount];
   memset(&tab, 0, sizeof(TabEntry));
-  tab.name = def.name;
-  tab.searchTitle = def.searchTitle;
+  safe_strncpy(tab.name, def.name, sizeof(tab.name));
+  safe_strncpy(tab.searchTitle, def.searchTitle, sizeof(tab.searchTitle));
   tab.toggleAction = def.toggleActionId;
   tab.isArbitrary = false;
 
@@ -296,15 +296,12 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   TabEntry& tab = ps.tabs[ps.tabCount];
   memset(&tab, 0, sizeof(TabEntry));
 
-  safe_strncpy(tab.arbitraryName, displayName, sizeof(tab.arbitraryName));
-  safe_strncpy(tab.arbitrarySearchTitle, displayName, sizeof(tab.arbitrarySearchTitle));
-
-  tab.name = tab.arbitraryName;
-  tab.searchTitle = tab.arbitrarySearchTitle;
+  safe_strncpy(tab.name, displayName, sizeof(tab.name));
+  safe_strncpy(tab.searchTitle, displayName, sizeof(tab.searchTitle));
   tab.toggleAction = toggleAction;
   tab.isArbitrary = true;
   if (actionCmd && actionCmd[0]) {
-    safe_strncpy(tab.arbitraryActionCmd, actionCmd, sizeof(tab.arbitraryActionCmd));
+    safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
   }
 
   if (DoCapture(tab, targetHwnd, containerHwnd)) {
@@ -367,7 +364,7 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
   if (!tab.captured) return;
 
   DBG("[MaxPane] DoRelease: '%s' hwnd=%p toggleOff=%d action=%d alive=%d\n",
-      tab.name ? tab.name : "(null)", tab.hwnd, toggleOff, tab.toggleAction,
+      tab.name[0] ? tab.name : "(null)", tab.hwnd, toggleOff, tab.toggleAction,
       (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
 
   if (tab.hwnd && IsWindow(tab.hwnd)) {
@@ -404,12 +401,12 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
 // Tab management
 // =========================================================================
 
-static void FixTabPointers(TabEntry& tab)
+static void ShiftTabsLeft(TabEntry* tabs, int& count, int removeIndex)
 {
-  if (tab.isArbitrary) {
-    tab.name = tab.arbitraryName;
-    tab.searchTitle = tab.arbitrarySearchTitle;
-  }
+  for (int i = removeIndex; i < count - 1; i++)
+    tabs[i] = tabs[i + 1];
+  count--;
+  memset(&tabs[count], 0, sizeof(TabEntry));
 }
 
 void WindowManager::SetActiveTab(int paneId, int tabIndex)
@@ -441,12 +438,7 @@ void WindowManager::CloseTab(int paneId, int tabIndex)
 
   DoRelease(ps.tabs[tabIndex]);
 
-  for (int i = tabIndex; i < ps.tabCount - 1; i++) {
-    ps.tabs[i] = ps.tabs[i + 1];
-    FixTabPointers(ps.tabs[i]);
-  }
-  ps.tabCount--;
-  memset(&ps.tabs[ps.tabCount], 0, sizeof(TabEntry));
+  ShiftTabsLeft(ps.tabs, ps.tabCount, tabIndex);
 
   if (ps.tabCount == 0) {
     ps.activeTab = -1;
@@ -476,7 +468,6 @@ void WindowManager::MoveTab(int srcPane, int srcTab, int dstPane)
   if (dst.tabCount >= MAX_TABS_PER_PANE) return;
 
   dst.tabs[dst.tabCount] = src.tabs[srcTab];
-  FixTabPointers(dst.tabs[dst.tabCount]);
 
   if (dst.activeTab >= 0 && dst.activeTab < dst.tabCount) {
     TabEntry& oldDst = dst.tabs[dst.activeTab];
@@ -492,12 +483,7 @@ void WindowManager::MoveTab(int srcPane, int srcTab, int dstPane)
     ShowWindow(movedTab.hwnd, SW_SHOWNA);
   }
 
-  for (int i = srcTab; i < src.tabCount - 1; i++) {
-    src.tabs[i] = src.tabs[i + 1];
-    FixTabPointers(src.tabs[i]);
-  }
-  src.tabCount--;
-  memset(&src.tabs[src.tabCount], 0, sizeof(TabEntry));
+  ShiftTabsLeft(src.tabs, src.tabCount, srcTab);
 
   if (src.tabCount == 0) {
     src.activeTab = -1;
@@ -508,6 +494,35 @@ void WindowManager::MoveTab(int srcPane, int srcTab, int dstPane)
     if (curSrc.captured && curSrc.hwnd && IsWindow(curSrc.hwnd)) {
       ShowWindow(curSrc.hwnd, SW_SHOWNA);
     }
+  }
+}
+
+void WindowManager::ReorderTab(int paneId, int fromIndex, int toIndex)
+{
+  if (paneId < 0 || paneId >= MAX_PANES) return;
+  PaneState& ps = m_panes[paneId];
+  if (fromIndex < 0 || fromIndex >= ps.tabCount) return;
+  if (toIndex < 0 || toIndex >= ps.tabCount) return;
+  if (fromIndex == toIndex) return;
+
+  TabEntry temp = ps.tabs[fromIndex];
+
+  if (fromIndex < toIndex) {
+    for (int i = fromIndex; i < toIndex; i++)
+      ps.tabs[i] = ps.tabs[i + 1];
+  } else {
+    for (int i = fromIndex; i > toIndex; i--)
+      ps.tabs[i] = ps.tabs[i - 1];
+  }
+  ps.tabs[toIndex] = temp;
+
+  // Adjust activeTab to follow the moved tab
+  if (ps.activeTab == fromIndex) {
+    ps.activeTab = toIndex;
+  } else if (fromIndex < toIndex) {
+    if (ps.activeTab > fromIndex && ps.activeTab <= toIndex) ps.activeTab--;
+  } else {
+    if (ps.activeTab >= toIndex && ps.activeTab < fromIndex) ps.activeTab++;
   }
 }
 
@@ -611,12 +626,7 @@ void WindowManager::CheckAlive()
         tab.hwnd = nullptr;
         tab.captured = false;
         tab.isArbitrary = false;
-        for (int j = t; j < ps.tabCount - 1; j++) {
-          ps.tabs[j] = ps.tabs[j + 1];
-          FixTabPointers(ps.tabs[j]);
-        }
-        ps.tabCount--;
-        memset(&ps.tabs[ps.tabCount], 0, sizeof(TabEntry));
+        ShiftTabsLeft(ps.tabs, ps.tabCount, t);
         if (ps.tabCount == 0) {
           ps.activeTab = -1;
         } else {

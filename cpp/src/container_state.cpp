@@ -18,6 +18,9 @@
 
 void MaxPaneContainer::SaveState()
 {
+  // Don't persist the temporary solo layout — it would overwrite the real tree
+  if (m_soloActive) return;
+
   m_wsMgr->SaveCurrentState(m_tree, m_winMgr);  // global (default + backward compat)
   // Per-project state is now saved via project_config_extension_t (SaveExtensionConfig)
   // which REAPER calls automatically when saving the RPP file.
@@ -215,6 +218,9 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
 {
   if (!name || !name[0]) return;
 
+  // Exit solo before loading workspace
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+
   const WorkspaceEntry* ws = m_wsMgr->Find(name);
   if (!ws) return;
 
@@ -322,7 +328,7 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
   ApplyPaneState(ws->panes, MAX_PANES, false);
   m_winMgr.RepositionAll(m_tree);
 
-  InvalidateRect(m_hwnd, nullptr, TRUE);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
   SaveState();
 }
 

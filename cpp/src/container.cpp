@@ -112,7 +112,7 @@ void MaxPaneContainer::Shutdown()
       for (int t = 0; t < ps->tabCount; t++) {
         if (ps->tabs[t].captured) {
           DBG("[MaxPane] Shutdown: releasing pane %d tab %d '%s' action=%d toggleState=%d\n",
-              p, t, ps->tabs[t].name ? ps->tabs[t].name : "(null)",
+              p, t, ps->tabs[t].name[0] ? ps->tabs[t].name : "(null)",
               ps->tabs[t].toggleAction,
               (g_GetToggleCommandState && ps->tabs[t].toggleAction > 0)
                 ? g_GetToggleCommandState(ps->tabs[t].toggleAction) : -1);
@@ -168,7 +168,7 @@ void MaxPaneContainer::RefreshLayout()
   GetClientRect(m_hwnd, &rc);
   m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
   m_winMgr.RepositionAll(m_tree);
-  InvalidateRect(m_hwnd, nullptr, TRUE);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 // =========================================================================
@@ -195,6 +195,9 @@ void MaxPaneContainer::ApplyPreset(LayoutPreset preset)
 {
   if (preset < 0 || preset >= PRESET_COUNT) return;
 
+  // Exit solo before applying preset
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+
   // Release all windows before rebuilding tree
   m_winMgr.ReleaseAll();
 
@@ -206,6 +209,9 @@ void MaxPaneContainer::ApplyPreset(LayoutPreset preset)
 
 void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
 {
+  // Exit solo before splitting
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+
   int nodeIdx = m_tree.NodeForPane(paneId);
   if (nodeIdx < 0) return;
   if (m_tree.GetLeafCount() >= MAX_LEAVES) return;
@@ -217,6 +223,9 @@ void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
 
 void MaxPaneContainer::MergePane(int paneId)
 {
+  // Exit solo before merge
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+
   int nodeIdx = m_tree.NodeForPane(paneId);
   if (nodeIdx < 0) return;
   if (!m_tree.CanMerge(nodeIdx)) return;
@@ -227,6 +236,92 @@ void MaxPaneContainer::MergePane(int paneId)
   m_tree.MergeNode(nodeIdx);
   RefreshLayout();
   SaveState();
+}
+
+void MaxPaneContainer::ToggleSolo(int paneId)
+{
+  if (m_soloActive) {
+    // --- Exit solo ---
+    DBG("[MaxPane] ToggleSolo: exiting solo (pane %d)\n", m_soloPaneId);
+
+    // Restore tree from snapshot
+    if (!m_tree.LoadSnapshot(m_soloSnapshot, m_soloSnapshotNodeCount)) {
+      DBG("[MaxPane] ToggleSolo: snapshot restore failed, resetting\n");
+      m_tree.Reset();
+    }
+
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+
+    // Show tabs that were visible before solo
+    for (int p = 0; p < MAX_PANES; p++) {
+      const PaneState* ps = m_winMgr.GetPaneState(p);
+      if (!ps || ps->tabCount == 0) continue;
+      if (ps->activeTab >= 0 && ps->activeTab < ps->tabCount) {
+        const TabEntry& tab = ps->tabs[ps->activeTab];
+        if (tab.captured && tab.hwnd && IsWindow(tab.hwnd)) {
+          ShowWindow(tab.hwnd, SW_SHOWNA);
+        }
+      }
+    }
+
+    m_soloActive = false;
+    m_soloPaneId = -1;
+
+    m_winMgr.RepositionAll(m_tree);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+  } else {
+    // --- Enter solo ---
+    if (paneId < 0 || !m_tree.IsPaneIdUsed(paneId)) return;
+
+    DBG("[MaxPane] ToggleSolo: entering solo (pane %d)\n", paneId);
+
+    // Save tree snapshot
+    m_tree.SaveSnapshot(m_soloSnapshot, m_soloSnapshotNodeCount);
+
+    // Hide all windows in other panes
+    for (int p = 0; p < MAX_PANES; p++) {
+      const PaneState* ps = m_winMgr.GetPaneState(p);
+      if (!ps || ps->tabCount == 0) continue;
+      if (p == paneId) continue;
+      for (int t = 0; t < ps->tabCount; t++) {
+        const TabEntry& tab = ps->tabs[t];
+        if (tab.captured && tab.hwnd && IsWindow(tab.hwnd)) {
+          ShowWindow(tab.hwnd, SW_HIDE);
+        }
+      }
+    }
+
+    // Reset tree to single leaf with solo pane
+    m_tree.Reset();
+    // The reset gives paneId 0 — we need to make it use our paneId
+    // Instead: just recalculate to give all space to a single node
+    // We'll modify the root node to point to the solo pane
+    // Actually, simplest: save root paneId 0 and just remap in RepositionAll
+    // Better approach: use LoadSnapshot with a minimal single-leaf tree
+    {
+      NodeSnapshot soloSnap[1];
+      memset(soloSnap, 0, sizeof(soloSnap));
+      soloSnap[0].type = NODE_LEAF;
+      soloSnap[0].paneId = paneId;
+      soloSnap[0].parent = -1;
+      soloSnap[0].childA = -1;
+      soloSnap[0].childB = -1;
+      soloSnap[0].ratio = 0.5f;
+      m_tree.LoadSnapshot(soloSnap, 1);
+    }
+
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+
+    m_soloActive = true;
+    m_soloPaneId = paneId;
+
+    m_winMgr.RepositionAll(m_tree);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+  }
 }
 
 // =========================================================================
@@ -269,7 +364,7 @@ void MaxPaneContainer::OnTimer()
         m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
         ApplyPaneState(panes, MAX_PANES, true);
         m_winMgr.RepositionAll(m_tree);
-        InvalidateRect(m_hwnd, nullptr, TRUE);
+        InvalidateRect(m_hwnd, nullptr, FALSE);
 
         DBG("[MaxPane] OnTimer: deferred RPP state applied (nodes=%d)\n", nodeCount);
       }
@@ -308,12 +403,12 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
   if (m_captureMode.active) {
     KillTimer(m_hwnd, TIMER_ID_CAPTURE);
     m_captureMode.active = false;
-    InvalidateRect(m_hwnd, nullptr, TRUE);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
     return;
   }
 
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -327,7 +422,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
 void MaxPaneContainer::OnPaneMenuButtonClick(int paneId, int x, int y)
 {
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -354,16 +449,16 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     m_winMgr.SetTabColor(paneId, tabIdx, newColor);
     // Targeted: only invalidate the changed tab's rect
     RECT tr = GetTabRect(paneId, tabIdx);
-    if (tr.right > tr.left) InvalidateRect(m_hwnd, &tr, TRUE);
-    else InvalidateRect(m_hwnd, nullptr, TRUE);
+    if (tr.right > tr.left) InvalidateRect(m_hwnd, &tr, FALSE);
+    else InvalidateRect(m_hwnd, nullptr, FALSE);
     SaveState();
   } else if (cmd == MenuIds::FAV_ADD) {
     const TabEntry* tab = m_winMgr.GetTab(paneId, tabIdx);
-    if (tab && tab->captured && tab->name) {
+    if (tab && tab->captured && tab->name[0]) {
       char actionCmd[128] = "";
       if (tab->isArbitrary) {
-        if (tab->arbitraryActionCmd[0]) {
-          safe_strncpy(actionCmd, tab->arbitraryActionCmd, sizeof(actionCmd));
+        if (tab->actionCmd[0]) {
+          safe_strncpy(actionCmd, tab->actionCmd, sizeof(actionCmd));
         } else if (g_GetUserInputs) {
           char inputBuf[128] = "";
           if (g_GetUserInputs("Add to Favorites", 1,
@@ -378,7 +473,7 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
         GetActionCommandString(tab->toggleAction, actionCmd, sizeof(actionCmd));
       }
       m_favMgr->Add(tab->name,
-                     tab->searchTitle ? tab->searchTitle : tab->name,
+                     tab->searchTitle[0] ? tab->searchTitle : tab->name,
                      actionCmd,
                      !tab->isArbitrary);
     }
@@ -420,6 +515,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     int idx = cmd - MenuIds::OPEN_WINDOWS_BASE;
     if (idx >= 0 && idx < GetOpenWindowCount()) {
       const OpenWindowEntry& owe = GetOpenWindow(idx);
+      if (!owe.hwnd || !IsWindow(owe.hwnd)) return;
       HWND targetHwnd = owe.hwnd;
       char title[256];
       safe_strncpy(title, owe.title, sizeof(title));
@@ -454,7 +550,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
   if (cmd == MenuIds::CAPTURE_BY_CLICK) {
     m_captureMode.active = true;
     m_captureMode.targetPaneId = paneId;
-    InvalidateRect(m_hwnd, nullptr, TRUE);
+    InvalidateRect(m_hwnd, nullptr, FALSE);
     StartCaptureTimer();
     return;
   }
@@ -480,6 +576,12 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
   // Delete Pane (release all tabs + merge)
   if (cmd == MenuIds::DELETE_PANE) {
     MergePane(paneId);  // MergePane already calls ReleaseWindow which releases all tabs
+    return;
+  }
+
+  // Solo Pane (maximize/restore)
+  if (cmd == MenuIds::SOLO) {
+    ToggleSolo(m_soloActive ? m_soloPaneId : paneId);
     return;
   }
 
@@ -688,6 +790,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
             self->OnPaneMenuButtonClick(paneId, x, y);
             return 0;
           } else if (tabIdx >= 0) {
+            self->m_focusedPaneId = paneId;
             if (self->IsOnTabCloseButton(paneId, tabIdx, x, y)) {
               self->m_winMgr.CloseTab(paneId, tabIdx);
               self->RefreshLayout();
@@ -763,6 +866,14 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       if (self) {
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
+        int splitter = self->m_tree.HitTestSplitter(x, y);
+        if (splitter >= 0) {
+          self->m_tree.ResetRatio(splitter);
+          self->m_winMgr.RepositionAll(self->m_tree);
+          InvalidateRect(hwnd, nullptr, FALSE);
+          self->SaveState();
+          return 0;
+        }
         self->OnContextMenu(x, y);
       }
       return 0;
@@ -825,8 +936,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
             ExpandRect(dirty, btnR);
           }
 
-          if (dirty.right > dirty.left) InvalidateRect(hwnd, &dirty, TRUE);
-          else InvalidateRect(hwnd, nullptr, TRUE);
+          if (dirty.right > dirty.left) InvalidateRect(hwnd, &dirty, FALSE);
+          else InvalidateRect(hwnd, nullptr, FALSE);
         }
       }
       else if (self && wParam == TIMER_ID_CAPTURE) {
@@ -876,7 +987,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
               self->m_captureMode.active = false;
               self->StopCaptureTimerIfIdle();
-              InvalidateRect(self->m_hwnd, nullptr, TRUE);
+              InvalidateRect(self->m_hwnd, nullptr, FALSE);
             }
           }
 
@@ -884,7 +995,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           if (escState & 0x8000) {
             self->m_captureMode.active = false;
             self->StopCaptureTimerIfIdle();
-            InvalidateRect(self->m_hwnd, nullptr, TRUE);
+            InvalidateRect(self->m_hwnd, nullptr, FALSE);
           }
         }
         // Handle async capture queue

@@ -3,17 +3,15 @@
 #include "split_tree.h"
 
 struct TabEntry {
-  const char* name;
-  const char* searchTitle;
+  char name[256];                // always owned (display name)
+  char searchTitle[256];         // always owned (window search title)
   int toggleAction;
   HWND hwnd;
   HWND originalParent;
   bool captured;
   bool isArbitrary;
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
-  char arbitraryName[256];
-  char arbitrarySearchTitle[256];
-  char arbitraryActionCmd[128];   // stable command string ("_RSxxx" or "12345")
+  char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
 };
 
 struct PaneState {
@@ -36,6 +34,7 @@ public:
   void SetActiveTab(int paneId, int tabIndex);
   void CloseTab(int paneId, int tabIndex);
   void MoveTab(int srcPane, int srcTab, int dstPane);
+  void ReorderTab(int paneId, int fromIndex, int toIndex);
   void SetTabColor(int paneId, int tabIndex, int colorIndex);
 
   // Release all tabs in a pane

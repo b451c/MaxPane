@@ -33,6 +33,11 @@
 
 static std::unique_ptr<MaxPaneContainer> g_container;
 static int g_cmdId = 0;
+static int g_cmdNextTab = 0;
+static int g_cmdPrevTab = 0;
+static int g_cmdNextPane = 0;
+static int g_cmdPrevPane = 0;
+static int g_cmdSoloToggle = 0;
 static bool g_startupComplete = false;
 extern "C" bool g_atexitSaved = false;  // prevent Shutdown from overwriting atexit state
 
@@ -144,6 +149,16 @@ static bool hookCommandProc(int command, int flag)
     }
     return true;
   }
+
+  // Navigation actions — only if container is visible
+  if (g_container && g_container->IsVisible()) {
+    if (command == g_cmdNextTab)    { g_container->NextTab();    return true; }
+    if (command == g_cmdPrevTab)    { g_container->PrevTab();    return true; }
+    if (command == g_cmdNextPane)   { g_container->NextPane();   return true; }
+    if (command == g_cmdPrevPane)   { g_container->PrevPane();   return true; }
+    if (command == g_cmdSoloToggle) { g_container->SoloToggleFocused(); return true; }
+  }
+
   return false;
 }
 
@@ -200,9 +215,36 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_cmdId = rec->Register("command_id", (void*)"MaxPane_OpenContainer");
   if (!g_cmdId) return 0;
 
+  g_cmdNextTab    = rec->Register("command_id", (void*)"MaxPane_NextTab");
+  g_cmdPrevTab    = rec->Register("command_id", (void*)"MaxPane_PrevTab");
+  g_cmdNextPane   = rec->Register("command_id", (void*)"MaxPane_NextPane");
+  g_cmdPrevPane   = rec->Register("command_id", (void*)"MaxPane_PrevPane");
+  g_cmdSoloToggle = rec->Register("command_id", (void*)"MaxPane_SoloToggle");
+
   static gaccel_register_t accel = {{0, 0, 0}, "MaxPane: Open Container"};
   accel.accel.cmd = static_cast<unsigned short>(g_cmdId);
   rec->Register("gaccel", &accel);
+
+  static gaccel_register_t accelNextTab = {{0, 0, 0}, "MaxPane: Next Tab"};
+  accelNextTab.accel.cmd = static_cast<unsigned short>(g_cmdNextTab);
+  rec->Register("gaccel", &accelNextTab);
+
+  static gaccel_register_t accelPrevTab = {{0, 0, 0}, "MaxPane: Previous Tab"};
+  accelPrevTab.accel.cmd = static_cast<unsigned short>(g_cmdPrevTab);
+  rec->Register("gaccel", &accelPrevTab);
+
+  static gaccel_register_t accelNextPane = {{0, 0, 0}, "MaxPane: Next Pane"};
+  accelNextPane.accel.cmd = static_cast<unsigned short>(g_cmdNextPane);
+  rec->Register("gaccel", &accelNextPane);
+
+  static gaccel_register_t accelPrevPane = {{0, 0, 0}, "MaxPane: Previous Pane"};
+  accelPrevPane.accel.cmd = static_cast<unsigned short>(g_cmdPrevPane);
+  rec->Register("gaccel", &accelPrevPane);
+
+  static gaccel_register_t accelSolo = {{0, 0, 0}, "MaxPane: Solo Toggle"};
+  accelSolo.accel.cmd = static_cast<unsigned short>(g_cmdSoloToggle);
+  rec->Register("gaccel", &accelSolo);
+
   rec->Register("hookcommand", (void*)hookCommandProc);
   rec->Register("toggleaction", (void*)toggleActionCallback);
 

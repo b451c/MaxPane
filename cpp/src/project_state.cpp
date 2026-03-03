@@ -154,11 +154,11 @@ void OnSaveExtensionConfig(ProjectStateContext* ctx, bool isUndo,
       for (int t = 0; t < ps->tabCount; t++) {
         const TabEntry& tab = ps->tabs[t];
         snprintf(key, sizeof(key), "pane_%d_tab_%d", p, t);
-        if (tab.name && tab.name[0]) {
+        if (tab.name[0]) {
           if (tab.isArbitrary) {
             char cmdStr[128] = "0";
-            if (tab.arbitraryActionCmd[0]) {
-              safe_strncpy(cmdStr, tab.arbitraryActionCmd, sizeof(cmdStr));
+            if (tab.actionCmd[0]) {
+              safe_strncpy(cmdStr, tab.actionCmd, sizeof(cmdStr));
             } else if (tab.toggleAction > 0) {
               GetActionCommandString(tab.toggleAction, cmdStr, sizeof(cmdStr));
             }

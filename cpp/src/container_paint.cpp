@@ -96,7 +96,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     }
   }
 
-  // Drag highlight
+  // Drag highlight (cross-pane)
   if (m_dragState.active && m_dragState.dragStarted && m_dragState.highlightPaneId >= 0) {
     const RECT& r = m_tree.GetPaneRect(m_dragState.highlightPaneId);
     HPEN highlightPen = CreatePen(PS_SOLID, 3, COLOR_DRAG_HIGHLIGHT);
@@ -106,6 +106,26 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     SelectObject(hdc, oldPen);
     SelectObject(hdc, oldBrush);
     DeleteObject(highlightPen);
+  }
+
+  // Intra-pane reorder insertion indicator (vertical line)
+  if (m_dragState.active && m_dragState.dragStarted && m_dragState.insertTabIndex >= 0) {
+    int srcPane = m_dragState.sourcePaneId;
+    if (srcPane >= 0 && m_tree.IsPaneIdUsed(srcPane)) {
+      RECT insertTabRect = GetTabRect(srcPane, m_dragState.insertTabIndex);
+      int lineX = insertTabRect.left;
+      // Draw insertion line at the left edge of the target tab
+      // If dragging rightward past source, draw at right edge instead
+      if (m_dragState.insertTabIndex > m_dragState.sourceTabIndex) {
+        lineX = insertTabRect.right;
+      }
+      HPEN insertPen = CreatePen(PS_SOLID, 2, COLOR_DRAG_HIGHLIGHT);
+      HPEN oldPen = (HPEN)SelectObject(hdc, insertPen);
+      MoveToEx(hdc, lineX, insertTabRect.top + 2, nullptr);
+      LineTo(hdc, lineX, insertTabRect.bottom - 2);
+      SelectObject(hdc, oldPen);
+      DeleteObject(insertPen);
+    }
   }
 }
 
@@ -166,7 +186,7 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
     RECT textRect = tabRect;
     textRect.left += TAB_TEXT_LEFT_PAD;
     textRect.right -= TAB_TEXT_RIGHT_MARGIN;
-    const char* tabName = ps->tabs[t].name ? ps->tabs[t].name : "?";
+    const char* tabName = ps->tabs[t].name[0] ? ps->tabs[t].name : "?";
     DrawText(hdc, tabName, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
     SetTextColor(hdc, COLOR_TAB_CLOSE_TEXT);

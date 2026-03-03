@@ -394,6 +394,15 @@ void SplitTree::EndDrag()
   m_dragNode = -1;
 }
 
+void SplitTree::ResetRatio(int branchNodeIndex)
+{
+  if (branchNodeIndex < 0 || branchNodeIndex >= MAX_TREE_NODES) return;
+  if (m_nodes[branchNodeIndex].type != NODE_BRANCH) return;
+  m_nodes[branchNodeIndex].ratio = 0.5f;
+  if (m_containerW > 0 && m_containerH > 0)
+    Recalculate(m_containerW, m_containerH);
+}
+
 // =========================================================================
 // Preset construction
 // =========================================================================

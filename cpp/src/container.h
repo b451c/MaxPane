@@ -9,7 +9,7 @@ struct CaptureMode {
   int targetPaneId;
 };
 
-// Drag state: dragging a tab between panes
+// Drag state: dragging a tab between panes or reordering within a pane
 struct DragState {
   bool active;
   int sourcePaneId;
@@ -17,6 +17,7 @@ struct DragState {
   POINT startPt;
   int highlightPaneId;
   bool dragStarted;
+  int insertTabIndex;   // intra-pane reorder: insertion position, -1 = none
 };
 
 // Expand dirty rect to include src (in-place union, handles empty dst/src)
@@ -49,6 +50,8 @@ public:
   void ApplyPreset(LayoutPreset preset);
   void SplitPane(int paneId, SplitterOrientation orient);
   void MergePane(int paneId);
+  void ToggleSolo(int paneId);
+  bool IsSoloActive() const { return m_soloActive; }
   int NodeForPane(int paneId) const { return m_tree.NodeForPane(paneId); }
 
   void SaveState();
@@ -64,6 +67,13 @@ public:
   SplitTree& GetTree() { return m_tree; }
   WindowManager& GetWinMgr() { return m_winMgr; }
 
+  // Keyboard navigation
+  void NextTab();
+  void PrevTab();
+  void NextPane();
+  void PrevPane();
+  void SoloToggleFocused();
+
 private:
   HWND m_hwnd;
   SplitTree m_tree;
@@ -78,6 +88,15 @@ private:
   int m_hoverPane;          // pane id of tab under mouse, -1 when none
   int m_hoverTab;           // tab index under mouse, -1 when none; -2 = menu button
   bool m_pendingRppLoad;     // true if waiting for RPP state to become available
+
+  // Solo (maximize) pane state
+  bool m_soloActive = false;
+  int m_soloPaneId = -1;
+  NodeSnapshot m_soloSnapshot[MAX_TREE_NODES];
+  int m_soloSnapshotNodeCount = 0;
+  bool m_soloTabVisibility[MAX_PANES][MAX_TABS_PER_PANE];  // which tabs were visible before solo
+
+  int m_focusedPaneId = 0;  // pane with keyboard focus (for Next/Prev Tab/Pane)
 
   // GDI object cache (created once in constructor, destroyed in destructor)
   HBRUSH m_brushTabBarBg = nullptr;
