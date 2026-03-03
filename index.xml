@@ -26,7 +26,7 @@
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Zero dependencies - pure C++ extension\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER 7.0+\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS (arm64, x86_64), Windows (x64), Linux (x86_64)\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS (arm64, x86_64)\sa180\par}
 {\pard \qc \f0 \sa180 \li0 \fi0 \emdash\emdash\emdash\emdash\emdash\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 MIT License | https://github.com/b451c/MaxPane\par}
 }
@@ -44,72 +44,6 @@
 ]]></changelog>
         <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.3.0/reaper_maxpane-arm64.dylib</source>
         <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.3.0/reaper_maxpane-x86_64.dylib</source>
-        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.3.0/reaper_maxpane-x64.dll</source>
-        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.3.0/reaper_maxpane-x86_64.so</source>
-      </version>
-
-      <version name="1.2.0" author="b451c" time="2026-03-02T00:00:00Z">
-        <changelog><![CDATA[Feature release
-
-- Pane menu button (▼) at the right edge of every tab bar
-- CalcTabBarLayout shared helper for tab geometry
-- Targeted InvalidateRect for hover/drag operations
-- Fix TabHitTest x-bounds regression
-- Removed scroll arrows for tab overflow
-]]></changelog>
-        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.2.0/reaper_maxpane-arm64.dylib</source>
-        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.2.0/reaper_maxpane-x86_64.dylib</source>
-        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.2.0/reaper_maxpane-x64.dll</source>
-        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.2.0/reaper_maxpane-x86_64.so</source>
-      </version>
-
-      <version name="1.1.0" author="b451c" time="2026-03-02T00:00:00Z">
-        <changelog><![CDATA[Feature release
-
-- Splitter hover highlights (white bar on mouseover)
-- Tab hover highlights (lighten effect on mouseover)
-- Per-project state persistence via RPP files
-- Fix workspace switch rendering artifacts
-- Fix frameless floating windows when closing tabs
-- Fix windows reappearing floating after restart
-- Improved shutdown lifecycle and quit interception
-- Simplified to global docker model
-]]></changelog>
-        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.1.0/reaper_maxpane-arm64.dylib</source>
-        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.1.0/reaper_maxpane-x86_64.dylib</source>
-        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.1.0/reaper_maxpane-x64.dll</source>
-        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.1.0/reaper_maxpane-x86_64.so</source>
-      </version>
-
-      <version name="1.0.1" author="b451c" time="2026-03-01T00:00:00Z">
-        <changelog><![CDATA[Bugfix release
-
-- Fix startup deadlock when REAPER restores docked MaxPane during project load
-- Code quality improvements: safe_strncpy, unique_ptr, named constants
-- Debug logging now conditional on Debug build only
-]]></changelog>
-        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.0.1/reaper_maxpane-arm64.dylib</source>
-        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.0.1/reaper_maxpane-x86_64.dylib</source>
-        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.0.1/reaper_maxpane-x64.dll</source>
-        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.0.1/reaper_maxpane-x86_64.so</source>
-      </version>
-
-      <version name="1.0.0" author="b451c" time="2025-03-01T00:00:00Z">
-        <changelog><![CDATA[Initial release
-
-- Native C++ REAPER extension (no script dependencies)
-- Binary split tree layout engine with up to 16 panes
-- Tabbed window management with drag-and-drop
-- 14 known REAPER windows + arbitrary window capture
-- Dock frame detection for ReaImGui windows
-- Named workspaces, favorites, tab colors
-- 5 built-in layout presets
-- Auto-open on startup, full state persistence
-]]></changelog>
-        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.0.0/reaper_maxpane-arm64.dylib</source>
-        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.0.0/reaper_maxpane-x86_64.dylib</source>
-        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.0.0/reaper_maxpane-x64.dll</source>
-        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.0.0/reaper_maxpane-x86_64.so</source>
       </version>
     </reapack>
   </category>
