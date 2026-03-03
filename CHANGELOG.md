@@ -4,6 +4,32 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.0] - 2026-03-03
+
+### Added
+- **Solo/maximize pane** — Temporarily expand any pane to fill the entire container. Toggle via context menu (Solo Pane / Exit Solo). Full tree snapshot is saved and restored when exiting solo mode.
+- **Tab reorder within pane** — Drag tabs left/right within the same pane to rearrange their order. Visual insertion indicator shows the drop position.
+- **Splitter double-click reset** — Double-click any splitter bar to reset its ratio to 50/50.
+- **Keyboard shortcuts via REAPER actions** — Five new actions registered in REAPER's Actions dialog, bindable to any key:
+  - MaxPane: Next Tab
+  - MaxPane: Previous Tab
+  - MaxPane: Next Pane
+  - MaxPane: Previous Pane
+  - MaxPane: Solo Toggle
+
+### Changed
+- **TabEntry owned storage** — All string fields (`name`, `searchTitle`, `actionCmd`) are now owned `char[]` arrays instead of `const char*` pointers. Eliminates dangling pointer risk after tab moves/copies and removes the `FixTabPointers()` workaround.
+- **ShiftTabsLeft helper** — Extracted repeated tab-shift-and-clear pattern into a single function, used by CloseTab, MoveTab, and CheckAlive.
+- **InvalidateRect(…, FALSE)** everywhere — Semantically correct now that `WM_ERASEBKGND` is handled; avoids unnecessary erase flicker.
+
+### Fixed
+- **Open Windows menu validation** — Added `IsWindow()` check before using HWND from the open windows list, preventing crashes from stale window handles.
+
+### Note
+- Windows and Linux builds are included but have **not been tested**. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+
+---
+
 ## [1.4.0] - 2026-03-03
 
 ### Added

@@ -35,6 +35,28 @@
 ]]></description>
       </metadata>
 
+      <version name="1.5.0" author="b451c" time="2026-03-03T00:00:00Z">
+        <changelog><![CDATA[Solo pane, tab reorder, keyboard actions, design refactors
+
+New features:
+- Solo/maximize pane: expand any pane to fill the container (context menu)
+- Tab reorder within pane: drag tabs left/right to rearrange
+- Splitter double-click resets ratio to 50/50
+- REAPER actions: Next/Prev Tab, Next/Prev Pane, Solo Toggle (bind in Actions dialog)
+
+Improvements:
+- TabEntry owned storage (eliminates dangling pointer risk)
+- IsWindow validation for open windows menu
+- InvalidateRect FALSE everywhere (correct with WM_ERASEBKGND)
+
+Note: Windows and Linux builds are untested. Please report issues on GitHub.
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.0/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.5.0/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.5.0/reaper_maxpane-x86_64.so</source>
+      </version>
+
       <version name="1.4.0" author="b451c" time="2026-03-03T00:00:00Z">
         <changelog><![CDATA[Cross-platform release
 

@@ -22,6 +22,10 @@
 - **Favorites** — Pin frequently used windows for quick access across sessions.
 - **Tab colors** — Color-code tabs with 8 palette colors for visual organization.
 - **Layout presets** — Quick-start with 5 built-in layouts: Two Columns, Left + Right Split, Three Columns, 2x2 Grid, Top + Bottom Split.
+- **Solo/maximize pane** — Temporarily expand any pane to fill the entire container. Toggle via context menu or keyboard shortcut. Layout is fully restored when exiting solo.
+- **Tab reorder** — Drag tabs left/right within the same pane to rearrange their order.
+- **Keyboard shortcuts** — Five REAPER actions (Next/Prev Tab, Next/Prev Pane, Solo Toggle) bindable via Actions dialog.
+- **Splitter double-click** — Double-click any splitter to reset it to 50/50.
 - **Hover highlights** — Visual feedback on splitter bars and tabs when hovered.
 - **Per-project state** — Layout is saved inside each .RPP project file, so different projects can have different MaxPane configurations.
 - **Persistent state** — Layout, captured windows, favorites, and workspaces survive REAPER restarts.
@@ -75,10 +79,12 @@ See [Building](#building) below.
 2. **Right-click** any pane header, or click the **▼ button** at the right of any tab bar, to open the pane context menu.
 3. **Choose a window** from the Known Windows list, or browse Open Windows for any visible REAPER window.
 4. **Split panes** via the context menu (Split Left/Right or Split Top/Bottom).
-5. **Drag tabs** between panes to rearrange.
-6. **Right-click a tab** to close it, move it, color it, or add it to Favorites.
-7. **Save a workspace** via right-click > Workspaces > Save Current.
-8. **Drag splitter bars** to resize panes.
+5. **Drag tabs** between panes to rearrange, or within the same pane to reorder.
+6. **Solo a pane** via right-click > Solo Pane to temporarily maximize it. Right-click > Exit Solo to restore.
+7. **Right-click a tab** to close it, move it, color it, or add it to Favorites.
+8. **Save a workspace** via right-click > Workspaces > Save Current.
+9. **Drag splitter bars** to resize panes. **Double-click** a splitter to reset to 50/50.
+10. **Bind keyboard shortcuts** — In REAPER's Actions dialog, search for "MaxPane" to find Next/Prev Tab, Next/Prev Pane, and Solo Toggle.
 
 ## Building
 

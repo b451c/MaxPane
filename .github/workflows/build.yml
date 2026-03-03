@@ -117,6 +117,8 @@ jobs:
 
             Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
 
+            > **Note:** Windows and Linux builds are included but have **not been tested**. macOS (arm64) is the primary development platform. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+
             See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
 
             ---
