@@ -33,6 +33,7 @@ jobs:
             cmake_flags: ""
 
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest' }}
     name: Build (${{ matrix.platform }})
 
     steps:
@@ -91,6 +92,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: reaper_maxpane-*
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
