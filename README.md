@@ -1,5 +1,9 @@
 # MaxPane
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Latest Release](https://img.shields.io/github/v/release/b451c/MaxPane)](https://github.com/b451c/MaxPane/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+
 **Nested docker layouts for REAPER** — a native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.
 
 ![MaxPane](docs/images/maxpane-hero.png)
@@ -40,7 +44,7 @@
 1. In REAPER, go to **Extensions > ReaPack > Import repositories...**
 2. Paste this URL:
    ```
-   https://github.com/b4s1c/MaxPane/raw/main/index.xml
+   https://github.com/b451c/MaxPane/raw/main/index.xml
    ```
 3. Go to **Extensions > ReaPack > Browse packages**, search for **MaxPane**.
 4. Right-click > **Install**, then restart REAPER.
@@ -174,19 +178,19 @@ Place images in `docs/images/` and update the image references at the top of thi
 
 ## Contributing
 
-Contributions are welcome! Please:
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/my-feature`)
-3. Make your changes and ensure the build compiles with zero warnings
-4. Commit with a descriptive message
-5. Push and open a Pull Request
+## Support
 
-See [open issues](../../issues) for ideas.
+If you find MaxPane useful, consider supporting its development:
+
+- [Ko-fi](https://ko-fi.com/quickmd)
+- [Buy Me a Coffee](https://buymeacoffee.com/bsroczynskh)
+- [PayPal](https://paypal.me/b451c)
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2025–2026 b4s1c
+[MIT](LICENSE) — Copyright (c) 2025–2026 b451c
 
 ## Links
 
@@ -194,6 +198,3 @@ See [open issues](../../issues) for ideas.
 - **ReaPack** — https://reapack.com
 - **REAPER SDK** — https://github.com/justinfrankel/reaper-sdk
 - **WDL/SWELL** — https://github.com/cockos/WDL
-
-<!-- TODO: Add forum thread link after posting -->
-<!-- - **Forum thread** — https://forum.cockos.com/showthread.php?t=XXXXX -->
