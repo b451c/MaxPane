@@ -4,6 +4,15 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.2] - 2026-03-04
+
+### Fixed
+- **Workspace switching: stale windows floating after restart** — Windows from previous workspaces (toolbars, Actions, FX Browser, ReaImGui scripts) no longer appear as floating windows after switching workspaces and restarting REAPER. Implements state-specific cleanup: double-toggle for state=0 windows, ShowWindow fallback for stubborn HWNDs, and skip-toggle for script actions (state=-1). ([#6](https://github.com/b451c/MaxPane/issues/6))
+- **Toolbar windows not found by FindReaperWindow** — Removed overly aggressive toolbar filter from `FindWindowEnumProc` that prevented toolbar HWNDs from being located during cleanup.
+- **Known windows captured via Open Windows menu had no toggle action** — `LookupToggleAction` now auto-detects the REAPER toggle action ID for any window title (toolbars + known windows), ensuring proper state management.
+
+---
+
 ## [1.5.1] - 2026-03-03
 
 ### Fixed

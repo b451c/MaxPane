@@ -37,6 +37,20 @@
 ]]></description>
       </metadata>
 
+      <version name="1.5.2" author="b451c" time="2026-03-04T00:00:00Z">
+        <changelog><![CDATA[Workspace switching fix
+
+- Fix stale windows floating after workspace switch + restart (#6)
+- Fix toolbar windows not found during cleanup
+- Auto-detect toggle action for windows captured via Open Windows menu
+- State-specific cleanup: double-toggle, ShowWindow fallback, script skip
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.2/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.2/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.5.2/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.5.2/reaper_maxpane-x86_64.so</source>
+      </version>
+
       <version name="1.5.1" author="b451c" time="2026-03-03T00:00:00Z">
         <changelog><![CDATA[Dark mode fix
 

@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 1.5.1 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 1.5.2 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 1.5.1 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 1.5.2 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
