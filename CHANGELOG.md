@@ -4,6 +4,13 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.5.1] - 2026-03-03
+
+### Fixed
+- **macOS dark mode support** — Pane background color now adapts to macOS dark/light appearance. Reparented windows (Track Manager, Routing Matrix, etc.) no longer show a light grey background when REAPER's dark mode is enabled. ([#1](https://github.com/b451c/MaxPane/issues/1))
+
+---
+
 ## [1.5.0] - 2026-03-03
 
 ### Added

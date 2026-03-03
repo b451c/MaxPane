@@ -35,6 +35,18 @@
 ]]></description>
       </metadata>
 
+      <version name="1.5.1" author="b451c" time="2026-03-03T00:00:00Z">
+        <changelog><![CDATA[Dark mode fix
+
+- Fix pane background color adapting to macOS dark/light mode (#1)
+- Reparented windows no longer show light grey background in dark mode
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.1/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v1.5.1/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v1.5.1/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v1.5.1/reaper_maxpane-x86_64.so</source>
+      </version>
+
       <version name="1.5.0" author="b451c" time="2026-03-03T00:00:00Z">
         <changelog><![CDATA[Solo pane, tab reorder, keyboard actions, design refactors
 
