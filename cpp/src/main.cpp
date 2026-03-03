@@ -1,13 +1,6 @@
 // MaxPane - REAPER Extension for Nested Docker Layouts
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#ifndef SWELL_PROVIDED_BY_APP
-#define SWELL_PROVIDED_BY_APP
-#endif
-#include "swell/swell.h"
-#endif
+#include "platform.h"
 
 #define REAPERAPI_IMPLEMENT
 #define REAPERAPI_MINIMAL

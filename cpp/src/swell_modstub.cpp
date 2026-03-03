@@ -7,6 +7,7 @@
 
 #ifdef SWELL_PROVIDED_BY_APP
 
+#define WDL_NO_DEFINE_MINMAX
 // Include types first (outside extern "C") — this pulls in <cstddef> etc.
 #include "swell/swell-types.h"
 

@@ -344,7 +344,7 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   SetParent(targetHwnd, containerHwnd);
 
   LONG_PTR newStyle = WS_CHILD | WS_VISIBLE;
-  SetWindowLong(targetHwnd, GWL_STYLE, newStyle);
+  SetWindowLongPtr(targetHwnd, GWL_STYLE, newStyle);
 
   tab.hwnd = targetHwnd;
   tab.captured = true;

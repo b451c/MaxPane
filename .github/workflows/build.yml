@@ -33,7 +33,7 @@ jobs:
             cmake_flags: ""
 
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os == 'windows-latest' || matrix.os == 'ubuntu-latest' }}
+    continue-on-error: false
     name: Build (${{ matrix.platform }})
 
     steps:

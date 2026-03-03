@@ -16,7 +16,7 @@
 
 - **Flexible split layouts** — Split panes horizontally or vertically to any depth (up to 16 panes). Drag splitter bars to resize on the fly.
 - **Tabbed windows** — Multiple windows per pane, with tab bar. Click tabs to switch, drag tabs between panes. Each tab bar has a **▼ menu button** for quick access to the pane context menu.
-- **14 known REAPER windows** — One-click capture for Media Explorer, FX Browser, Actions, Mixer, Region Manager, Routing Matrix, Track Manager, Big Clock, Navigator, Undo History, Project Bay, Video, Virtual MIDI Keyboard, Performance Meter.
+- **15 known REAPER windows** — One-click capture for Mixer, Track Manager, Routing Matrix, Media Explorer, FX Browser, Project Bay, Region Manager, Region Render Matrix, Actions, Undo History, Navigator, Big Clock, Video, Performance Meter, Virtual MIDI Keyboard.
 - **Arbitrary window capture** — Grab *any* open REAPER window, including third-party ReaImGui scripts (ReaMD, etc.), via the "Open Windows" submenu or click-to-capture mode.
 - **Workspaces** — Save and restore complete layout snapshots (tree structure + captured windows) with a single click.
 - **Favorites** — Pin frequently used windows for quick access across sessions.
@@ -53,7 +53,7 @@ ReaPack will automatically notify you of future updates.
 
 ### Manual install
 
-1. Download `reaper_maxpane.dylib` (macOS) from the [Releases](../../releases) page.
+1. Download the binary for your platform from the [Releases](../../releases) page.
 2. Copy it to your REAPER resource path:
 
 | Platform | Path |
@@ -134,9 +134,9 @@ make
 ## Requirements
 
 - **REAPER** 7.0+ (tested on 7.62)
-- **macOS** arm64 (Apple Silicon) — primary platform, tested on macOS 26.3 Tahoe / Apple M1 Pro
-- **Windows** x64 — architecture in place, **requires testing before release**
-- **Linux** x86_64 — builds provided, testing in progress
+- **macOS** arm64 (Apple Silicon) and x86_64 (Intel)
+- **Windows** x64
+- **Linux** x86_64
 
 ## Architecture
 

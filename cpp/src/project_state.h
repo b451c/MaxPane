@@ -1,13 +1,6 @@
 #pragma once
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#ifndef SWELL_PROVIDED_BY_APP
-#define SWELL_PROVIDED_BY_APP
-#endif
-#include "swell/swell.h"
-#endif
+#include "platform.h"
 
 #include "reaper_plugin.h"
 #include "state_limits.h"

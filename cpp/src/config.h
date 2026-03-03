@@ -61,14 +61,7 @@ static const int MAX_FAVORITES = 32;
 // UI color constants
 // =========================================================================
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#ifndef SWELL_PROVIDED_BY_APP
-#define SWELL_PROVIDED_BY_APP
-#endif
-#include "swell/swell.h"
-#endif
+#include "platform.h"
 
 // Pane background (captured windows have no own background — parent color shows through)
 static const COLORREF COLOR_PANE_BG           = RGB(172, 172, 172);

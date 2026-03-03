@@ -4,6 +4,29 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.4.0] - 2026-03-03
+
+### Added
+- **Region Render Matrix** added to known windows (action 41888).
+- **Cross-platform support** — Windows x64 and Linux x86_64 builds now compile and are included in releases alongside macOS.
+- `platform.h` — Central platform abstraction header replacing 5 scattered `#ifdef _WIN32` blocks.
+- `CreateMaxPaneDialog()` — Portable dialog creation helper (native `CreateDialogIndirectParam` on Windows, `SWELL_CreateDialog` on macOS/Linux).
+
+### Fixed
+- **Windows compilation** — bridged `GWLP_USERDATA`/`SetWindowLongPtr` (Win64 names) and replaced SWELL-only `SWELL_CreateDialog` with portable helper.
+- **Linux compilation** — suppressed SWELL `min`/`max` macro conflict with STL via `WDL_NO_DEFINE_MINMAX`.
+- **Linker error on Windows/Linux** — `ForceViewLayoutAndDisplay()` now has an inline no-op for non-macOS platforms (Cocoa code is macOS-only).
+
+### Changed
+- Known windows reorganized into logical groups (Mixing & Routing, Browsing & Media, Regions, Editing, Monitoring, Instruments).
+- Removed `SWELL_PROVIDED_BY_APP` from CMake global definitions — now set per-platform in `platform.h`.
+- Removed CMake `get_target_property`/`list(REMOVE_ITEM)` hack for Windows.
+
+### Removed
+- **MIDI Editor** removed from known windows — cannot be toggled without an active MIDI item in the session.
+
+---
+
 ## [1.3.0] - 2026-03-03
 
 ### Changed

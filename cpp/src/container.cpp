@@ -65,10 +65,10 @@ bool MaxPaneContainer::Create()
 {
   if (m_hwnd) return true;
 
-  m_hwnd = SWELL_CreateDialog(nullptr, nullptr, g_reaperMainHwnd, DlgProc, (LPARAM)this);
+  m_hwnd = CreateMaxPaneDialog(g_reaperMainHwnd, DlgProc, (LPARAM)this);
   if (!m_hwnd) return false;
 
-  SetWindowLong(m_hwnd, GWL_USERDATA, (LONG_PTR)this);
+  SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
   m_favMgr->Load();
   LoadState();
 
@@ -630,12 +630,12 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
 INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-  MaxPaneContainer* self = (MaxPaneContainer*)(LONG_PTR)GetWindowLong(hwnd, GWL_USERDATA);
+  MaxPaneContainer* self = (MaxPaneContainer*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
   switch (msg) {
     case WM_INITDIALOG: {
       self = (MaxPaneContainer*)lParam;
-      SetWindowLong(hwnd, GWL_USERDATA, (LONG_PTR)self);
+      SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)self);
       if (self) self->m_hwnd = hwnd;
       return 0;
     }

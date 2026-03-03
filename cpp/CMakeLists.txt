@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 1.3.0 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 1.4.0 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 1.3.0 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 1.4.0 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -46,7 +46,7 @@ target_include_directories(reaper_maxpane PRIVATE
 )
 
 target_compile_definitions(reaper_maxpane PRIVATE
-  SWELL_PROVIDED_BY_APP
+  $<$<NOT:$<PLATFORM_ID:Windows>>:SWELL_PROVIDED_BY_APP>
   $<$<CONFIG:Debug>:MAXPANE_DEBUG>
   $<$<PLATFORM_ID:Windows>:NOMINMAX>
 )
@@ -86,10 +86,6 @@ elseif(WIN32)
   target_compile_definitions(reaper_maxpane PRIVATE
     WIN32_LEAN_AND_MEAN
   )
-  # Remove SWELL_PROVIDED_BY_APP on Windows
-  get_target_property(_defs reaper_maxpane COMPILE_DEFINITIONS)
-  list(REMOVE_ITEM _defs "SWELL_PROVIDED_BY_APP")
-  set_target_properties(reaper_maxpane PROPERTIES COMPILE_DEFINITIONS "${_defs}")
 elseif(UNIX)
   set_target_properties(reaper_maxpane PROPERTIES
     SUFFIX ".so"

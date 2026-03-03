@@ -1,4 +1,4 @@
-#ifdef __APPLE__
+// macOS only — compiled via CMakeLists.txt (APPLE target_sources)
 #import <Cocoa/Cocoa.h>
 #include "swell_cocoa_helpers.h"
 #include "debug.h"
@@ -31,9 +31,3 @@ void ForceViewLayoutAndDisplay(HWND hwnd)
     [child displayIfNeeded];
   }
 }
-
-#else
-// Windows / Linux stub
-#include "swell_cocoa_helpers.h"
-void ForceViewLayoutAndDisplay(HWND) {}
-#endif

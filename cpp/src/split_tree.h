@@ -2,15 +2,6 @@
 #include "config.h"
 #include <cassert>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#ifndef SWELL_PROVIDED_BY_APP
-#define SWELL_PROVIDED_BY_APP
-#endif
-#include "swell/swell.h"
-#endif
-
 enum SplitNodeType : unsigned char { NODE_EMPTY = 0, NODE_LEAF, NODE_BRANCH };
 
 struct SplitNode {
