@@ -7,23 +7,25 @@
         <link rel="screenshot" href="https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-hero.png">MaxPane overview</link>
         <link rel="screenshot" href="https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-layout.png">Full layout view</link>
         <link rel="donation" href="https://ko-fi.com/quickmd">Ko-fi</link>
-        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 Helvetica;}}
-\f0\fs28 MaxPane \u8212? Nested docker layouts for REAPER\line
-\line
-\fs22 A native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.\line
-\line
-\b Features:\b0\line
-\line
-\bullet  Flexible split layouts (up to 16 panes)\line
-\bullet  Tabbed windows with drag-and-drop between panes\line
-\bullet  14 known REAPER windows with one-click capture\line
-\bullet  Arbitrary window capture (including ReaImGui scripts)\line
-\bullet  Named workspaces (save/restore complete layouts)\line
-\bullet  Favorites, tab colors, layout presets\line
-\bullet  Per-project state saved inside .RPP files\line
-\bullet  Full state persistence across REAPER restarts\line
-\bullet  Dockable into REAPER's native docker system\line
-\bullet  Zero dependencies \u8212? pure C++ extension\line
+        <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
+\widowctrl\hyphauto
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 MaxPane\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \b Nested docker layouts for REAPER\b0  \endash  a native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs28 Features\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Flexible split layouts (up to 16 panes)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Tabbed windows with drag-and-drop between panes\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  14 known REAPER windows with one-click capture\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Arbitrary window capture (including ReaImGui scripts)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Named workspaces (save/restore complete layouts)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Favorites, tab colors, layout presets\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Per-project state saved inside .RPP files\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Full state persistence across REAPER restarts\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Dockable into REAPER's native docker system\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \endash  Zero dependencies \endash  pure C++ extension\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs28 Installation\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Install via ReaPack or download from GitHub Releases. Requires REAPER 7.0+.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \fs18 MIT License \endash  Copyright (c) 2025\endash 2026 b451c\par}
 }]]></description>
       </metadata>
 
