@@ -15,7 +15,7 @@ Thanks for your interest in contributing to MaxPane!
 ```bash
 # Clone dependencies
 git clone https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
-git clone https://github.com/cockos/WDL.git cpp/WDL
+git clone https://github.com/justinfrankel/WDL.git cpp/WDL
 
 # Build
 cd cpp/build

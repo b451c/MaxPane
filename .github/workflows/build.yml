@@ -8,24 +8,29 @@ on:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: macos-14
             platform: darwin-arm64
             artifact: reaper_maxpane-arm64.dylib
             build_file: reaper_maxpane.dylib
-          - os: macos-13
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+          - os: macos-14
             platform: darwin-x86_64
             artifact: reaper_maxpane-x86_64.dylib
             build_file: reaper_maxpane.dylib
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
           - os: windows-latest
             platform: win-x64
             artifact: reaper_maxpane-x64.dll
             build_file: Release/reaper_maxpane.dll
+            cmake_flags: ""
           - os: ubuntu-latest
             platform: linux-x86_64
             artifact: reaper_maxpane-x86_64.so
             build_file: reaper_maxpane.so
+            cmake_flags: ""
 
     runs-on: ${{ matrix.os }}
     name: Build (${{ matrix.platform }})
@@ -37,16 +42,16 @@ jobs:
         run: git clone --depth 1 https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
 
       - name: Clone WDL
-        run: git clone --depth 1 https://github.com/cockos/WDL.git cpp/WDL
+        run: git clone --depth 1 https://github.com/justinfrankel/WDL.git cpp/WDL
 
       - name: Create build directory
-        run: mkdir -p cpp/build
         shell: bash
+        run: mkdir -p cpp/build
 
       - name: Configure (macOS / Linux)
         if: runner.os != 'Windows'
         working-directory: cpp/build
-        run: cmake .. -DCMAKE_BUILD_TYPE=Release
+        run: cmake .. -DCMAKE_BUILD_TYPE=Release ${{ matrix.cmake_flags }}
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
@@ -56,6 +61,7 @@ jobs:
       - name: Build (macOS / Linux)
         if: runner.os != 'Windows'
         working-directory: cpp/build
+        shell: bash
         run: make -j$(nproc 2>/dev/null || sysctl -n hw.ncpu)
 
       - name: Build (Windows)

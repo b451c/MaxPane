@@ -92,7 +92,7 @@ See [Building](#building) below.
   ```
 - **WDL** — clone into `cpp/WDL/`:
   ```bash
-  git clone https://github.com/cockos/WDL.git cpp/WDL
+  git clone https://github.com/justinfrankel/WDL.git cpp/WDL
   ```
 
 ### Compile and install (macOS)
@@ -197,4 +197,4 @@ If you find MaxPane useful, consider supporting its development:
 - **REAPER** — https://www.reaper.fm
 - **ReaPack** — https://reapack.com
 - **REAPER SDK** — https://github.com/justinfrankel/reaper-sdk
-- **WDL/SWELL** — https://github.com/cockos/WDL
+- **WDL/SWELL** — https://github.com/justinfrankel/WDL
