@@ -1,11 +1,24 @@
 cmake_minimum_required(VERSION 3.15)
-project(reaper_maxpane VERSION 1.3.0 LANGUAGES CXX OBJCXX)
+
+if(APPLE)
+  project(reaper_maxpane VERSION 1.3.0 LANGUAGES CXX OBJCXX)
+else()
+  project(reaper_maxpane VERSION 1.3.0 LANGUAGES CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
-set(REAPER_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk")
+
+# SDK path: supports both direct (cpp/sdk/reaper_plugin.h) and cloned (cpp/sdk/sdk/reaper_plugin.h)
+if(EXISTS "${CMAKE_SOURCE_DIR}/sdk/sdk/reaper_plugin.h")
+  set(REAPER_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk/sdk")
+elseif(EXISTS "${CMAKE_SOURCE_DIR}/sdk/reaper_plugin.h")
+  set(REAPER_SDK_DIR "${CMAKE_SOURCE_DIR}/sdk")
+else()
+  message(FATAL_ERROR "REAPER SDK not found. Clone into cpp/sdk/: git clone https://github.com/justinfrankel/reaper-sdk.git cpp/sdk")
+endif()
 set(WDL_DIR "${CMAKE_SOURCE_DIR}/WDL/WDL")
 
 add_library(reaper_maxpane SHARED
@@ -70,7 +83,6 @@ elseif(WIN32)
     PREFIX ""
     OUTPUT_NAME "reaper_maxpane"
   )
-  # Windows uses native Win32 — no SWELL needed
   target_compile_definitions(reaper_maxpane PRIVATE
     WIN32_LEAN_AND_MEAN
   )
