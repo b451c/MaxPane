@@ -373,6 +373,60 @@ void MaxPaneContainer::OnTimer()
     g_pendingProjectState.valid = false;  // consumed
   }
 
+  // Deferred stale action cleanup.
+  // After a workspace switch, stale windows (not in the new workspace) are
+  // hidden but not toggled off — SetParent(nullptr) + Main_OnCommand doesn't
+  // work because REAPER loses track of reparented HWNDs.  Instead we persist
+  // stale action IDs and clean them up here, after REAPER has fully started
+  // and reopened windows from wnd_vis with reliable toggle state.
+  if (m_staleCleanupCountdown > 0) {
+    m_staleCleanupCountdown--;
+    if (m_staleCleanupCountdown == 0 && g_GetExtState && g_SetExtState && g_Main_OnCommand) {
+      const char* staleStr = g_GetExtState(EXT_SECTION, "stale_toggle_actions");
+      if (staleStr && staleStr[0]) {
+        DBG("[MaxPane] OnTimer: deferred stale cleanup: %s\n", staleStr);
+        const char* cur = staleStr;
+        while (*cur) {
+          int a = 0;
+          while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
+          if (a > 0) {
+            int state = g_GetToggleCommandState ? g_GetToggleCommandState(a) : -1;
+            DBG("[MaxPane] OnTimer: stale action=%d state=%d\n", a, state);
+            if (state > 0) {
+              g_Main_OnCommand(a, 0);
+              char st[256];
+              if (GetSearchTitleForAction(a, st, sizeof(st))) {
+                HWND h1 = WindowManager::FindReaperWindow(st);
+                if (h1 && IsWindow(h1) && IsWindowVisible(h1)) ShowWindow(h1, SW_HIDE);
+              }
+              DBG("[MaxPane] OnTimer: toggled off action=%d (state=%d)\n", a, state);
+            } else if (state == -1) {
+              DBG("[MaxPane] OnTimer: SKIP state=-1 action=%d (script/unknown)\n", a);
+            } else {
+              // state=0: check window existence, double-toggle if visible
+              char searchTitle[256];
+              if (GetSearchTitleForAction(a, searchTitle, sizeof(searchTitle))) {
+                HWND h = WindowManager::FindReaperWindow(searchTitle);
+                if (h && IsWindow(h) && IsWindowVisible(h)) {
+                  g_Main_OnCommand(a, 0);
+                  g_Main_OnCommand(a, 0);
+                  bool stillVis = (IsWindow(h) && IsWindowVisible(h));
+                  if (stillVis) ShowWindow(h, SW_HIDE);
+                  DBG("[MaxPane] OnTimer: double-toggled state=0 action=%d — '%s' stillVis=%d\n", a, searchTitle, stillVis);
+                } else {
+                  DBG("[MaxPane] OnTimer: state=0 action=%d — '%s' not found/visible\n", a, searchTitle);
+                }
+              }
+            }
+          }
+          if (*cur == ',') cur++;
+          else break;
+        }
+        g_SetExtState(EXT_SECTION, "stale_toggle_actions", "", true);
+      }
+    }
+  }
+
   if (m_winMgr.CheckAlive()) {
     m_winMgr.RepositionAll(m_tree);
     InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -551,8 +605,8 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
         }
       }
       if (targetHwnd && IsWindow(targetHwnd)) {
-        int toolbarAction = GetToolbarToggleAction(title);
-        m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title, m_hwnd, toolbarAction);
+        int toggleAction = LookupToggleAction(title);
+        m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title, m_hwnd, toggleAction);
 
         if (dockFrame && IsWindow(dockFrame)) {
           ShowWindow(dockFrame, SW_HIDE);
@@ -1033,8 +1087,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
                     }
                   }
                   int pId = self->m_captureMode.targetPaneId;
-                  int toolbarAction = GetToolbarToggleAction(title);
-                  self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toolbarAction);
+                  int toggleAction = LookupToggleAction(title);
+                  self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toggleAction);
 
                   if (dockFrame && IsWindow(dockFrame)) {
                     ShowWindow(dockFrame, SW_HIDE);

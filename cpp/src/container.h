@@ -97,6 +97,7 @@ private:
   bool m_soloTabVisibility[MAX_PANES][MAX_TABS_PER_PANE];  // which tabs were visible before solo
 
   int m_focusedPaneId = 0;  // pane with keyboard focus (for Next/Prev Tab/Pane)
+  int m_staleCleanupCountdown = 0;  // ticks until deferred stale action cleanup
 
   // GDI object cache (created once in constructor, destroyed in destructor)
   HBRUSH m_brushTabBarBg = nullptr;

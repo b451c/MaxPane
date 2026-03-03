@@ -29,6 +29,45 @@ int GetToolbarToggleAction(const char* title)
   return 0;
 }
 
+// Look up REAPER toggle action for any window title.
+// Checks toolbars first, then KNOWN_WINDOWS by searchTitle/altSearchTitle prefix.
+int LookupToggleAction(const char* title)
+{
+  if (!title) return 0;
+  int a = GetToolbarToggleAction(title);
+  if (a > 0) return a;
+  for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+    if (strstr(title, KNOWN_WINDOWS[i].searchTitle) == title)
+      return KNOWN_WINDOWS[i].toggleActionId;
+    if (KNOWN_WINDOWS[i].altSearchTitle &&
+        strstr(title, KNOWN_WINDOWS[i].altSearchTitle) == title)
+      return KNOWN_WINDOWS[i].toggleActionId;
+  }
+  return 0;
+}
+
+bool GetSearchTitleForAction(int action, char* buf, int bufSize)
+{
+  if (action <= 0 || !buf || bufSize <= 0) return false;
+  // Toolbars: action 41679..41694 → "Toolbar 1".."Toolbar 16"
+  if (action >= 41679 && action <= 41694) {
+    snprintf(buf, bufSize, "Toolbar %d", action - 41678);
+    return true;
+  }
+  if (action == 41084) {
+    safe_strncpy(buf, "Toolbar Docker", bufSize);
+    return true;
+  }
+  // Known windows
+  for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+    if (KNOWN_WINDOWS[i].toggleActionId == action) {
+      safe_strncpy(buf, KNOWN_WINDOWS[i].searchTitle, bufSize);
+      return true;
+    }
+  }
+  return false;
+}
+
 WindowManager::WindowManager()
   : m_containerHwnd(nullptr)
 {
@@ -68,8 +107,6 @@ static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
   char buf[512];
   GetWindowText(hwnd, buf, sizeof(buf));
   if (!buf[0]) return TRUE;
-
-  if (strstr(buf, "toolbar") || strstr(buf, "Toolbar")) return TRUE;
 
   // Skip tiny controls/buttons — real REAPER windows are at least 50×50
   { RECT wr; GetClientRect(hwnd, &wr);
@@ -328,7 +365,8 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
 
   safe_strncpy(tab.name, displayName, sizeof(tab.name));
   safe_strncpy(tab.searchTitle, displayName, sizeof(tab.searchTitle));
-  tab.toggleAction = toggleAction;
+  // Auto-detect toggle action from window title if caller didn't provide one
+  tab.toggleAction = (toggleAction > 0) ? toggleAction : LookupToggleAction(displayName);
   tab.isArbitrary = true;
   if (actionCmd && actionCmd[0]) {
     safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
@@ -619,6 +657,32 @@ void WindowManager::ReleaseAll(bool toggleOff)
 {
   for (int i = 0; i < MAX_PANES; i++) {
     ReleaseWindow(i, toggleOff);
+  }
+}
+
+void WindowManager::ReleaseAllSelective(const int* staleActions, int staleCount)
+{
+  for (int i = 0; i < MAX_PANES; i++) {
+    PaneState& ps = m_panes[i];
+    for (int t = 0; t < ps.tabCount; t++) {
+      bool isStale = false;
+      // Resolve toggle action if missing (old workspace data)
+      int act = ps.tabs[t].toggleAction;
+      if (act <= 0) act = LookupToggleAction(ps.tabs[t].name);
+      if (act > 0) {
+        // Update the tab so DoRelease can toggle it off
+        if (ps.tabs[t].toggleAction <= 0) ps.tabs[t].toggleAction = act;
+        for (int s = 0; s < staleCount; s++) {
+          if (staleActions[s] == act) { isStale = true; break; }
+        }
+      }
+      DBG("[MaxPane] ReleaseSelective: pane %d tab %d '%s' action=%d (resolved=%d) isStale=%d captured=%d hwnd=%p\n",
+          i, t, ps.tabs[t].name, ps.tabs[t].toggleAction, act, isStale,
+          ps.tabs[t].captured, (void*)ps.tabs[t].hwnd);
+      DoRelease(ps.tabs[t], isStale);  // toggleOff=true for stale, false for shared
+    }
+    ps.tabCount = 0;
+    ps.activeTab = -1;
   }
 }
 

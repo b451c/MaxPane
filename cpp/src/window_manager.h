@@ -22,6 +22,13 @@ const char* GetDynamicTitlePrefix(const char* title);
 // Returns the REAPER toggle action ID for a toolbar window, or 0 if not a toolbar.
 int GetToolbarToggleAction(const char* title);
 
+// Look up REAPER toggle action for any window title (toolbars + known windows).
+int LookupToggleAction(const char* title);
+
+// Reverse-lookup: given a toggle action ID, fill buf with the window search title.
+// Returns true if a mapping was found.
+bool GetSearchTitleForAction(int action, char* buf, int bufSize);
+
 struct PaneState {
   TabEntry tabs[MAX_TABS_PER_PANE];
   int tabCount;   // 0 = empty pane
@@ -48,6 +55,8 @@ public:
   // Release all tabs in a pane
   void ReleaseWindow(int paneId, bool toggleOff = true);
   void ReleaseAll(bool toggleOff = true);
+  // Release all: toggle off tabs whose action is in staleActions, hide the rest
+  void ReleaseAllSelective(const int* staleActions, int staleCount);
   void RepositionAll(const SplitTree& tree);
   bool CheckAlive();  // returns true if any tabs were removed or recaptured
 
