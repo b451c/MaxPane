@@ -106,18 +106,18 @@ jobs:
 
             ### Downloads
 
-            | Platform | File |
-            |----------|------|
-            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` |
-            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` |
-            | Windows x64 | `reaper_maxpane-x64.dll` |
-            | Linux x86_64 | `reaper_maxpane-x86_64.so` |
+            | Platform | File | Status |
+            |----------|------|--------|
+            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Stable |
+            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable (untested) |
+            | Windows x64 | `reaper_maxpane-x64.dll` | ⚠️ Alpha — not functional |
+            | Linux x86_64 | `reaper_maxpane-x86_64.so` | ⚠️ Alpha — not functional |
 
             ### Installation
 
             Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
 
-            > **Note:** Windows and Linux builds are included but have **not been tested**. macOS (arm64) is the primary development platform. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+            > **⚠️ Windows and Linux builds are alpha quality.** They compile and load in REAPER but core functionality (mouse input, window capture) is not working yet. These platforms require significant debugging work. macOS (arm64) is the only fully functional platform. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
             See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
 
