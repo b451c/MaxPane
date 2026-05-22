@@ -31,6 +31,11 @@ jobs:
             artifact: reaper_maxpane-x86_64.so
             build_file: reaper_maxpane.so
             cmake_flags: ""
+          - os: ubuntu-22.04-arm
+            platform: linux-aarch64
+            artifact: reaper_maxpane-aarch64.so
+            build_file: reaper_maxpane.so
+            cmake_flags: ""
 
     runs-on: ${{ matrix.os }}
     continue-on-error: false
@@ -88,16 +93,20 @@ jobs:
       contents: write
 
     steps:
-      - name: Download all artifacts
+      # Only the macOS dylibs are uploaded to the public Release. Win + Linux
+      # binaries stay as workflow artifacts on the Actions page for internal
+      # smoke testing until #8 (Windows mouse input) and #9 (Linux FX Browser
+      # close) are cleared. They'll join the public Release in a follow-up.
+      - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
-          pattern: reaper_maxpane-*
+          pattern: reaper_maxpane-*.dylib
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*
+          files: artifacts/**/*.dylib
           generate_release_notes: false
           body: |
             ## MaxPane ${{ github.ref_name }}
@@ -109,15 +118,15 @@ jobs:
             | Platform | File | Status |
             |----------|------|--------|
             | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Stable |
-            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable (untested) |
-            | Windows x64 | `reaper_maxpane-x64.dll` | ⚠️ Alpha — not functional |
-            | Linux x86_64 | `reaper_maxpane-x86_64.so` | ⚠️ Alpha — not functional |
+            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable |
+
+            > Windows + Linux builds are available as workflow artifacts (Actions page) for internal smoke testing. They will be added to the public Release once smoke testing on those platforms clears the open blockers — see [#8](https://github.com/b451c/MaxPane/issues/8) (Windows mouse input) and [#9](https://github.com/b451c/MaxPane/issues/9) (Linux FX Browser close).
 
             ### Installation
 
             Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
 
-            > **⚠️ Windows and Linux builds are alpha quality.** They compile and load in REAPER but core functionality (mouse input, window capture) is not working yet. These platforms require significant debugging work. macOS (arm64) is the only fully functional platform. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+            > macOS (arm64 + x86_64) is fully functional. Windows and Linux are pending smoke-test clearance — see issues above. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
             See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
 

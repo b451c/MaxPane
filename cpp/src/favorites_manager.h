@@ -14,6 +14,10 @@ class FavoritesManager {
 public:
   FavoritesManager();
 
+  // ExtState section to read/write. Defaults to the legacy EXT_SECTION;
+  // MaxPaneContainer overrides per-instance after construction (F2).
+  void SetSection(const char* section) { m_section = section; }
+
   void Load();   // from ExtState
   void Save();   // to ExtState
 
@@ -26,4 +30,5 @@ public:
 private:
   FavoriteEntry m_favorites[MAX_FAVORITES];
   int m_count;
+  const char* m_section;  // points at EXT_SECTION or per-instance variant
 };

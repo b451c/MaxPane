@@ -41,8 +41,18 @@ public:
   // Returns true on success
   bool MergeNode(int leafNodeIndex);
 
-  // Recalculate all rects from container size
+  // Recalculate all rects from container size. Root rect spans
+  // (m_originX, m_originY) -- (m_originX + w, m_originY + h). Use SetOrigin
+  // to reserve space for chrome (e.g. nav bar) above the pane grid.
   void Recalculate(int w, int h);
+
+  // Set the top-left origin of the tree's root rect. Default (0, 0). The
+  // caller must re-Recalculate to make the new origin take effect. Used by
+  // MaxPaneContainer to reserve NAV_BAR_HEIGHT pixels at the top for the
+  // persistent navigation bar (ADR-026).
+  void SetOrigin(int x, int y) { m_originX = x; m_originY = y; }
+  int  OriginX() const { return m_originX; }
+  int  OriginY() const { return m_originY; }
 
   // Hit testing
   int HitTestSplitter(int x, int y) const;
@@ -112,6 +122,8 @@ private:
 
   int m_dragNode;  // branch node index being dragged, -1 if none
   int m_containerW, m_containerH;
+  int m_originX = 0;
+  int m_originY = 0;
 
   int AllocNode();
   void FreeNode(int idx);

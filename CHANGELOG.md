@@ -4,6 +4,280 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.0] - 2026-05-22
+
+v2.0 reworks the docking core for reliability, adds multi-instance /
+floating containers / drag-to-dock / Quick Switcher, and surfaces the
+things that used to be hidden in the right-click menu through a
+persistent navigation bar.
+
+> **macOS only for v2.0.0.** Windows and Linux builds will be added in
+> a follow-up release after they pass smoke testing on those platforms
+> — see [#8](https://github.com/b451c/MaxPane/issues/8) (Windows mouse
+> input) and [#9](https://github.com/b451c/MaxPane/issues/9) (Linux FX
+> Browser close) for the open blockers.
+
+For an architectural overview of the codebase as it stands at v2.0, read
+[ARCHITECTURE.md](ARCHITECTURE.md). For the locked v2.0 scope, decision
+log, and per-bug investigation notes, the project keeps `docs/v2/V2_SCOPE.md`,
+`docs/v2/V2_DECISIONS.md`, and `docs/v2/V2_PROGRESS.md` locally (gitignored
+process docs).
+
+### Added
+
+#### Multi-instance (F2)
+- **Up to 8 MaxPane containers** in one REAPER session, each with its own
+  layout, captured windows, floating geometry, and project-state chunk.
+  Instance 0 keeps the legacy ExtState / dock / RPP identifiers verbatim
+  — upgraders from v1.5.x see no migration. Instances 1–7 use suffixed
+  identifiers (`MaxPane_cpp_N`, `MaxPane_container_N`,
+  `<MAXPANE_STATE_N>`).
+- **Per-instance Open actions** — `MaxPane: Open Container` (legacy,
+  instance 0), `MaxPane: Open Container 2` through `MaxPane: Open
+  Container 8` (instances 1–7). Existing v1.5.x keybinds on the legacy
+  action continue to work.
+- **Workspaces shared, current state per-instance** — the workspace list
+  (saved layouts) is a single user-level pool visible from every
+  container; what a container is *currently showing* is its own per-
+  instance state.
+
+#### Floating mode (F1a)
+- **"Detach to Floating" / "Re-dock"** in the pane menu turns the whole
+  container into a top-level OS window with native chrome (title bar,
+  close, resize). Geometry persists across sessions and float/dock
+  transitions.
+- **Always-on-top toggle for floating containers** (C5) — keeps the
+  detached container above other apps when checked. Per-instance,
+  persisted to ExtState.
+- Multi-monitor clamping on macOS via `[NSScreen screens]`; centered-on-
+  REAPER-main fallback on Win/Linux.
+
+#### Quick Switcher (F4)
+- **`MaxPane: Quick Switcher`** action opens a modal SWELL dialog with
+  a search box and a unified list of all open tabs (across all
+  instances), all workspaces, and all favorites. Fuzzy filter matches
+  case-insensitive subsequence + scores prefix and consecutive hits.
+  Enter activates, Esc closes. Bind your own hotkey in REAPER's
+  Actions dialog.
+
+#### Hotkey slots (F6)
+- **32 workspace slot actions** — `MaxPane: Workspace Slot 1` through
+  `MaxPane: Workspace Slot 32`. Bind a hotkey, hit it, the
+  corresponding workspace loads into the focused (last-clicked) MaxPane
+  container.
+- **32 favorite slot actions** — `MaxPane: Favorite Slot 1` through
+  `MaxPane: Favorite Slot 32`. Bind a hotkey, hit it, the favorite is
+  captured into the focused pane.
+- **MAX_WORKSPACES bumped 10 → 32** to match the new slot count and
+  close a long-standing community ask.
+
+#### Navigation bar + Home overlay + drag-to-dock (ADR-026)
+- **Persistent navigation toolbar** at the top of every container:
+  `[Home] | [Drag] [Switch] [Save] [Load▾] | [Settings] [Support]`.
+  Buttons for the workspace actions that used to live only in the
+  right-click menu, plus Settings and Support links. Toggle via
+  Settings → "Show navigation bar". Dark/light palette follows the
+  rest of the UI.
+- **Home overlay** — click `[Home]` to overlay the launcher card grid
+  on top of the current layout (non-destructive picker). Click a card
+  to load that workspace; click empty space or press Esc to close
+  without changing anything.
+- **Drag-to-dock** — click `[Drag]`, then grab any REAPER window from
+  outside MaxPane and drop it on a pane. Live preview renders during
+  the drag showing the four edge zones (split left / right / top /
+  bottom), the tab-bar zone (add as tab), and the body-center
+  forgiving zone. Shift+drop replaces the active tab. Polling-based,
+  no platform hooks — works identically on macOS / Win / Linux SWELL.
+
+#### Mocna piątka — C-series UX wins (ADR-027)
+- **C1 Reopen last closed tab** — `MaxPane: Reopen last closed tab`
+  action restores the most recently closed tab. 16-entry per-container
+  ring buffer, session-scoped (not persisted).
+- **C2 Pinned tabs** — right-click a tab → Pin. Pinned tabs sort to
+  the left of each pane, render with a bullet (•) prefix, and are
+  exempt from "Close Others" / "Close to Right" / "Close All".
+  Persisted in workspace saves.
+- **C3 Close family for tabs** — right-click a tab → Close ▸ →
+  "Close Others", "Close to Right", "Close All". Bulk close that
+  respects pinned tabs.
+- **C4 Workspace pickup** — single `MaxPane: Workspace pickup`
+  action prompts for a slot number (1..32) and loads it. One hotkey
+  reaches every workspace slot instead of 32 separate bindings.
+- **C5 Always-on-top floating** — see Floating mode above.
+
+#### Settings dialog (ADR-019)
+- **Dedicated modal Settings dialog** reachable from the nav bar
+  `[Settings]` button or right-click → Settings. Single-page layout
+  with four sections: General (auto-open, show nav bar, default
+  workspace), Appearance (dark-mode tristate cycle: Auto / Force
+  dark / Force light), Hotkeys (link to REAPER Actions), Advanced
+  (open actions, reset, version + support links).
+
+#### Other UX
+- **Custom Save Workspace dialog** — name input + clickable listbox
+  of existing workspaces + dynamic status label ("Will replace
+  existing workspace 'X'" / "Will save as new workspace") replaces
+  the bare `GetUserInputs` textbox. Toast confirms the result.
+- **Toast bar** — bottom-of-container 3-second feedback strip for
+  non-fatal events (rename collision, duplicate at capacity,
+  workspace saved, etc.). Fades out in the final 500 ms.
+- **Workspace launcher hero** (ADR-014) — when a container is empty
+  it renders a card grid of saved workspaces with mini layout
+  previews. Click a card to load. Right-click for Load / Rename /
+  Duplicate / Delete / Bind Hotkey. Footer carries support links.
+- **Capture menu flattened** (ADR-020 / ADR-030) — the 15 known
+  REAPER windows are reachable directly from the right-click menu's
+  "Capture window ▸" submenu (one level), with no extra nesting on
+  the most common path.
+- **Accelerator hook** (ADR-029) — MaxPane action bindings now fire
+  even when MaxPane has focus (or a captured pane has focus). v1.x
+  required REAPER's main window to have focus first.
+
+#### Build + test infrastructure (ADR-018 / ADR-023)
+- **CI matrix** — `.github/workflows/ci.yml` builds and tests on
+  macOS arm64, macOS x86_64 (cross-compile + Rosetta), Ubuntu, and
+  Windows for every push to `v2`/`main` and every PR.
+- **Unit tests** — Catch2 v2.13.10 vendored; 14 tests cover
+  `SplitTree`, `WorkspaceManager` static serialization helpers,
+  `safe_strncpy`, `ResolveActionCommand`. Run with
+  `ctest --output-on-failure` from `cpp/build/`.
+- **`ARCHITECTURE.md`** — full technical onboarding document for
+  new contributors.
+- **Perl-driven SWELL resgen step** added to CMake (ADR-023) for
+  cross-platform `.rc` → `.rc_mac_dlg` conversion.
+
+### Changed
+
+- **Container teardown reworked** (ADR-011, B16/B17) — `WM_CLOSE`
+  is now the primary close mechanism; the legacy `Main_OnCommand`
+  toggle is a fallback for windows that ignore `WM_CLOSE`. The
+  `stale_toggle_actions` ExtState list is merged across paths
+  (workspace switch, mid-session close, atexit) so the next
+  REAPER startup can close any ghost windows REAPER restored from
+  its `wnd_vis` cache.
+- **Startup ghost cleanup polls aggressively** (ADR-015) — every
+  tick for the first ~75 ticks instead of a single-shot fire,
+  cutting the visible flash from ~250 ms to ~30 ms on macOS
+  restart.
+- **Workspace launcher replaces empty-container UI** (ADR-013) —
+  MaxPane opens to the workspace card grid instead of auto-
+  restoring captured windows. `was_visible`-driven auto-restore
+  was the source of many race conditions and didn't match REAPER's
+  native docker behavior.
+- **Workspace list is shared across instances; current state is
+  per-instance** (ADR-012, supersedes part of ADR-009).
+- **Settings dialog supersedes context-menu Auto-open toggle**
+  (ADR-019). The legacy menu item handler is preserved so v1.5.x
+  keybinds continue to work.
+- **`MaxPaneIsDarkMode()` introduced** with cache invalidation
+  so the Settings dialog's tristate dark-mode override takes
+  effect live without restarting REAPER.
+
+### Fixed
+
+- **B1 — SetParent return value never checked.** Added
+  `VerifySetParent` helper at all four call sites in
+  `DoCapture` / `DoRelease` so post-reparent mismatches surface in
+  the debug log instead of corrupting state silently.
+- **B2 — `CheckAlive` doesn't verify parent.** Tabs whose captured
+  HWND was externally reparented (e.g. REAPER moved the MIDI Editor
+  to another docker on project tab switch) are now reclaimed via
+  `DoCapture` or cleanly removed.
+- **B3 — MIDI Editor recapture race.** Capturability guard between
+  `FindReaperWindow` and `DoCapture` prevents acting on an HWND
+  REAPER reparented or closed in the interim.
+- **B4 — WM_DESTROY doesn't reparent captured children.** Container
+  destruction triggered by REAPER (docker close / undock) now
+  reparents captured children before tearing down so they don't
+  become frameless ghosts.
+- **B6 — Toolbar subclass cleanup.** `UnsubclassToolbar` fires on
+  every `DoRelease` branch, including the B2 reclaim-fail branch.
+- **B7 — Stale cleanup synchronous fallback** for windows REAPER
+  hasn't yet opened from its `wnd_vis` cache.
+- **B9 — Narrow tab close-button overlap.** New `TAB_CLOSE_MIN_WIDTH`
+  threshold (90 px) hides the × when it would clip the tab name
+  ellipsis. Layout-clamp `TAB_MIN_WIDTH` (60 px) unchanged.
+- **B12 — Capture queue arbitrary unconditional toggle.** Arbitrary
+  captures (toolbars, ReaImGui scripts) now respect an
+  `alreadyOpen` guard before firing the toggle, mirroring the
+  known-window path. Without this, loading a workspace whose
+  scripts were already open closed them and burned 200 retries.
+- **B13 — `DoRelease` reads toggle state AFTER `SetParent(nullptr)`.**
+  SWELL races the `wnd_vis` reset to 0 even when the window is
+  still visible. State is now sampled BEFORE the reparent.
+- **B14 — `ShowWindow(SW_HIDE)` doesn't reliably orderOut**
+  top-level NSWindows that SWELL recreated via
+  `SetParent(nullptr)`. New `ForceHideWindow` helper calls
+  `[NSView setHidden:YES] + [NSWindow orderOut:nil]`.
+- **B15 — Startup-level stale cleanup.** Ghost windows REAPER
+  restored from cached `wnd_vis` are now closed at REAPER startup
+  even when MaxPane doesn't auto-open.
+- **B16 — `WM_CLOSE` as primary close mechanism.** Replaces the
+  unreliable `Main_OnCommand` toggle for windows that don't update
+  `wnd_vis` after our reparent (Media Explorer, Actions, FX
+  Browser, Undo History).
+- **B17 — Toggle stale list merges, doesn't overwrite.** Workspace-
+  switch stale entries are no longer dropped by a subsequent
+  mid-session close.
+- **B18 — Arbitrary capture with action=0 + empty cmd spammed
+  retries.** Legacy workspace tabs without a resolvable action now
+  probe once via `FindReaperWindow`; if not found, log SKIP and
+  return. Killed a 10-second UI freeze + 414-line log spam per
+  load.
+- **B19 — `ForceHideWindow` hides REAPER main window.** Now only
+  calls `orderOut` on NSWindows whose contentView equals the
+  captured NSView (i.e. orphan NSWindows we own).
+- **B20 — REAPER docker tab placeholder after capture.**
+  `g_DockWindowRemove(target)` is called before the intermediate
+  `SetParent` in `DoCapture` so REAPER's docker manager forgets
+  the captured window.
+- **B21 — Save Workspace leaves leftover keys in ExtState.**
+  Slot reuse with a smaller layout pre-clears all
+  `pane_N_tab_M_*` keys before writing valid panes; phantom panes
+  from prior saves no longer resurrect.
+- **B22 — Mixer prefix-match catches "Mixer Master".** Special-
+  case in `FindWindowEnumProc`: when searching for `Mixer`,
+  require exact title match.
+- **B23 — Capture-by-click floating: NSView frame not synced.**
+  `SetWindowPos(SWP_FRAMECHANGED|…)` after reparent (replacing
+  `SWP_NOMOVE|SWP_NOSIZE`) so the view occupies the actual pane
+  rect instead of its pre-capture screen coords.
+- **B25 — Workspace list per-instance was wrong UX** (ADR-012):
+  list is now shared across instances; only current state stays
+  per-instance.
+- **B27 — Frameless ReaImGui plugins on re-fire.** Capturing a
+  third-party plugin (ReaBeat, reamix.me, ReaMD), closing it, and
+  re-firing the plugin's action no longer produces a frameless
+  window at the default position. New chrome-restore in
+  `DoRelease` for `toggleAction == 0` captures: SetParent(null) +
+  `ApplyFloatingWindowChrome` + `SetWindowPos` to the original
+  rect before WM_CLOSE.
+- **Home overlay right-click bug** (ADR-031) — right-click on a
+  card now opens the card menu instead of leaking to the pane menu.
+
+### Known issues
+
+- **B8 — Frameless toolbar button misalignment** (issue
+  [#6 comment thread](https://github.com/b451c/MaxPane/issues/6))
+  persists for the "Frameless floating toolbar windows = ON"
+  preference. Needs REAPER-side experimentation; deferred to a
+  post-v2.0 patch.
+- **Windows + Linux not in this release.** Builds compile on all 5 CI
+  platforms but Windows mouse input
+  ([#8](https://github.com/b451c/MaxPane/issues/8)) and the Linux FX
+  Browser close path ([#9](https://github.com/b451c/MaxPane/issues/9))
+  are open blockers. Binaries for those platforms will be added in a
+  follow-up release after they're tested and the blockers cleared.
+- **Linux symbol-font tofu in the nav bar** (Linux only). GTK default
+  font lacks several of the Unicode glyphs used by MaxPane. Will be
+  resolved alongside the Windows/Linux release follow-up (likely via
+  bundled PNG icons).
+- **B24 — Toolbars open offscreen after capture+release**. REAPER
+  toolbar manager state inconsistency after our
+  `DockWindowRemove`. v2.1 candidate.
+
+---
+
 ## [1.5.2] - 2026-03-04
 
 ### Fixed

@@ -12,9 +12,20 @@ static const int MAX_TABS_PER_PANE = 8;
 static const int TAB_BAR_HEIGHT = 20;
 static const int TAB_MIN_WIDTH = 60;
 static const int TAB_MAX_WIDTH = 150;
-static const int MAX_WORKSPACES = 10;
+// Below this per-tab pixel width the close button is hidden and ignored by
+// hit-test (otherwise name's DT_END_ELLIPSIS truncates right under the 'x').
+// 90 ≈ 60 readable name + 16 close button area + 14 breathing room.
+static const int TAB_CLOSE_MIN_WIDTH = 90;
+static const int MAX_WORKSPACES = 32;
 static const int MAX_WORKSPACE_NAME = 64;
 extern const char* const EXT_SECTION;
+
+// REAPER action IDs we care about by number (toolbars span a contiguous range;
+// Toolbar Docker is a single ID). Surfaced as named constants instead of magic
+// literals in window_manager.cpp::GetSearchTitleForAction.
+static const int TOOLBAR_ACTION_BASE = 41679;   // Toolbar 1 (41679..41694 = Toolbar 1..16)
+static const int TOOLBAR_ACTION_COUNT = 16;
+static const int TOOLBAR_DOCKER_ACTION = 41084; // "View: Show docker"
 
 // Tab color palette (index 0 = no color)
 static const int TAB_COLOR_COUNT = 9;
@@ -67,6 +78,14 @@ static const int MAX_FAVORITES = 32;
 // Adapts to macOS dark mode at startup via GetPaneBgColor() / GetPaneGridLineColor().
 COLORREF GetPaneBgColor();
 COLORREF GetPaneGridLineColor();
+
+// Effective dark mode — consults ExtState "dark_mode" override
+// ("auto"|"dark"|"light"; absent = "auto"), then falls back to
+// IsSystemDarkMode(). Cached after first call; Settings dialog calls
+// InvalidateMaxPaneDarkModeCache() after the user changes the override
+// so the next paint pass re-evaluates.
+bool MaxPaneIsDarkMode();
+void InvalidateMaxPaneDarkModeCache();
 #define COLOR_PANE_BG        GetPaneBgColor()
 #define COLOR_PANE_GRID_LINE GetPaneGridLineColor()
 
@@ -122,3 +141,24 @@ static const int TIMER_INTERVAL           = 500;   // ms — CheckAlive + RPP po
 static const int TIMER_ID_CAPTURE         = 2;
 static const int TIMER_CAPTURE_INTERVAL   = 50;    // ms — CaptureQueue tick
 static const int TIMER_ID_HOVER           = 3;
+static const int TIMER_ID_LAUNCHER_TIP    = 4;
+static const int LAUNCHER_TOOLTIP_DELAY_MS = 600;
+// Toast bar for non-fatal feedback (Sprint 3.2). Tick interval drives the
+// fade animation; duration is total visible time; fade is the trailing
+// portion during which alpha ramps to 0.
+static const int TIMER_ID_TOAST           = 5;
+static const int TOAST_TICK_MS            = 30;
+static const int TOAST_DURATION_MS        = 3000;
+static const int TOAST_FADE_MS            = 500;
+static const int TOAST_BAR_HEIGHT         = 24;
+
+// ADR-026 — drag-to-dock polling timer. Active only during ARMED / TRACKING
+// modes; fires every DRAG_DOCK_TICK_MS to read global cursor pos + L-button
+// state. Polling avoids subclassing third-party REAPER windows (Approach 2).
+static const int TIMER_ID_DRAG_DOCK       = 6;
+static const int DRAG_DOCK_TICK_MS        = 16;   // ~60 Hz preview update
+// Nav bar tooltip delay — reuses TIMER_ID_LAUNCHER_TIP for simplicity (the
+// two states never overlap: launcher hero hides nav bar tooltips; vice
+// versa). Same 600 ms delay.
+static const int TIMER_ID_NAVBAR_TIP      = 7;
+static const int NAVBAR_TOOLTIP_DELAY_MS  = 600;

@@ -61,6 +61,21 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   if (m_count >= MAX_PENDING) return;
   if (!name || !name[0]) return;
 
+  // B18: dead arbitrary tab — no toggle action AND no script command string
+  // (legacy v1.5.x save format, or script that no longer exists). Without a
+  // way to open the window, normal enqueue would burn MAX_RETRIES_ARBITRARY
+  // (~10s) of OnTimer ticks per tab, freezing the UI and spamming the log.
+  // One probe now: if the window happens to be open, fall through to capture;
+  // otherwise skip and let the user re-add manually.
+  if (toggleAction <= 0 && (!actionCmd || !actionCmd[0])) {
+    if (!WindowManager::FindReaperWindow(name, nullptr)) {
+      DBG("[MaxPane] CaptureQueue: SKIP dead arbitrary '%s' (no action, no cmd, not visible) for pane %d\n",
+          name, paneId);
+      return;
+    }
+    DBG("[MaxPane] CaptureQueue: dead arbitrary '%s' already visible — proceeding to capture\n", name);
+  }
+
   PendingCapture& pc = m_queue[m_count];
   memset(&pc, 0, sizeof(PendingCapture));
   pc.state = PendingCapture::WAITING;
@@ -78,11 +93,24 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
     safe_strncpy(pc.actionCommand, actionCmd, sizeof(pc.actionCommand));
   }
 
-  // Fire the toggle action if we have one.
-  // If deferAction is set (called from LoadState during startup), skip Main_OnCommand
-  // to avoid deadlocking REAPER during project load. The action will fire on first Tick.
+  // Fire the toggle action if we have one — but only if the window isn't
+  // already open. An unconditional toggle on an already-open arbitrary window
+  // (e.g. a toolbar the user has visible elsewhere) would CLOSE it, then we'd
+  // spend MAX_RETRIES_ARBITRARY ticks failing to find what we just closed.
+  // If deferAction is set (called from LoadState during startup), skip
+  // Main_OnCommand to avoid deadlocking REAPER during project load. The
+  // deferred action will fire on first Tick.
   if (!deferAction && toggleAction > 0 && g_Main_OnCommand) {
-    g_Main_OnCommand(toggleAction, 0);
+    bool alreadyOpen = false;
+    if (g_GetToggleCommandState) {
+      int state = g_GetToggleCommandState(toggleAction);
+      alreadyOpen = (state == 1);
+      DBG("[MaxPane] CaptureQueue: toggle state for arbitrary '%s' (action %d) = %d\n",
+          name, toggleAction, state);
+    }
+    if (!alreadyOpen) {
+      g_Main_OnCommand(toggleAction, 0);
+    }
   }
 
   m_count++;

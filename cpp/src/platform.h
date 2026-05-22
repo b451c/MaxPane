@@ -45,3 +45,41 @@ inline HWND CreateMaxPaneDialog(HWND parent, DLGPROC dlgProc, LPARAM param) {
   return SWELL_CreateDialog(nullptr, nullptr, parent, dlgProc, param);
 }
 #endif
+
+// Cross-platform UTF-8 text rendering helper.
+// macOS / Linux SWELL DrawText accepts UTF-8 byte sequences natively and
+// renders multi-byte glyphs (⌂ ⊕ ≡ ⚙ ♥ • ▼ ★ …) correctly. Windows native
+// DrawText is DrawTextA (ANSI / CP-1252) — multi-byte UTF-8 input gets
+// reinterpreted as one-byte-per-char mojibake (e.g. "⌂" → "âŒ‚"). Route
+// every paint-time text through this wrapper so all platforms render the
+// same UTF-8 string the same way. For ASCII-only inputs both branches are
+// effectively no-ops; the wrapper exists for the multi-byte path.
+#include <cstdlib>
+#include <cstring>
+inline int DrawTextUtf8(HDC hdc, const char* text, int len,
+                        LPRECT rect, UINT format)
+{
+#ifdef _WIN32
+  if (!text) return 0;
+  const int byteLen = (len < 0) ? (int)strlen(text) : len;
+  if (byteLen <= 0) return DrawTextA(hdc, text, byteLen, rect, format);
+  int wlen = MultiByteToWideChar(CP_UTF8, 0, text, byteLen, nullptr, 0);
+  if (wlen <= 0) return DrawTextA(hdc, text, byteLen, rect, format);
+  // Stack buffer for the typical (short) case — tab names, button labels,
+  // tooltips. 256 wchar_t covers ~256 BMP code points before falling back
+  // to malloc.
+  if (wlen <= 256) {
+    wchar_t wbuf[256];
+    MultiByteToWideChar(CP_UTF8, 0, text, byteLen, wbuf, wlen);
+    return DrawTextW(hdc, wbuf, wlen, rect, format);
+  }
+  wchar_t* wbuf = (wchar_t*)malloc((size_t)wlen * sizeof(wchar_t));
+  if (!wbuf) return DrawTextA(hdc, text, byteLen, rect, format);
+  MultiByteToWideChar(CP_UTF8, 0, text, byteLen, wbuf, wlen);
+  int r = DrawTextW(hdc, wbuf, wlen, rect, format);
+  free(wbuf);
+  return r;
+#else
+  return DrawText(hdc, text, len, rect, format);
+#endif
+}

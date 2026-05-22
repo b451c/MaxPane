@@ -14,6 +14,12 @@ namespace MenuIds {
   static const int OPEN_WINDOWS_BASE = 4000;
   static const int OPEN_WINDOWS_MAX = 4500;
   static const int TAB_CLOSE = 5000;
+  // C3 (ADR-027) — tab right-click "Close Others / to Right / All".
+  static const int TAB_CLOSE_OTHERS   = 5001;
+  static const int TAB_CLOSE_TO_RIGHT = 5002;
+  static const int TAB_CLOSE_ALL      = 5003;
+  // C2 (ADR-027) — toggle tab pinned state.
+  static const int TAB_TOGGLE_PINNED  = 5004;
   static const int TAB_MOVE_BASE = 5100;
   static const int WS_LOAD_BASE = 6000;
   static const int WS_SAVE = 6100;
@@ -29,6 +35,18 @@ namespace MenuIds {
   static const int MERGE  = 10002;
   static const int DELETE_PANE = 10003;
   static const int SOLO = 10004;
+  static const int SETTINGS = 10005;   // Sprint 3.1 — opens Settings dialog
+  // F1a (ADR-024) — per-container floating mode toggle. Single ID; menu
+  // entry label toggles between "Detach to Floating" and "Re-dock".
+  static const int TOGGLE_FLOATING = 10006;
+  // C5 (ADR-027) — always-on-top toggle. Visible only when isFloating.
+  static const int TOGGLE_FLOAT_ALWAYS_ON_TOP = 10007;
+  // Launcher workspace-card right-click menu (Sprint 2.5).
+  static const int LAUNCHER_CARD_LOAD        = 11000;
+  static const int LAUNCHER_CARD_RENAME      = 11001;
+  static const int LAUNCHER_CARD_DUPLICATE   = 11002;
+  static const int LAUNCHER_CARD_DELETE      = 11003;
+  static const int LAUNCHER_CARD_BIND_HOTKEY = 11004;
 }
 
 // Open window entry (populated by BuildPaneContextMenu's enumeration)
@@ -54,4 +72,6 @@ HMENU BuildPaneContextMenu(int paneId,
                            const WindowManager& winMgr,
                            const FavoritesManager& favMgr,
                            const WorkspaceManager& wsMgr,
-                           bool soloActive = false);
+                           bool soloActive = false,
+                           bool isFloating = false,
+                           bool floatAlwaysOnTop = false);

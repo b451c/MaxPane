@@ -1,0 +1,25 @@
+// Save Workspace dialog (Sprint 3.3 / ADR-020).
+// Format: Microsoft Resource Compiler (.rc). Processed on macOS/Linux by
+// swell_resgen.pl into save_workspace_dialog.rc_mac_dlg (included by the
+// .cpp DlgProc). On Windows compiled directly by rc.exe.
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include "save_workspace_dialog.h"
+
+IDD_SAVE_WORKSPACE DIALOGEX 0, 0, 300, 235
+STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
+CAPTION "Save Workspace"
+BEGIN
+    LTEXT           "Name:", -1, 10, 12, 50, 10
+    EDITTEXT        IDC_SAVE_NAME, 55, 10, 235, 14
+
+    LTEXT           "Existing workspaces (click to replace):", -1, 10, 35, 280, 10
+    LISTBOX         IDC_SAVE_LIST, 10, 50, 280, 135, LBS_NOTIFY | WS_BORDER | WS_VSCROLL
+
+    LTEXT           "", IDC_SAVE_STATUS, 10, 195, 280, 12
+
+    DEFPUSHBUTTON   "OK", 1, 175, 212, 55, 18
+    PUSHBUTTON      "Cancel", 2, 235, 212, 55, 18
+END

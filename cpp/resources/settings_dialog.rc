@@ -1,0 +1,49 @@
+// MaxPane Settings dialog (Sprint 3.1 / ADR-019).
+//
+// Originally planned with tabs + radio groups per ADR-019 — pivoted to a
+// single-page layout with a cycle-button for dark-mode. SWELL's .rc
+// macro vocabulary covers CHECKBOX / PUSHBUTTON / EDITTEXT / LTEXT but
+// not AUTOCHECKBOX / AUTORADIOBUTTON / SysTabControl32 cleanly, and
+// keeping the .rc cross-platform (Win32 rc.exe vs SWELL resgen) means
+// sticking to the intersection.
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include "settings_dialog.h"
+
+IDD_SETTINGS DIALOGEX 0, 0, 360, 295
+STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
+CAPTION "MaxPane Settings"
+BEGIN
+    // ---- General ----
+    LTEXT           "GENERAL", -1, 15, 12, 100, 10
+    CHECKBOX        "Open MaxPane automatically when REAPER starts",
+                    IDC_SET_AUTOOPEN, 25, 28, 320, 14
+    CHECKBOX        "Show navigation bar at top of every MaxPane",
+                    IDC_SET_SHOWNAVBAR, 25, 44, 320, 14
+
+    // ---- Appearance ----
+    LTEXT           "APPEARANCE", -1, 15, 72, 100, 10
+    LTEXT           "Color mode:", IDC_SET_DARK_GROUP, 25, 87, 100, 12
+    PUSHBUTTON      "Auto (follow system)", IDC_SET_DARK_CYCLE,
+                    25, 102, 175, 20
+
+    // ---- Hotkeys ----
+    LTEXT           "HOTKEYS", -1, 15, 140, 100, 10
+    LTEXT           "Bind keyboard shortcuts to MaxPane actions via REAPER's Actions dialog. Search for 'MaxPane' to find workspace slots 1-32, favorite slots 1-32, and navigation actions.",
+                    IDC_SET_HOTKEYS_LBL, 25, 155, 320, 35
+    PUSHBUTTON      "Open REAPER Actions...", IDC_SET_OPEN_ACTIONS,
+                    25, 195, 130, 20
+
+    // ---- Advanced ----
+    LTEXT           "ADVANCED", -1, 15, 233, 100, 10
+    LTEXT           "MaxPane v2.0 (development) — 32 workspace slots, 32 favorite slots, up to 8 instances.",
+                    IDC_SET_VERSION_LBL, 25, 248, 320, 18
+
+    // ---- Bottom button row (full breathing space above) ----
+    PUSHBUTTON      "Reset", IDC_SET_RESET,
+                    15, 273, 60, 18
+    DEFPUSHBUTTON   "OK", 1, 235, 273, 55, 18
+    PUSHBUTTON      "Cancel", 2, 295, 273, 55, 18
+END

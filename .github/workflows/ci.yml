@@ -1,0 +1,83 @@
+name: CI
+
+# Continuous integration — builds the plugin and runs unit tests on every push
+# and pull request targeting v2 or main. Complements .github/workflows/build.yml,
+# which fires only on release tag pushes (v*) to produce distribution artifacts.
+#
+# Why a separate workflow:
+#   - Build type differs: CI uses Debug (assertions on, fast compile); release
+#     uses Release.
+#   - Triggers differ: CI on every commit, release only on tags.
+#   - Risk isolation: editing the release workflow could accidentally break the
+#     tag-driven artifact + GitHub Release pipeline.
+#
+# Per ADR-017 (multiplatform parity), all 4 platforms must build green before
+# v2.0 ships. Per ADR-018, test suite must run as part of CI.
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+jobs:
+  build-test:
+    # Only run on the public `origin` repository. Pushes to the private
+    # `archive` mirror (b451c/MaxPane-archive) would consume free-tier
+    # Actions minutes during v2.0 dev — owner directive: validate CI only
+    # once v2.0 lands on the public origin where Actions runs free.
+    if: github.repository == 'b451c/MaxPane'
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macOS arm64
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=arm64"
+          - os: macos-14
+            platform: macOS x86_64
+            cmake_flags: "-DCMAKE_OSX_ARCHITECTURES=x86_64"
+          - os: ubuntu-latest
+            platform: Linux x86_64
+            cmake_flags: ""
+          - os: ubuntu-22.04-arm
+            platform: Linux aarch64
+            cmake_flags: ""
+          - os: windows-latest
+            platform: Windows x64
+            cmake_flags: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # SDK and WDL are .gitignored (cloned separately, large + 3rd-party).
+      # --depth=1 keeps the clone cheap (~30 MB total vs ~500 MB full history).
+      - name: Clone REAPER SDK
+        run: git clone --depth=1 https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
+
+      - name: Clone WDL
+        run: git clone --depth=1 https://github.com/justinfrankel/WDL.git cpp/WDL
+
+      # Configure step is split because Windows needs an explicit VS generator
+      # while Unix Makefiles is the default everywhere else.
+      - name: Configure (macOS / Linux)
+        if: runner.os != 'Windows'
+        working-directory: cpp
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAXPANE_BUILD_TESTS=ON ${{ matrix.cmake_flags }}
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        working-directory: cpp
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DMAXPANE_BUILD_TESTS=ON
+
+      # cmake --build is portable across generators (make / MSBuild / Ninja).
+      # --config Debug is only honored by multi-config generators (Visual Studio).
+      - name: Build
+        working-directory: cpp
+        run: cmake --build build --config Debug --parallel
+
+      - name: Run unit tests
+        working-directory: cpp/build
+        run: ctest --output-on-failure --build-config Debug

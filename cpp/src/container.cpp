@@ -9,6 +9,11 @@
 #include "project_state.h"
 #include "state_accessor.h"
 #include "swell_cocoa_helpers.h"
+#include "launcher.h"
+#include "instance_manager.h"
+#include "save_workspace_dialog.h"
+#include "settings_dialog.h"
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -17,8 +22,9 @@
 // Constructor / lifecycle
 // =========================================================================
 
-MaxPaneContainer::MaxPaneContainer()
-  : m_hwnd(nullptr)
+MaxPaneContainer::MaxPaneContainer(int instanceId)
+  : m_instanceId(instanceId)
+  , m_hwnd(nullptr)
   , m_visible(false)
   , m_captureQueue(std::make_unique<CaptureQueue>())
   , m_favMgr(std::make_unique<FavoritesManager>())
@@ -28,12 +34,31 @@ MaxPaneContainer::MaxPaneContainer()
   , m_hoverTab(-1)
   , m_pendingRppLoad(false)
 {
+  // Compute per-instance identifiers. Instance 0 keeps the v1.5.x legacy
+  // names so existing user data continues to load without migration.
+  if (m_instanceId <= 0) {
+    safe_strncpy(m_extSection,   "MaxPane_cpp",       sizeof(m_extSection));
+    safe_strncpy(m_dockIdent,    "MaxPane_container", sizeof(m_dockIdent));
+    safe_strncpy(m_rppChunkTag,  "MAXPANE_STATE",     sizeof(m_rppChunkTag));
+  } else {
+    snprintf(m_extSection,   sizeof(m_extSection),   "MaxPane_cpp_%d",       m_instanceId);
+    snprintf(m_dockIdent,    sizeof(m_dockIdent),    "MaxPane_container_%d", m_instanceId);
+    snprintf(m_rppChunkTag,  sizeof(m_rppChunkTag),  "MAXPANE_STATE_%d",     m_instanceId);
+  }
+
   m_captureMode.active = false;
   m_captureMode.targetPaneId = -1;
   memset(&m_dragState, 0, sizeof(m_dragState));
   m_dragState.sourcePaneId = -1;
   m_dragState.highlightPaneId = -1;
+  DragDock::Reset(m_drag);
   m_winMgr.Init();
+
+  // Propagate section to managers that persist state.
+  // Favorites are intentionally SHARED across instances (ADR-009) — leave
+  // FavMgr on EXT_SECTION so adding a fav in any instance shows everywhere.
+  // Workspaces are per-instance.
+  m_wsMgr->SetSection(m_extSection);
 
   // Create cached GDI objects for static colors
   m_brushTabBarBg = CreateSolidBrush(COLOR_TAB_BAR_BG);
@@ -65,15 +90,48 @@ bool MaxPaneContainer::Create()
 {
   if (m_hwnd) return true;
 
+  // F1a (ADR-024) — read floating-mode state BEFORE deciding dock vs float.
+  // m_floating == true → skip DockWindowAddEx, make HWND top-level instead.
+  LoadFloatingState();
+
+  // ADR-026 — read nav bar visibility BEFORE the tree's first Recalculate so
+  // pane rects start in the right place. Tree origin reserves the top strip
+  // when nav bar is visible.
+  LoadNavBarPref();
+  m_tree.SetOrigin(0, NavBarReservedHeight());
+
   m_hwnd = CreateMaxPaneDialog(g_reaperMainHwnd, DlgProc, (LPARAM)this);
   if (!m_hwnd) return false;
 
   SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
   m_favMgr->Load();
+  m_wsMgr->LoadList();   // launcher needs the workspace list available at first paint
   LoadState();
 
-  if (g_DockWindowAddEx) {
-    g_DockWindowAddEx(m_hwnd, "MaxPane", "MaxPane_container", true);
+  if (m_floating) {
+    // Floating path — make top-level + restore geometry + apply chrome.
+    // SetParent(nullptr) on macOS SWELL recreates the NSWindow (Path B —
+    // proven safe in DoRelease); on Win32 the dialog becomes top-level.
+    SetParent(m_hwnd, nullptr);
+    char title[64];
+    if (m_instanceId <= 0) {
+      safe_strncpy(title, "MaxPane", sizeof(title));
+    } else {
+      snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
+    }
+    ApplyFloatingWindowChrome(m_hwnd, title);
+    RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
+    ClampRectToVisibleScreen(&r);
+    m_floatX = r.left;
+    m_floatY = r.top;
+    m_floatW = r.right - r.left;
+    m_floatH = r.bottom - r.top;
+    SetWindowPos(m_hwnd, nullptr, m_floatX, m_floatY, m_floatW, m_floatH,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    // C5 (ADR-027) — restore persisted always-on-top.
+    if (m_floatAlwaysOnTop) SetWindowAlwaysOnTop(m_hwnd, true);
+  } else if (g_DockWindowAddEx) {
+    g_DockWindowAddEx(m_hwnd, "MaxPane", m_dockIdent, true);
   }
 
   SetTimer(m_hwnd, TIMER_ID_CHECK, TIMER_INTERVAL, nullptr);
@@ -81,10 +139,78 @@ bool MaxPaneContainer::Create()
   m_visible = true;
 
   if (g_SetExtState) {
-    g_SetExtState("MaxPane_cpp", "was_visible", "1", true);
+    g_SetExtState(m_extSection, "was_visible", "1", true);
   }
 
   return true;
+}
+
+// F1a (ADR-024) — Detach: deregister from REAPER docker, make HWND
+// top-level, restore (or default) geometry, apply window chrome. Captured
+// tabs follow because they're WS_CHILD of m_hwnd — only m_hwnd's parent
+// changes (Path B reparent).
+void MaxPaneContainer::DetachToFloating()
+{
+  if (!m_hwnd || m_floating) return;
+
+  // Default geometry on first detach: position near REAPER main, sized to
+  // sensible default. If we have previously-floated geometry persisted,
+  // LoadFloatingState already populated m_float* — keep those.
+  // Caller may have used the default (100, 100, 800, 600) or restored values.
+
+  if (g_DockWindowRemove) {
+    g_DockWindowRemove(m_hwnd);
+  }
+  SetParent(m_hwnd, nullptr);
+
+  char title[64];
+  if (m_instanceId <= 0) {
+    safe_strncpy(title, "MaxPane", sizeof(title));
+  } else {
+    snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
+  }
+  ApplyFloatingWindowChrome(m_hwnd, title);
+
+  RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
+  ClampRectToVisibleScreen(&r);
+  m_floatX = r.left;
+  m_floatY = r.top;
+  m_floatW = r.right - r.left;
+  m_floatH = r.bottom - r.top;
+  SetWindowPos(m_hwnd, nullptr, m_floatX, m_floatY, m_floatW, m_floatH,
+               SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  ShowWindow(m_hwnd, SW_SHOW);
+  ForceViewLayoutAndDisplay(m_hwnd);
+
+  m_floating = true;
+  // C5 (ADR-027) — re-apply persisted always-on-top after the orphan
+  // NSWindow exists. SetParent(nullptr) earlier recreates the NSWindow
+  // with default level; we restore the user's preference.
+  if (m_floatAlwaysOnTop) SetWindowAlwaysOnTop(m_hwnd, true);
+  SaveFloatingState();
+  DBG("[MaxPane] DetachToFloating[%s]: now at (%d,%d %dx%d)\n",
+      m_extSection, m_floatX, m_floatY, m_floatW, m_floatH);
+}
+
+// F1a (ADR-024) — Re-dock: capture current floating geometry (for next
+// detach), re-register in REAPER docker. DockWindowAddEx accepts the same
+// HWND and reparents it back into the docker chain.
+void MaxPaneContainer::RedockToContainer()
+{
+  if (!m_hwnd || !m_floating) return;
+
+  CaptureFloatGeometry();  // remember current geometry for next detach
+
+  m_floating = false;
+  SaveFloatingState();
+
+  if (g_DockWindowAddEx) {
+    g_DockWindowAddEx(m_hwnd, "MaxPane", m_dockIdent, true);
+  }
+  ShowWindow(m_hwnd, SW_SHOW);
+  ForceViewLayoutAndDisplay(m_hwnd);
+  DBG("[MaxPane] RedockToContainer[%s]: returned to docker, saved geom (%d,%d %dx%d)\n",
+      m_extSection, m_floatX, m_floatY, m_floatW, m_floatH);
 }
 
 // Defined in main.cpp — set by onAtExit to prevent Shutdown from overwriting with empty panes
@@ -98,6 +224,16 @@ void MaxPaneContainer::Shutdown()
 
   if (!g_atexitSaved) {
     SaveState();
+    // F1a (ADR-024) — persist final floating geometry so user's last
+    // position is restored next session. Atexit path (Cmd+Q) also needs
+    // this in case session ends via NSApplication terminate that bypasses
+    // hookcommand 40004 — Toggle's Shutdown captures it inline; atexit's
+    // MergeCapturesIntoStaleListForSection path runs on the same atexit
+    // lambda that already calls SaveState equivalents.
+    if (m_floating) {
+      CaptureFloatGeometry();
+      SaveFloatingState();
+    }
   }
 
   if (m_captureMode.active) {
@@ -146,16 +282,36 @@ void MaxPaneContainer::Toggle()
 {
   if (!m_hwnd) { Create(); return; }
   DBG("[MaxPane] Toggle: closing\n");
-  // User explicitly closing — mark as not visible for next startup
   if (g_SetExtState) {
-    g_SetExtState("MaxPane_cpp", "was_visible", "0", true);
+    g_SetExtState(m_extSection, "was_visible", "0", true);
   }
+  // Record currently-captured action IDs so the next REAPER startup can close
+  // any ghosts REAPER restores from its wnd_vis cache. A prior LoadWorkspace
+  // may already have written entries here for pre-switch windows still
+  // floating — the helper merges (doesn't overwrite) so those aren't lost.
+  MergeCapturesIntoStaleListForSection(m_extSection, m_winMgr);
   Shutdown();
 }
 
 bool MaxPaneContainer::IsVisible() const
 {
   return m_hwnd && IsWindowVisible(m_hwnd);
+}
+
+// Whole container empty + no other UI mode active = launcher hero state
+// (ADR-013). When true, OnPaint replaces the generic empty-pane UI with
+// the workspace launcher hero (cards + capture CTA).
+bool MaxPaneContainer::IsInLauncherMode() const
+{
+  if (m_soloActive) return false;
+  if (m_captureMode.active) return false;
+  if (m_dragState.active) return false;
+  if (m_tree.GetLeafCount() != 1) return false;
+  int paneId = m_tree.GetPaneId(m_tree.GetLeafList()[0]);
+  if (paneId < 0) return false;
+  const PaneState* ps = m_winMgr.GetPaneState(paneId);
+  if (ps && ps->tabCount > 0) return false;
+  return true;
 }
 
 // =========================================================================
@@ -167,7 +323,13 @@ void MaxPaneContainer::RefreshLayout()
   if (!m_hwnd) return;
   RECT rc;
   GetClientRect(m_hwnd, &rc);
-  m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+  // ADR-026 — reserve nav bar height at the top. Tree origin already
+  // points at NavBarReservedHeight() so the dimensions we pass here are
+  // the *available* height for the pane grid.
+  int navH = NavBarReservedHeight();
+  int availH = (rc.bottom - rc.top) - navH;
+  if (availH < 1) availH = 1;
+  m_tree.Recalculate(rc.right - rc.left, availH);
   m_winMgr.RepositionAll(m_tree);
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }
@@ -231,7 +393,21 @@ void MaxPaneContainer::MergePane(int paneId)
   if (nodeIdx < 0) return;
   if (!m_tree.CanMerge(nodeIdx)) return;
 
-  // Release the pane being merged
+  // Release the pane being merged — record action IDs for stale-cleanup
+  // BEFORE the release wipes PaneState. Defense-in-depth against the
+  // wnd_vis-cache race (B13/B16): even if mid-session toggle succeeds, the
+  // startup verify pass is a no-op for state==0 windows; the win comes
+  // from the failure case.
+  {
+    const PaneState* ps = m_winMgr.GetPaneState(paneId);
+    if (ps) {
+      for (int t = 0; t < ps->tabCount; t++) {
+        if (ps->tabs[t].captured && ps->tabs[t].toggleAction > 0) {
+          AppendActionToStaleListForSection(m_extSection, ps->tabs[t].toggleAction);
+        }
+      }
+    }
+  }
   m_winMgr.ReleaseWindow(paneId);
 
   m_tree.MergeNode(nodeIdx);
@@ -334,22 +510,23 @@ void MaxPaneContainer::OnTimer()
   // Check if deferred RPP state has become available.
   // REAPER parses the RPP <MAXPANE_STATE> chunk asynchronously —
   // it may arrive after Create()/LoadState() already ran.
-  if (m_pendingRppLoad && g_pendingProjectState.valid) {
+  if (m_pendingRppLoad && g_pendingProjectState[m_instanceId].valid) {
     DBG("[MaxPane] OnTimer: deferred RPP state now available (%d lines), applying\n",
-        g_pendingProjectState.lineCount);
+        g_pendingProjectState[m_instanceId].lineCount);
     m_pendingRppLoad = false;
 
-    RppReadAccessor rppAcc(g_pendingProjectState.lines, g_pendingProjectState.lineCount);
-    const char* treeVer = rppAcc.Get(EXT_SECTION, "tree_version");
+    RppReadAccessor rppAcc(g_pendingProjectState[m_instanceId].lines,
+                           g_pendingProjectState[m_instanceId].lineCount);
+    const char* treeVer = rppAcc.Get(m_extSection, "tree_version");
     bool hasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
     if (hasTreeFormat) {
       NodeSnapshot snap[MAX_TREE_NODES];
       memset(snap, 0, sizeof(snap));
-      int nodeCount = WorkspaceManager::ReadTreeNodesStatic("", snap, rppAcc);
+      int nodeCount = WorkspaceManager::ReadTreeNodesStatic(m_extSection, "", snap, rppAcc);
       if (nodeCount > 0) {
         PaneSnapshot panes[MAX_PANES];
         memset(panes, 0, sizeof(panes));
-        WorkspaceManager::ReadPaneTabsStatic("", panes, MAX_PANES, rppAcc);
+        WorkspaceManager::ReadPaneTabsStatic(m_extSection, "", panes, MAX_PANES, rppAcc);
 
         // Release any windows from default state before applying RPP state
         m_captureQueue->CancelAll();
@@ -370,61 +547,7 @@ void MaxPaneContainer::OnTimer()
         DBG("[MaxPane] OnTimer: deferred RPP state applied (nodes=%d)\n", nodeCount);
       }
     }
-    g_pendingProjectState.valid = false;  // consumed
-  }
-
-  // Deferred stale action cleanup.
-  // After a workspace switch, stale windows (not in the new workspace) are
-  // hidden but not toggled off — SetParent(nullptr) + Main_OnCommand doesn't
-  // work because REAPER loses track of reparented HWNDs.  Instead we persist
-  // stale action IDs and clean them up here, after REAPER has fully started
-  // and reopened windows from wnd_vis with reliable toggle state.
-  if (m_staleCleanupCountdown > 0) {
-    m_staleCleanupCountdown--;
-    if (m_staleCleanupCountdown == 0 && g_GetExtState && g_SetExtState && g_Main_OnCommand) {
-      const char* staleStr = g_GetExtState(EXT_SECTION, "stale_toggle_actions");
-      if (staleStr && staleStr[0]) {
-        DBG("[MaxPane] OnTimer: deferred stale cleanup: %s\n", staleStr);
-        const char* cur = staleStr;
-        while (*cur) {
-          int a = 0;
-          while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
-          if (a > 0) {
-            int state = g_GetToggleCommandState ? g_GetToggleCommandState(a) : -1;
-            DBG("[MaxPane] OnTimer: stale action=%d state=%d\n", a, state);
-            if (state > 0) {
-              g_Main_OnCommand(a, 0);
-              char st[256];
-              if (GetSearchTitleForAction(a, st, sizeof(st))) {
-                HWND h1 = WindowManager::FindReaperWindow(st);
-                if (h1 && IsWindow(h1) && IsWindowVisible(h1)) ShowWindow(h1, SW_HIDE);
-              }
-              DBG("[MaxPane] OnTimer: toggled off action=%d (state=%d)\n", a, state);
-            } else if (state == -1) {
-              DBG("[MaxPane] OnTimer: SKIP state=-1 action=%d (script/unknown)\n", a);
-            } else {
-              // state=0: check window existence, double-toggle if visible
-              char searchTitle[256];
-              if (GetSearchTitleForAction(a, searchTitle, sizeof(searchTitle))) {
-                HWND h = WindowManager::FindReaperWindow(searchTitle);
-                if (h && IsWindow(h) && IsWindowVisible(h)) {
-                  g_Main_OnCommand(a, 0);
-                  g_Main_OnCommand(a, 0);
-                  bool stillVis = (IsWindow(h) && IsWindowVisible(h));
-                  if (stillVis) ShowWindow(h, SW_HIDE);
-                  DBG("[MaxPane] OnTimer: double-toggled state=0 action=%d — '%s' stillVis=%d\n", a, searchTitle, stillVis);
-                } else {
-                  DBG("[MaxPane] OnTimer: state=0 action=%d — '%s' not found/visible\n", a, searchTitle);
-                }
-              }
-            }
-          }
-          if (*cur == ',') cur++;
-          else break;
-        }
-        g_SetExtState(EXT_SECTION, "stale_toggle_actions", "", true);
-      }
-    }
+    g_pendingProjectState[m_instanceId].valid = false;  // consumed
   }
 
   if (m_winMgr.CheckAlive()) {
@@ -440,6 +563,45 @@ void MaxPaneContainer::OnTimer()
 
 void MaxPaneContainer::OnContextMenu(int x, int y)
 {
+  // Sprint 2.5 — right-click on a launcher workspace card opens a card menu
+  // (Load / Rename / Duplicate / Delete / Bind Hotkey). Right-click on the
+  // launcher background still falls through to the standard pane menu.
+  if (IsInLauncherMode()) {
+    RECT cr;
+    GetClientRect(m_hwnd, &cr);
+    m_wsMgr->LoadList();
+    Launcher::Layout lay = Launcher::Compute(cr, *m_wsMgr);
+    const int hit = Launcher::HitTest(lay, x, y);
+    if (hit >= 0) {
+      OpenLauncherCardMenu(hit, x, y);
+      return;
+    }
+  }
+
+  // ADR-026 — Home overlay also paints workspace cards (reused launcher
+  // primitives) over the current layout. Right-click on a card there must
+  // open the same card menu, not the underlying pane menu. Without this
+  // the overlay's right-click leaked through to whichever pane was under
+  // the card. Geometry below nav bar matches OnHomeOverlayClick.
+  if (m_homeOverlay) {
+    RECT cr;
+    GetClientRect(m_hwnd, &cr);
+    RECT below = cr;
+    below.top += NavBarReservedHeight();
+    m_wsMgr->LoadList();
+    Launcher::Layout lay = Launcher::Compute(below, *m_wsMgr);
+    const int hit = Launcher::HitTest(lay, x, y);
+    if (hit >= 0) {
+      OpenLauncherCardMenu(hit, x, y);
+      return;
+    }
+    // Right-click outside any card on the overlay = cancel overlay
+    // (mirrors Esc / left-click-outside behaviour). Eat the event so it
+    // doesn't fall through to pane menu under the overlay backdrop.
+    CloseHomeOverlay();
+    return;
+  }
+
   int paneId = PaneAtPoint(x, y);
   if (paneId < 0) return;
 
@@ -472,7 +634,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
   }
 
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -490,7 +652,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
 void MaxPaneContainer::OnPaneMenuButtonClick(int paneId, int x, int y)
 {
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -505,12 +667,257 @@ void MaxPaneContainer::OnPaneMenuButtonClick(int paneId, int x, int y)
   HandlePaneMenuCommand(cmd, paneId);
 }
 
+void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
+{
+  if (cardIdx < 0 || cardIdx >= m_wsMgr->GetCount()) return;
+
+  // Cache the workspace name BEFORE building the menu — Delete reshuffles
+  // indices so we can't safely re-read via cardIdx after dispatch.
+  const WorkspaceEntry srcEntry = m_wsMgr->Get(cardIdx);
+
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+
+  int pos = 0;
+
+  // Disabled header showing workspace name + slot number (for hotkey reference).
+  char header[128];
+  snprintf(header, sizeof(header), "%s  [Slot %d]", srcEntry.name, cardIdx + 1);
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.fState = MFS_DISABLED;
+    mi.dwTypeData = header;
+    InsertMenuItem(menu, pos++, TRUE, &mi);
+  }
+  {
+    MENUITEMINFO sep = {};
+    sep.cbSize = sizeof(sep);
+    sep.fMask = MIIM_TYPE;
+    sep.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, pos++, TRUE, &sep);
+  }
+
+  struct Item { int id; const char* label; };
+  const Item items[] = {
+    { MenuIds::LAUNCHER_CARD_LOAD,        "Load" },
+    { MenuIds::LAUNCHER_CARD_RENAME,      "Rename..." },
+    { MenuIds::LAUNCHER_CARD_DUPLICATE,   "Duplicate..." },
+    { MenuIds::LAUNCHER_CARD_DELETE,      "Delete" },
+    { MenuIds::LAUNCHER_CARD_BIND_HOTKEY, "Bind Hotkey..." },
+  };
+  for (const Item& it : items) {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = it.id;
+    mi.dwTypeData = (char*)it.label;
+    InsertMenuItem(menu, pos++, TRUE, &mi);
+  }
+
+  POINT pt = { x, y };
+  ClientToScreen(m_hwnd, &pt);
+  const int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY,
+                                 pt.x, pt.y, 0, m_hwnd, nullptr);
+  DestroyMenu(menu);
+
+  switch (cmd) {
+    case MenuIds::LAUNCHER_CARD_LOAD:
+      LoadWorkspace(srcEntry.name);
+      break;
+
+    case MenuIds::LAUNCHER_CARD_RENAME: {
+      char buf[MAX_WORKSPACE_NAME];
+      safe_strncpy(buf, srcEntry.name, sizeof(buf));
+      if (g_GetUserInputs &&
+          g_GetUserInputs("Rename Workspace", 1, "Name:,extrawidth=200",
+                          buf, sizeof(buf)) &&
+          buf[0]) {
+        if (strcmp(buf, srcEntry.name) == 0) break;   // no-op
+        char msg[160];
+        if (m_wsMgr->Rename(cardIdx, buf)) {
+          snprintf(msg, sizeof(msg), "Renamed to '%s'", buf);
+          ShowToast(msg);
+          InvalidateRect(m_hwnd, nullptr, FALSE);
+        } else {
+          snprintf(msg, sizeof(msg), "Workspace '%s' already exists", buf);
+          ShowToast(msg);
+        }
+      }
+      break;
+    }
+
+    case MenuIds::LAUNCHER_CARD_DUPLICATE: {
+      char buf[MAX_WORKSPACE_NAME];
+      snprintf(buf, sizeof(buf), "%s copy", srcEntry.name);
+      if (g_GetUserInputs &&
+          g_GetUserInputs("Duplicate Workspace", 1, "Name:,extrawidth=200",
+                          buf, sizeof(buf)) &&
+          buf[0]) {
+        char msg[160];
+        if (m_wsMgr->Duplicate(cardIdx, buf)) {
+          snprintf(msg, sizeof(msg), "Duplicated to '%s'", buf);
+          ShowToast(msg);
+          InvalidateRect(m_hwnd, nullptr, FALSE);
+        } else if (m_wsMgr->Find(buf)) {
+          snprintf(msg, sizeof(msg), "Workspace '%s' already exists", buf);
+          ShowToast(msg);
+        } else {
+          snprintf(msg, sizeof(msg), "Workspace limit reached (%d)", MAX_WORKSPACES);
+          ShowToast(msg);
+        }
+      }
+      break;
+    }
+
+    case MenuIds::LAUNCHER_CARD_DELETE: {
+      char msg[160];
+      snprintf(msg, sizeof(msg), "Deleted '%s'", srcEntry.name);
+      m_wsMgr->Delete(srcEntry.name);
+      ShowToast(msg);
+      InvalidateRect(m_hwnd, nullptr, FALSE);
+      break;
+    }
+
+    case MenuIds::LAUNCHER_CARD_BIND_HOTKEY:
+      // No REAPER API to pre-filter/pre-select the Actions dialog. User
+      // searches "MaxPane_WsSlot_<N+1>" manually. Slot number is shown in
+      // the menu header above for reference.
+      if (g_Main_OnCommand) g_Main_OnCommand(40605, 0);
+      break;
+  }
+}
+
+// =========================================================================
+// Toast bar — transient feedback for non-fatal events (Sprint 3.2)
+// =========================================================================
+
+void MaxPaneContainer::ShowToast(const char* msg)
+{
+  if (!msg) msg = "";
+  safe_strncpy(m_toastMessage, msg, sizeof(m_toastMessage));
+  m_toastDeadlineMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count() + TOAST_DURATION_MS;
+  if (m_hwnd) {
+    SetTimer(m_hwnd, TIMER_ID_TOAST, TOAST_TICK_MS, nullptr);
+    RECT cr;
+    GetClientRect(m_hwnd, &cr);
+    RECT bar = cr;
+    bar.top = cr.bottom - TOAST_BAR_HEIGHT;
+    if (bar.top < cr.top) bar.top = cr.top;
+    InvalidateRect(m_hwnd, &bar, FALSE);
+  }
+}
+
+void MaxPaneContainer::PaintToast(HDC hdc, const RECT& clientRect)
+{
+  if (m_toastDeadlineMs == 0 || m_toastMessage[0] == '\0') return;
+
+  const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count();
+  if (now >= m_toastDeadlineMs) return;   // timer will reap and repaint
+
+  const long long msLeft = m_toastDeadlineMs - now;
+
+  // Fade alpha 0..255 — linear ramp during the trailing TOAST_FADE_MS window.
+  int alpha = 255;
+  if (msLeft < TOAST_FADE_MS) {
+    alpha = (int)((msLeft * 255) / TOAST_FADE_MS);
+    if (alpha < 0) alpha = 0;
+  }
+
+  // SWELL FillRect has no per-pixel alpha; approximate the fade by lerping
+  // the foreground text color toward the bar background as alpha → 0.
+  RECT bar = clientRect;
+  bar.top = clientRect.bottom - TOAST_BAR_HEIGHT;
+  if (bar.top < clientRect.top) bar.top = clientRect.top;
+
+  HBRUSH bg = CreateSolidBrush(COLOR_TAB_BAR_BG);
+  if (bg) {
+    FillRect(hdc, &bar, bg);
+    DeleteObject(bg);
+  }
+
+  auto lerp = [&](int from, int to) -> int {
+    return to + (from - to) * alpha / 255;
+  };
+  const int rF = GetRValue(COLOR_TAB_ACTIVE_TEXT);
+  const int gF = GetGValue(COLOR_TAB_ACTIVE_TEXT);
+  const int bF = GetBValue(COLOR_TAB_ACTIVE_TEXT);
+  const int rB = GetRValue(COLOR_TAB_BAR_BG);
+  const int gB = GetGValue(COLOR_TAB_BAR_BG);
+  const int bB = GetBValue(COLOR_TAB_BAR_BG);
+  SetTextColor(hdc, RGB(lerp(rF, rB), lerp(gF, gB), lerp(bF, bB)));
+  SetBkMode(hdc, TRANSPARENT);
+
+  RECT textRect = bar;
+  textRect.left += 12;
+  textRect.right -= 12;
+  DrawTextUtf8(hdc, m_toastMessage, -1, &textRect,
+           DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
 {
   if (cmd == MenuIds::TAB_CLOSE) {
+    // Record action ID before close — see ReleaseWindow path above for why.
+    if (const TabEntry* t = m_winMgr.GetTab(paneId, tabIdx)) {
+      if (t->captured && t->toggleAction > 0) {
+        AppendActionToStaleListForSection(m_extSection, t->toggleAction);
+      }
+    }
+    RecordClosedTab(paneId, tabIdx);  // C1 — capture snapshot before destroy
     m_winMgr.CloseTab(paneId, tabIdx);
     RefreshLayout();
     SaveState();
+  } else if (cmd == MenuIds::TAB_CLOSE_OTHERS ||
+             cmd == MenuIds::TAB_CLOSE_TO_RIGHT ||
+             cmd == MenuIds::TAB_CLOSE_ALL) {
+    // C3 (ADR-027) — bulk-close family. Close from the right so earlier
+    // indices stay valid. For Others, we close to the right of `tabIdx`
+    // first (its index is stable), then to the left (its index then
+    // shifts left by 1 per close, but the i in our loop already
+    // descends — so positions match the live list).
+    int tabCount = m_winMgr.GetTabCount(paneId);
+    auto recordAndClose = [&](int i) {
+      if (const TabEntry* t = m_winMgr.GetTab(paneId, i)) {
+        if (t->captured && t->toggleAction > 0) {
+          AppendActionToStaleListForSection(m_extSection, t->toggleAction);
+        }
+      }
+      RecordClosedTab(paneId, i);  // C1 — capture snapshot before destroy
+      m_winMgr.CloseTab(paneId, i);
+    };
+    // C2 (ADR-027) — pinned tabs are exempt from bulk close. They survive
+    // Close Others / Close to Right / Close All. The clicked tab (if pinned)
+    // also survives — even from "Close All" — because users expect "All"
+    // to mean "all that aren't deliberately stuck open".
+    auto maybeRecordAndClose = [&](int i) {
+      const TabEntry* t = m_winMgr.GetTab(paneId, i);
+      if (t && t->pinned) return;
+      recordAndClose(i);
+    };
+    if (cmd == MenuIds::TAB_CLOSE_ALL) {
+      for (int i = tabCount - 1; i >= 0; i--) maybeRecordAndClose(i);
+    } else if (cmd == MenuIds::TAB_CLOSE_TO_RIGHT) {
+      for (int i = tabCount - 1; i > tabIdx; i--) maybeRecordAndClose(i);
+    } else { // TAB_CLOSE_OTHERS
+      for (int i = tabCount - 1; i > tabIdx; i--) maybeRecordAndClose(i);
+      for (int i = tabIdx - 1; i >= 0; i--) maybeRecordAndClose(i);
+    }
+    RefreshLayout();
+    SaveState();
+  } else if (cmd == MenuIds::TAB_TOGGLE_PINNED) {
+    // C2 (ADR-027) — flip pinned, then SetTabPinned re-sorts the pane.
+    const TabEntry* t = m_winMgr.GetTab(paneId, tabIdx);
+    if (t) {
+      m_winMgr.SetTabPinned(paneId, tabIdx, !t->pinned);
+      RefreshLayout();
+      SaveState();
+    }
   } else if (cmd >= MenuIds::TAB_MOVE_BASE && cmd < MenuIds::TAB_MOVE_BASE + MAX_PANES) {
     int targetPane = cmd - MenuIds::TAB_MOVE_BASE;
     m_winMgr.MoveTab(paneId, tabIdx, targetPane);
@@ -662,6 +1069,11 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
   if (cmd == MenuIds::RELEASE) {
     const PaneState* ps = m_winMgr.GetPaneState(paneId);
     if (ps && ps->activeTab >= 0) {
+      // Record action ID for stale-cleanup before close (see HandleTabMenuCommand).
+      const TabEntry& t = ps->tabs[ps->activeTab];
+      if (t.captured && t.toggleAction > 0) {
+        AppendActionToStaleListForSection(m_extSection, t.toggleAction);
+      }
       m_winMgr.CloseTab(paneId, ps->activeTab);
     }
     RefreshLayout();
@@ -669,9 +1081,33 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
-  // Auto-open toggle
+  // Auto-open toggle (legacy menu id — kept for v1.5.x bindings that may
+  // reference it; functionally moved to Settings dialog per ADR-019).
   if (cmd == MenuIds::AUTO_OPEN) {
     SetAutoOpenEnabled(!IsAutoOpenEnabled());
+    return;
+  }
+
+  // Settings dialog
+  if (cmd == MenuIds::SETTINGS) {
+    OpenSettingsDialog(m_hwnd);
+    InvalidateRect(m_hwnd, nullptr, FALSE);  // dark mode change repaint
+    return;
+  }
+
+  // F1a (ADR-024) — Toggle floating mode for whole container.
+  if (cmd == MenuIds::TOGGLE_FLOATING) {
+    if (m_floating) RedockToContainer();
+    else            DetachToFloating();
+    return;
+  }
+
+  // C5 (ADR-027) — Always on top (only meaningful when floating).
+  if (cmd == MenuIds::TOGGLE_FLOAT_ALWAYS_ON_TOP) {
+    if (!m_floating) return;  // defensive: menu hides this when not floating
+    m_floatAlwaysOnTop = !m_floatAlwaysOnTop;
+    SetWindowAlwaysOnTop(m_hwnd, m_floatAlwaysOnTop);
+    SaveFloatingState();
     return;
   }
 
@@ -683,73 +1119,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
   // Favorites — capture from favorite
   if (cmd >= MenuIds::FAV_BASE && cmd < MenuIds::FAV_BASE + MAX_FAVORITES) {
-    int favIdx = cmd - MenuIds::FAV_BASE;
-    if (favIdx >= 0 && favIdx < m_favMgr->GetCount()) {
-      const FavoriteEntry& fav = m_favMgr->Get(favIdx);
-      DBG("[MaxPane] FAV CLICK: '%s' search='%s' action=%d cmd='%s' isKnown=%d pane=%d\n",
-          fav.name, fav.searchTitle, fav.toggleAction, fav.actionCommand, fav.isKnown, paneId);
-
-      HWND found = WindowManager::FindReaperWindow(fav.searchTitle, m_hwnd);
-      DBG("[MaxPane] FAV CLICK: FindReaperWindow('%s') -> %p\n", fav.searchTitle, (void*)found);
-      if (found && fav.isKnown) {
-        // Known windows don't need dock frame logic — capture directly
-        DBG("[MaxPane] FAV CLICK: known window found, capturing directly\n");
-        for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
-          if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
-            m_winMgr.CaptureByIndex(paneId, j, m_hwnd);
-            break;
-          }
-        }
-        RefreshLayout();
-        SaveState();
-      } else if (found && !fav.isKnown) {
-        // Arbitrary window found — check if it's a dock frame or inner window.
-        // Always go through CaptureQueue so dock frame wait logic applies.
-        char foundTitle[512];
-        GetWindowText(found, foundTitle, sizeof(foundTitle));
-        bool isDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
-        if (isDockFrame) {
-          // Dock frame found — capture directly, it has the UI
-          DBG("[MaxPane] FAV CLICK: dock frame found, capturing directly\n");
-          m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd,
-                                           fav.toggleAction, fav.actionCommand);
-          RefreshLayout();
-          SaveState();
-        } else {
-          // Inner window found — enqueue via CaptureQueue to wait for dock frame
-          DBG("[MaxPane] FAV CLICK: inner window found, enqueue to wait for dock frame\n");
-          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, fav.toggleAction, fav.actionCommand);
-          StartCaptureTimer();
-        }
-      } else if (fav.toggleAction > 0) {
-        DBG("[MaxPane] FAV CLICK: window not found, has toggle action=%d -> enqueue + fire action\n",
-            fav.toggleAction);
-        if (fav.isKnown) {
-          for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
-            if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
-              m_captureQueue->EnqueueKnown(paneId, j);
-              break;
-            }
-          }
-        } else {
-          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, fav.toggleAction, fav.actionCommand);
-        }
-        StartCaptureTimer();
-      } else {
-        DBG("[MaxPane] FAV CLICK: window not found, NO toggle action -> enqueue for polling\n");
-        if (fav.isKnown) {
-          for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
-            if (strcmp(KNOWN_WINDOWS[j].name, fav.name) == 0) {
-              m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, 0, fav.actionCommand);
-              break;
-            }
-          }
-        } else {
-          m_captureQueue->EnqueueArbitrary(paneId, fav.searchTitle, 0, fav.actionCommand);
-        }
-        StartCaptureTimer();
-      }
-    }
+    ActivateFavorite(cmd - MenuIds::FAV_BASE, paneId);
     return;
   }
 
@@ -772,15 +1142,17 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
-  // Workspace save
+  // Workspace save — modal dialog (Sprint 3.3 / ADR-020).
   if (cmd == MenuIds::WS_SAVE) {
-    if (g_GetUserInputs) {
-      char wsName[MAX_WORKSPACE_NAME] = "";
-      if (g_GetUserInputs("Save Workspace", 1, "Name:", wsName, sizeof(wsName))) {
-        if (wsName[0]) {
-          SaveWorkspace(wsName);
-        }
-      }
+    m_wsMgr->LoadList();  // freshen list before showing
+    char wsName[MAX_WORKSPACE_NAME] = "";
+    if (OpenSaveWorkspaceDialog(m_hwnd, *m_wsMgr, wsName, sizeof(wsName))) {
+      const bool wasReplace = (m_wsMgr->Find(wsName) != nullptr);
+      SaveWorkspace(wsName);
+      char msg[MAX_WORKSPACE_NAME + 64];
+      snprintf(msg, sizeof(msg),
+               wasReplace ? "Replaced '%s'" : "Saved '%s'", wsName);
+      ShowToast(msg);
     }
     return;
   }
@@ -826,6 +1198,21 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         if (cx > 0 && cy > 0) {
           self->OnSize(cx, cy);
         }
+        // F1a (ADR-024) — track floating window size so we can persist on
+        // Shutdown. CaptureFloatGeometry reads window rect (outer frame),
+        // matching what SetWindowPos expects on re-restore.
+        if (self->m_floating) {
+          self->CaptureFloatGeometry();
+        }
+      }
+      return 0;
+    }
+
+    case WM_MOVE: {
+      // F1a (ADR-024) — track floating window position. SWELL fires WM_MOVE
+      // for top-level windows after user drags titlebar.
+      if (self && self->m_floating) {
+        self->CaptureFloatGeometry();
       }
       return 0;
     }
@@ -839,14 +1226,24 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         // After parent paint, tell captured children to redraw.
         // SWELL doesn't implement WS_CLIPCHILDREN, so the Cocoa drawRect:
         // cycle on the parent view may clear areas under child views.
-        for (int i = 0; i < self->m_tree.GetLeafCount(); i++) {
-          int pid = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[i]);
-          if (pid < 0 || pid >= MAX_PANES) continue;
-          const PaneState* pps = self->m_winMgr.GetPaneState(pid);
-          if (pps && pps->activeTab >= 0 && pps->activeTab < pps->tabCount) {
-            const TabEntry* tab = &pps->tabs[pps->activeTab];
-            if (tab->captured && tab->hwnd && IsWindow(tab->hwnd)) {
-              InvalidateRect(tab->hwnd, nullptr, FALSE);
+        //
+        // ADR-026 — when an overlay/menu is active we paint UI ON TOP of
+        // the pane grid. If we invalidate child windows here they paint
+        // OVER our overlay (their NSViews don't know the menu exists).
+        // Skip the propagation in those states; the next regular tick
+        // (drag/hover/etc.) will re-invalidate naturally.
+        bool overlayActive = self->m_homeOverlay ||
+                             self->m_drag.mode == DragDock::TRACKING;
+        if (!overlayActive) {
+          for (int i = 0; i < self->m_tree.GetLeafCount(); i++) {
+            int pid = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[i]);
+            if (pid < 0 || pid >= MAX_PANES) continue;
+            const PaneState* pps = self->m_winMgr.GetPaneState(pid);
+            if (pps && pps->activeTab >= 0 && pps->activeTab < pps->tabCount) {
+              const TabEntry* tab = &pps->tabs[pps->activeTab];
+              if (tab->captured && tab->hwnd && IsWindow(tab->hwnd)) {
+                InvalidateRect(tab->hwnd, nullptr, FALSE);
+              }
             }
           }
         }
@@ -858,6 +1255,48 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       if (self) {
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
+
+        // F6 — mark this instance as focused for slot-action routing.
+        InstanceManager::Get().SetFocused(self->m_instanceId);
+
+        // ADR-026 — nav bar consumes clicks on its strip first. If
+        // visible and the click hit the bar (button or empty area),
+        // the handler returns true and we stop here.
+        if (self->OnNavBarClick(x, y)) return 0;
+
+        // ADR-026 — Home overlay consumes the next click. Card click
+        // loads workspace + closes; click outside cards closes overlay.
+        if (self->m_homeOverlay) {
+          self->OnHomeOverlayClick(x, y);
+          return 0;
+        }
+
+        // Launcher hero (ADR-013): cards load workspaces, CTA enters capture.
+        if (self->IsInLauncherMode()) {
+          RECT rc;
+          GetClientRect(hwnd, &rc);
+          Launcher::Layout lay = Launcher::Compute(rc, *self->m_wsMgr);
+          int hit = Launcher::HitTest(lay, x, y);
+          if (hit == Launcher::HIT_CAPTURE_BUTTON) {
+            int paneId = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[0]);
+            if (paneId >= 0) {
+              self->m_captureMode.active = true;
+              self->m_captureMode.targetPaneId = paneId;
+              self->m_launcherHover = Launcher::HIT_NONE;
+              InvalidateRect(hwnd, nullptr, FALSE);
+              self->StartCaptureTimer();
+            }
+            return 0;
+          }
+          if (hit >= 0 && hit < self->m_wsMgr->GetCount()) {
+            const WorkspaceEntry& ws = self->m_wsMgr->Get(hit);
+            self->m_launcherHover = Launcher::HIT_NONE;
+            self->LoadWorkspace(ws.name);
+            return 0;
+          }
+          // Click on empty launcher area: fall through to standard handlers
+          // (right-click context menu is processed via WM_CONTEXTMENU separately).
+        }
 
         int splitter = self->m_tree.HitTestSplitter(x, y);
         if (splitter >= 0) {
@@ -879,6 +1318,17 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           } else if (tabIdx >= 0) {
             self->m_focusedPaneId = paneId;
             if (self->IsOnTabCloseButton(paneId, tabIdx, x, y)) {
+              // Record action ID for stale-cleanup before close (see
+              // HandleTabMenuCommand). This is the X-button click path —
+              // the most common close action and the one that's been
+              // leaking ghosts on REAPER restart for windows with B13/B16
+              // racing wnd_vis behaviour (Actions, FX Browser, etc.).
+              if (const TabEntry* t = self->m_winMgr.GetTab(paneId, tabIdx)) {
+                if (t->captured && t->toggleAction > 0) {
+                  AppendActionToStaleListForSection(self->m_extSection, t->toggleAction);
+                }
+              }
+              self->RecordClosedTab(paneId, tabIdx);  // C1
               self->m_winMgr.CloseTab(paneId, tabIdx);
               self->RefreshLayout();
               self->SaveState();
@@ -992,6 +1442,50 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
     case WM_TIMER: {
       if (self && wParam == TIMER_ID_CHECK) {
         self->OnTimer();
+      }
+      else if (self && wParam == TIMER_ID_DRAG_DOCK) {
+        // ADR-026 — drag-to-dock polling. State machine in DragModeTick
+        // handles ARMED → TRACKING → IDLE transitions + commit/cancel.
+        self->DragModeTick();
+      }
+      else if (self && wParam == TIMER_ID_NAVBAR_TIP) {
+        KillTimer(hwnd, TIMER_ID_NAVBAR_TIP);
+        // Show tooltip only if hover is still on a nav button.
+        if (self->m_navHover != NavBar::BTN_NONE) {
+          self->m_navTooltipBtn = self->m_navHover;
+          RECT rc; GetClientRect(hwnd, &rc);
+          NavBar::Layout lay = NavBar::Compute(rc);
+          RECT dirty = lay.barRect;
+          dirty.bottom += 36;
+          InvalidateRect(hwnd, &dirty, FALSE);
+        }
+      }
+      else if (self && wParam == TIMER_ID_LAUNCHER_TIP) {
+        KillTimer(hwnd, TIMER_ID_LAUNCHER_TIP);
+        // Show tooltip if hover is still on a card.
+        if (self->IsInLauncherMode() && self->m_launcherHover >= 0) {
+          self->m_launcherTooltipCard = self->m_launcherHover;
+          InvalidateRect(hwnd, nullptr, FALSE);
+        }
+      }
+      else if (self && wParam == TIMER_ID_TOAST) {
+        // Drive fade animation + reap when deadline passes.
+        const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (self->m_toastDeadlineMs == 0 || now >= self->m_toastDeadlineMs) {
+          KillTimer(hwnd, TIMER_ID_TOAST);
+          self->m_toastDeadlineMs = 0;
+          self->m_toastMessage[0] = '\0';
+          InvalidateRect(hwnd, nullptr, FALSE);
+        } else {
+          // Only repaint the bottom toast strip to keep the animation cheap.
+          RECT cr;
+          GetClientRect(hwnd, &cr);
+          RECT bar = cr;
+          bar.top = cr.bottom - TOAST_BAR_HEIGHT;
+          if (bar.top < cr.top) bar.top = cr.top;
+          InvalidateRect(hwnd, &bar, FALSE);
+        }
       }
       else if (self && wParam == TIMER_ID_HOVER) {
         POINT pt;
@@ -1146,15 +1640,34 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_DESTROY: {
       if (self) {
+        // B4: REAPER's docker close button (or any external DestroyWindow)
+        // bypasses Shutdown(). Captured children must be reparented out
+        // before we disappear, or they become frameless ghosts owned by a
+        // dead parent. ReleaseAll(false) reparents + hides without toggling
+        // the REAPER action — atexit / next-open reconciles state.
+        int captured = 0;
+        for (int p = 0; p < MAX_PANES; p++) {
+          const PaneState* ps = self->m_winMgr.GetPaneState(p);
+          if (!ps) continue;
+          for (int t = 0; t < ps->tabCount; t++) {
+            if (ps->tabs[t].captured) captured++;
+          }
+        }
+        if (captured > 0) {
+          DBG("[MaxPane] WM_DESTROY: %d captured tab(s) — emergency ReleaseAll(false)\n", captured);
+          self->m_winMgr.ReleaseAll(false);
+        }
         KillTimer(hwnd, TIMER_ID_CHECK);
         KillTimer(hwnd, TIMER_ID_CAPTURE);
-        // Fallback: ensure was_visible is cleared no matter how the window
-        // was destroyed (REAPER docker close, DestroyWindow, etc.).
-        // Toggle() already sets this, but if the destroy came from a path
-        // that bypassed Toggle (e.g. REAPER's dock system), this catches it.
-        if (g_SetExtState) {
-          g_SetExtState("MaxPane_cpp", "was_visible", "0", true);
-        }
+        // B26: do NOT write was_visible from WM_DESTROY. On macOS REAPER
+        // destroys docker windows asynchronously during quit — order between
+        // these destroys and our atexit callback is undefined, so any "0"
+        // written here can clobber legitimate "1" state for instances that
+        // were open at quit time. The legit close paths are Toggle()
+        // (line 169 — explicit user close, writes "0") and Create()
+        // (line 103 — writes "1"). Edge case "user clicked X on dock
+        // without Toggle" → was_visible stays "1" → MaxPane auto-restores
+        // next session; acceptable (user can Toggle off if undesired).
       }
       return 0;
     }

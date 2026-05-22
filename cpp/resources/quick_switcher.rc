@@ -1,0 +1,23 @@
+// Quick Switcher dialog (F4, Sprint 4 finale).
+// Modal dialog with EDIT search box + LISTBOX of fuzzy-filtered entries
+// drawn from tabs across all instances, workspaces, and favorites.
+// Format: Microsoft Resource Compiler (.rc). Processed on macOS/Linux by
+// swell_resgen.pl into quick_switcher.rc_mac_dlg (included by the .cpp
+// DlgProc). On Windows compiled directly by rc.exe.
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include "quick_switcher.h"
+
+IDD_QUICK_SWITCHER DIALOGEX 0, 0, 400, 320
+STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
+CAPTION "Quick Switcher"
+BEGIN
+    EDITTEXT        IDC_QS_SEARCH, 10, 10, 380, 14
+    LISTBOX         IDC_QS_LIST, 10, 32, 380, 240, LBS_NOTIFY | WS_BORDER | WS_VSCROLL
+    LTEXT           "Type to filter — ↑↓ navigate, Enter activates, Esc closes", IDC_QS_HINT, 10, 278, 380, 12
+
+    DEFPUSHBUTTON   "OK", 1, 275, 295, 55, 18
+    PUSHBUTTON      "Cancel", 2, 335, 295, 55, 18
+END

@@ -99,7 +99,32 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
 
   int insertPos = 0;
 
-  // Close Tab
+  int tabCount = winMgr.GetTabCount(paneId);
+
+  // C2 (ADR-027) — Pin/Unpin Tab on top: pinning is a promotion action, not
+  // a close-related one. Label flips, check-mark reflects state.
+  {
+    const TabEntry* tab = winMgr.GetTab(paneId, tabIndex);
+    bool pinned = tab && tab->pinned;
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::TAB_TOGGLE_PINNED;
+    mi.dwTypeData = pinned ? (char*)"Unpin Tab" : (char*)"Pin Tab";
+    mi.fState = pinned ? MFS_CHECKED : 0;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  {
+    MENUITEMINFO sep = {};
+    sep.cbSize = sizeof(sep);
+    sep.fMask = MIIM_TYPE;
+    sep.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &sep);
+  }
+
+  // Close Tab — primary close action, top-level (Chrome/VS Code pattern).
   {
     MENUITEMINFO mi = {};
     mi.cbSize = sizeof(mi);
@@ -108,6 +133,51 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     mi.wID = MenuIds::TAB_CLOSE;
     mi.dwTypeData = (char*)"Close Tab";
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // C3 — bulk-close family grouped in a "Close" submenu so they don't crowd
+  // the primary action. Greyed entries inside submenu when nothing to act on.
+  {
+    HMENU closeMenu = CreatePopupMenu();
+    if (closeMenu) {
+      int subPos = 0;
+      MENUITEMINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+      mi.fType = MFT_STRING;
+
+      mi.wID = MenuIds::TAB_CLOSE_OTHERS;
+      mi.dwTypeData = (char*)"Close Others";
+      mi.fState = (tabCount > 1) ? 0 : MFS_GRAYED;
+      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
+
+      mi.wID = MenuIds::TAB_CLOSE_TO_RIGHT;
+      mi.dwTypeData = (char*)"Close to Right";
+      mi.fState = (tabIndex < tabCount - 1) ? 0 : MFS_GRAYED;
+      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
+
+      mi.wID = MenuIds::TAB_CLOSE_ALL;
+      mi.dwTypeData = (char*)"Close All";
+      mi.fState = (tabCount > 0) ? 0 : MFS_GRAYED;
+      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
+
+      MENUITEMINFO submi = {};
+      submi.cbSize = sizeof(submi);
+      submi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      submi.fType = MFT_STRING;
+      submi.hSubMenu = closeMenu;
+      submi.dwTypeData = (char*)"Close";
+      InsertMenuItem(menu, insertPos++, TRUE, &submi);
+    }
+  }
+
+  // Separator between close-block and the rest.
+  {
+    MENUITEMINFO sep = {};
+    sep.cbSize = sizeof(sep);
+    sep.fMask = MIIM_TYPE;
+    sep.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &sep);
   }
 
   // Add to Favorites
@@ -207,7 +277,9 @@ HMENU BuildPaneContextMenu(int paneId,
                            const WindowManager& winMgr,
                            const FavoritesManager& favMgr,
                            const WorkspaceManager& wsMgr,
-                           bool soloActive)
+                           bool soloActive,
+                           bool isFloating,
+                           bool floatAlwaysOnTop)
 {
   HMENU menu = CreatePopupMenu();
   if (!menu) return nullptr;
@@ -380,10 +452,15 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // --- Known windows submenu ---
+  // --- Capture window submenu (Q2 — 2026-05-22 UX revisit).
+  // Sprint 2 (ADR-020) had flattened these 15 known windows into the
+  // top-level menu — 1 click but long menu. Returned to a submenu so the
+  // pane menu's primary surface stays under ~7 verbs; capture-everything
+  // now lives under one consistent "Capture …" submenu group together
+  // with Open Windows and Capture by Click below.
   {
-    HMENU knownMenu = CreatePopupMenu();
-    if (knownMenu) {
+    HMENU captureMenu = CreatePopupMenu();
+    if (captureMenu) {
       for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
         MENUITEMINFO mi = {};
         mi.cbSize = sizeof(mi);
@@ -391,29 +468,19 @@ HMENU BuildPaneContextMenu(int paneId,
         mi.fType = MFT_STRING;
         mi.wID = MenuIds::KNOWN_BASE + i;
         mi.dwTypeData = (char*)KNOWN_WINDOWS[i].name;
-        InsertMenuItem(knownMenu, i, TRUE, &mi);
+        InsertMenuItem(captureMenu, i, TRUE, &mi);
       }
-
-      MENUITEMINFO knownMi = {};
-      knownMi.cbSize = sizeof(knownMi);
-      knownMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-      knownMi.fType = MFT_STRING;
-      knownMi.hSubMenu = knownMenu;
-      knownMi.dwTypeData = (char*)"Known Windows";
-      InsertMenuItem(menu, insertPos++, TRUE, &knownMi);
+      MENUITEMINFO submi = {};
+      submi.cbSize = sizeof(submi);
+      submi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      submi.fType = MFT_STRING;
+      submi.hSubMenu = captureMenu;
+      submi.dwTypeData = (char*)"Capture window";
+      InsertMenuItem(menu, insertPos++, TRUE, &submi);
     }
   }
 
-  // --- Separator ---
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_TYPE;
-    mi.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // --- Open Windows submenu ---
+  // --- Open Windows submenu (kept alongside Capture window for grouping) ---
   HMENU openWinMenu = CreatePopupMenu();
   if (openWinMenu) {
     BuildOpenWindowsSubmenu(openWinMenu, MenuIds::OPEN_WINDOWS_BASE, containerHwnd, winMgr);
@@ -423,7 +490,7 @@ HMENU BuildPaneContextMenu(int paneId,
     owMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
     owMi.fType = MFT_STRING;
     owMi.hSubMenu = openWinMenu;
-    owMi.dwTypeData = (char*)"Open Windows";
+    owMi.dwTypeData = (char*)"Open windows";
     InsertMenuItem(menu, insertPos++, TRUE, &owMi);
   }
 
@@ -434,7 +501,7 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.fMask = MIIM_ID | MIIM_TYPE;
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::CAPTURE_BY_CLICK;
-    mi.dwTypeData = (char*)"Capture by Click";
+    mi.dwTypeData = (char*)"Capture by click";
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
@@ -518,27 +585,7 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // --- Separator + Close ---
-  {
-    const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
-    if (activeTab && activeTab->captured) {
-      MENUITEMINFO sep = {};
-      sep.cbSize = sizeof(sep);
-      sep.fMask = MIIM_TYPE;
-      sep.fType = MFT_SEPARATOR;
-      InsertMenuItem(menu, insertPos++, TRUE, &sep);
-
-      MENUITEMINFO mi = {};
-      mi.cbSize = sizeof(mi);
-      mi.fMask = MIIM_ID | MIIM_TYPE;
-      mi.fType = MFT_STRING;
-      mi.wID = MenuIds::RELEASE;
-      mi.dwTypeData = (char*)"Close";
-      InsertMenuItem(menu, insertPos++, TRUE, &mi);
-    }
-  }
-
-  // --- Separator + Auto-open toggle ---
+  // --- Separator before pane-state group (Settings / Detach / AlwaysOnTop) ---
   {
     MENUITEMINFO sep = {};
     sep.cbSize = sizeof(sep);
@@ -546,17 +593,68 @@ HMENU BuildPaneContextMenu(int paneId,
     sep.fType = MFT_SEPARATOR;
     InsertMenuItem(menu, insertPos++, TRUE, &sep);
   }
-  {
-    bool autoOpen = IsAutoOpenEnabled();
 
+  // --- Settings... (ADR-019) ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::SETTINGS;
+    mi.dwTypeData = (char*)"Settings...";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Detach to Floating / Re-dock (F1a — ADR-024) ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::TOGGLE_FLOATING;
+    mi.dwTypeData = isFloating ? (char*)"Re-dock to REAPER"
+                               : (char*)"Detach to Floating";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Always on top (C5 — ADR-027). Only when floating. ---
+  if (isFloating) {
     MENUITEMINFO mi = {};
     mi.cbSize = sizeof(mi);
     mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
     mi.fType = MFT_STRING;
-    mi.wID = MenuIds::AUTO_OPEN;
-    mi.dwTypeData = (char*)"Auto-open on startup";
-    mi.fState = autoOpen ? MFS_CHECKED : 0;
+    mi.wID = MenuIds::TOGGLE_FLOAT_ALWAYS_ON_TOP;
+    mi.dwTypeData = (char*)"Always on top";
+    mi.fState = floatAlwaysOnTop ? MFS_CHECKED : 0;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Destructive group on the bottom (Q4 — 2026-05-22 UX revisit):
+  // "Release Window" was previously labelled "Close" which read ambiguously
+  // in a pane menu ('close what — the tab? the pane? MaxPane?'). Renamed
+  // and grouped with Close MaxPane so destructive actions cluster together
+  // at the end, matching premium-OSS menu order (VS Code, JetBrains, Logic).
+  {
+    MENUITEMINFO sep = {};
+    sep.cbSize = sizeof(sep);
+    sep.fMask = MIIM_TYPE;
+    sep.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &sep);
+  }
+
+  // Release Window — releases the captured window in the active tab back to
+  // REAPER. Only meaningful when there's a captured active tab.
+  {
+    const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
+    if (activeTab && activeTab->captured) {
+      MENUITEMINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      mi.fMask = MIIM_ID | MIIM_TYPE;
+      mi.fType = MFT_STRING;
+      mi.wID = MenuIds::RELEASE;
+      mi.dwTypeData = (char*)"Release Window";
+      InsertMenuItem(menu, insertPos++, TRUE, &mi);
+    }
   }
 
   // --- Close MaxPane ---

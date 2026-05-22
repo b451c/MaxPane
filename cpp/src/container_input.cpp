@@ -2,6 +2,10 @@
 // (mouse events, tab drag/drop, hit testing, resize)
 #include "container.h"
 #include "config.h"
+#include "launcher.h"
+#include "workspace_manager.h"
+#include "split_tree.h"
+#include "window_manager.h"
 
 // =========================================================================
 // Helpers
@@ -87,9 +91,9 @@ bool MaxPaneContainer::IsOnTabCloseButton(int paneId, int tabIndex, int x, int y
   const PaneState* ps = m_winMgr.GetPaneState(paneId);
   if (!ps || tabIndex < 0 || tabIndex >= ps->tabCount) return false;
 
-  // Close button hidden when tabs are narrow (matches DrawTabBar)
+  // Close button hidden when tabs are narrow (matches DrawTabBar) (B9)
   TabBarLayout lay = CalcTabBarLayout(paneId);
-  if (lay.tabWidth < TAB_MIN_WIDTH) return false;
+  if (lay.tabWidth < TAB_CLOSE_MIN_WIDTH) return false;
 
   RECT tr = GetTabRect(paneId, tabIndex);
   // Empty rect means tab not visible
@@ -274,7 +278,11 @@ void MaxPaneContainer::CancelTabDrag()
 
 void MaxPaneContainer::OnSize(int cx, int cy)
 {
-  m_tree.Recalculate(cx, cy);
+  // ADR-026 — reserve nav bar height; tree origin already accounts for it.
+  int navH = NavBarReservedHeight();
+  int availH = cy - navH;
+  if (availH < 1) availH = 1;
+  m_tree.Recalculate(cx, availH);
   m_winMgr.RepositionAll(m_tree);
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }
@@ -289,10 +297,67 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
   if (m_tree.IsDragging()) {
     RECT rc;
     GetClientRect(m_hwnd, &rc);
-    m_tree.Drag(x, y, rc.right - rc.left, rc.bottom - rc.top);
+    // ADR-026 — splitter drag must respect nav bar reservation.
+    int navH = NavBarReservedHeight();
+    int availH = (rc.bottom - rc.top) - navH;
+    if (availH < 1) availH = 1;
+    m_tree.Drag(x, y, rc.right - rc.left, availH);
     m_winMgr.RepositionAll(m_tree);
     InvalidateRect(m_hwnd, nullptr, FALSE);
     return;
+  }
+
+  // ADR-026 — nav bar hover. Consumes the event when cursor is over the
+  // bar strip. When cursor leaves the bar we also clear m_navHover so
+  // the next paint drops the highlight.
+  if (m_navBarVisible) {
+    bool overBar = OnNavBarMouseMove(x, y);
+    if (overBar) return;
+    if (m_navHover != NavBar::BTN_NONE) {
+      m_navHover = NavBar::BTN_NONE;
+      m_navTooltipBtn = NavBar::BTN_NONE;
+      KillTimer(m_hwnd, TIMER_ID_NAVBAR_TIP);
+      RECT rc; GetClientRect(m_hwnd, &rc);
+      NavBar::Layout lay = NavBar::Compute(rc);
+      RECT dirty = lay.barRect;
+      dirty.bottom += 36;
+      InvalidateRect(m_hwnd, &dirty, FALSE);
+    }
+  }
+
+  // ADR-026 — Home overlay hover (workspace cards painted over current
+  // pane grid). Consumes the event when overlay is open.
+  if (m_homeOverlay) {
+    OnHomeOverlayMouseMove(x, y);
+    return;
+  }
+
+  // Launcher hover (ADR-013) — short-circuit; no splitters/tabs to test.
+  if (IsInLauncherMode()) {
+    RECT rc;
+    GetClientRect(m_hwnd, &rc);
+    Launcher::Layout lay = Launcher::Compute(rc, *m_wsMgr);
+    int hit = Launcher::HitTest(lay, x, y);
+    if (hit != m_launcherHover) {
+      int prev = m_launcherHover;
+      m_launcherHover = hit;
+      // Hide any active tooltip — new card (or non-card) restarts the wait.
+      if (m_launcherTooltipCard >= 0) m_launcherTooltipCard = -1;
+      // (Re)start tooltip delay when hovering a card; cancel otherwise.
+      if (hit >= 0) {
+        SetTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP, LAUNCHER_TOOLTIP_DELAY_MS, nullptr);
+      } else {
+        KillTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP);
+      }
+      (void)prev;
+      InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+    return;
+  }
+  if (m_launcherHover != Launcher::HIT_NONE) {
+    m_launcherHover = Launcher::HIT_NONE;
+    m_launcherTooltipCard = -1;
+    KillTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP);
   }
 
   // Hover highlight for splitters — targeted dirty rect

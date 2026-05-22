@@ -8,11 +8,18 @@ struct TabEntry {
   int toggleAction;
   HWND hwnd;
   HWND originalParent;
+  // B27 — pre-capture window rect in screen coords. Used by DoRelease to
+  // restore the orphan NSWindow's position BEFORE WM_CLOSE/toggle so REAPER
+  // saves sensible wnd_vis coordinates. SWELL's SetParent(nullptr) recreates
+  // the NSWindow at default (0,0 ~ lower-left on macOS), and that position
+  // would otherwise leak into REAPER's saved position for next launch.
+  RECT originalRect;
   bool captured;
   bool isArbitrary;
   bool dynamicTitle;             // title changes at runtime (e.g. MIDI Editor) — use searchTitle as prefix
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
+  bool pinned;                   // C2 (ADR-027) — sticky, sorted to left, exempt from Close Others
 };
 
 // Returns the stable search prefix for known dynamic-title windows,
@@ -51,6 +58,10 @@ public:
   void MoveTab(int srcPane, int srcTab, int dstPane);
   void ReorderTab(int paneId, int fromIndex, int toIndex);
   void SetTabColor(int paneId, int tabIndex, int colorIndex);
+  // C2 (ADR-027) — toggle pinned flag, then re-sort the pane so pinned tabs
+  // cluster at the left (preserving relative order within each group).
+  // Updates activeTab to track the moved tab.
+  void SetTabPinned(int paneId, int tabIndex, bool pinned);
 
   // Release all tabs in a pane
   void ReleaseWindow(int paneId, bool toggleOff = true);

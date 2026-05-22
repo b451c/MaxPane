@@ -2,184 +2,248 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/b451c/MaxPane)](https://github.com/b451c/MaxPane/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS%20(stable)%20%7C%20Windows%20%26%20Linux%20(alpha)-lightgrey.svg)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+[![CI](https://github.com/b451c/MaxPane/actions/workflows/ci.yml/badge.svg)](https://github.com/b451c/MaxPane/actions/workflows/ci.yml)
 
-**Nested docker layouts for REAPER** — a native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.
+**Nested docker layouts for REAPER** — a native C++ extension that turns any
+REAPER window into a tile inside a multi-pane workspace. Up to 8 independent
+containers, drag-to-dock from outside, 32 saved workspaces, hotkeys for
+everything, Quick Switcher (Cmd+P-style), floating mode, and a launcher that
+remembers your layouts.
 
-![MaxPane](docs/images/maxpane-hero.png)
+![MaxPane v2.0](docs/images/MaxPane-v2_launcher.png)
 
-> *Capture any REAPER window — Media Explorer, FX Browser, Mixer, Actions, or even ReaImGui scripts — into a single tiling container with resizable split panes and tabbed panels.*
+> Capture any REAPER window — Media Explorer, FX Browser, Mixer, Actions,
+> toolbars, or third-party ReaImGui scripts — into a tiling container with
+> resizable splits, tabbed panes, and one-click workspace recall.
+
+---
+
+## What's new in 2.0
+
+- **Drag-to-dock** — grab any REAPER window from outside MaxPane and drop
+  it on a pane. Live preview shows the four split zones, the tab-bar
+  zone, and the body-center forgiving zone. Shift+drop replaces the
+  active tab.
+- **Up to 8 MaxPane containers** in one REAPER session — independent
+  layouts, captured windows, and project state. Open via
+  `MaxPane: Open Container`, `MaxPane: Open Container 2`, … through 8.
+- **Floating mode** — detach the whole container into a top-level
+  window with native chrome. Multi-monitor positions remembered.
+  Always-on-top toggle for keyboard-monitor setups.
+- **Quick Switcher** — bind one hotkey. Type a few characters. Fuzzy-
+  match across every open tab (across every instance), every saved
+  workspace, every favorite. Enter activates.
+- **32 workspace slots + 32 favorite slots** — bind hotkeys to any of
+  them via REAPER's Actions dialog. Or use the single "Workspace
+  pickup" action to reach all 32 from one binding.
+- **Persistent navigation bar** at the top of every container.
+  Home, Drag-to-dock, Quick Switch, Save workspace, Load▾, Settings,
+  Support — actions that used to be buried in the right-click menu
+  surfaced as a clean toolbar.
+- **Workspace launcher** — when a container is empty, you see a card
+  grid of saved workspaces with mini layout previews. One click loads.
+  Right-click for Rename / Duplicate / Delete / Bind Hotkey.
+- **C-series UX wins** — Reopen last closed tab (Cmd+Shift+T style),
+  pinned tabs (sticky, sort to left, exempt from bulk close), tab
+  Close-Others / Close-to-Right / Close-All, always-on-top floating.
+- **Settings dialog** — auto-open, show nav bar, dark-mode override,
+  default workspace, support links, all in one place.
+- **Toast bar + custom Save dialog** — non-fatal feedback ("Workspace
+  saved as 'Edit Mode'") via a 3-second toast strip; rename / duplicate
+  collisions surface clearly instead of failing silently.
+- **Reliability** — close-leak bugs that haunted v1.5.x are gone. The
+  close mechanism uses `WM_CLOSE` as primary, action-toggle as fallback,
+  startup ghost cleanup as safety net (see
+  [ARCHITECTURE.md](ARCHITECTURE.md) for the full story).
+
+Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
 ## Features
 
-- **Flexible split layouts** — Split panes horizontally or vertically to any depth (up to 16 panes). Drag splitter bars to resize on the fly.
-- **Tabbed windows** — Multiple windows per pane, with tab bar. Click tabs to switch, drag tabs between panes. Each tab bar has a **▼ menu button** for quick access to the pane context menu.
-- **15 known REAPER windows** — One-click capture for Mixer, Track Manager, Routing Matrix, Media Explorer, FX Browser, Project Bay, Region Manager, Region Render Matrix, Actions, Undo History, Navigator, Big Clock, Video, Performance Meter, Virtual MIDI Keyboard.
-- **Arbitrary window capture** — Grab *any* open REAPER window, including third-party ReaImGui scripts (ReaMD, etc.), via the "Open Windows" submenu or click-to-capture mode.
-- **Workspaces** — Save and restore complete layout snapshots (tree structure + captured windows) with a single click.
-- **Favorites** — Pin frequently used windows for quick access across sessions.
-- **Tab colors** — Color-code tabs with 8 palette colors for visual organization.
-- **Layout presets** — Quick-start with 5 built-in layouts: Two Columns, Left + Right Split, Three Columns, 2x2 Grid, Top + Bottom Split.
-- **Solo/maximize pane** — Temporarily expand any pane to fill the entire container. Toggle via context menu or keyboard shortcut. Layout is fully restored when exiting solo.
-- **Tab reorder** — Drag tabs left/right within the same pane to rearrange their order.
-- **Keyboard shortcuts** — Five REAPER actions (Next/Prev Tab, Next/Prev Pane, Solo Toggle) bindable via Actions dialog.
-- **Splitter double-click** — Double-click any splitter to reset it to 50/50.
-- **Hover highlights** — Visual feedback on splitter bars and tabs when hovered.
-- **Per-project state** — Layout is saved inside each .RPP project file, so different projects can have different MaxPane configurations.
-- **Persistent state** — Layout, captured windows, favorites, and workspaces survive REAPER restarts.
-- **Auto-open on startup** — Optionally restore MaxPane automatically when REAPER launches.
-- **Dockable** — The container itself docks into REAPER's native docker system.
-- **Zero dependencies** — Pure C++ extension using REAPER SDK + WDL/SWELL. No scripts, no ReaImGui, no js_ReaScriptAPI required.
+### Layout
+- **Flexible split layouts** — split panes horizontally or vertically to any
+  depth (up to 16 panes). Drag splitter bars to resize on the fly. Double-
+  click any splitter to reset to 50/50.
+- **Tabbed panes** — multiple windows per pane with a tab bar. Drag tabs
+  between panes, reorder within a pane. Each tab bar has a **▼ menu** for
+  pane operations.
+- **Solo / maximize** — temporarily expand any pane to fill the entire
+  container; full tree restored on exit.
+- **5 layout presets** — Two Columns, Left + Right Split, Three Columns,
+  2x2 Grid, Top + Bottom Split.
+- **Pinned tabs** — sticky tabs sorted to the left of each pane, exempt
+  from "Close Others" / "Close All".
+- **Tab colors** — color-code tabs with 8 palette colors.
+
+### Capture
+- **15 known REAPER windows** — one-click capture for Mixer, Track
+  Manager, Routing Matrix, Media Explorer, FX Browser, Project Bay,
+  Region Manager, Region Render Matrix, Actions, Undo History,
+  Navigator, Big Clock, Video, Performance Meter, Virtual MIDI
+  Keyboard.
+- **Arbitrary window capture** — grab any visible REAPER window
+  (toolbars, third-party ReaImGui scripts like ReaBeat / ReaMD /
+  reamix.me) via the "Open Windows" submenu, click-to-capture mode, or
+  drag-to-dock.
+- **Favorites** — pin frequently-used windows for instant access from any
+  container's menu.
+
+### Workspaces
+- **32 saved workspace slots** — tree layout + captured windows snapshot.
+  One click in the launcher or one hotkey binding to recall.
+- **Per-project state** — layout is saved inside each `.RPP` project file
+  via REAPER's `project_config_extension_t`, so different projects can
+  have different MaxPane configurations and they load with the project.
+- **Custom Save dialog** — name input + clickable list of existing
+  workspaces + dynamic status label so you know whether you're creating
+  new or replacing.
+
+### Multi-instance
+- **Up to 8 independent containers** per session. Each instance has its
+  own layout, captured windows, floating geometry, and per-project
+  state. Workspaces and favorites are shared across instances.
+
+### Navigation + hotkeys
+- **Quick Switcher** — fuzzy-match across open tabs / workspaces /
+  favorites. Bind your own hotkey.
+- **`MaxPane: Workspace pickup`** — single hotkey, prompt for slot
+  number, load. One binding reaches all 32 slots.
+- **`MaxPane: Reopen last closed tab`** — 16-entry per-container ring
+  buffer; session-scoped.
+- **Tab + pane keyboard nav** — Next/Prev Tab, Next/Prev Pane, Solo
+  Toggle, all bindable in REAPER's Actions dialog.
+- **Accelerator hook** — MaxPane action bindings fire even when MaxPane
+  (or a captured pane) has focus — v1.x required REAPER's main window
+  to have focus first.
+
+### Platform
+- **macOS arm64 + x86_64** — stable, fully functional.
+- Windows + Linux builds land after their respective smoke testing
+  completes — see [#8](https://github.com/b451c/MaxPane/issues/8) and
+  [#9](https://github.com/b451c/MaxPane/issues/9) for tracking.
+- **Zero scripting / no dependencies** — pure C++ extension using REAPER
+  SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
+
+---
 
 ## Screenshots
+
+| Launcher hero | Settings dialog |
+|:---:|:---:|
+| ![Launcher hero](docs/images/MaxPane-v2_launcher.png) | ![Settings dialog](docs/images/MaxPane-v2_settings.png) |
 
 | Create grid layout | Assign windows to panes | Recall workspace |
 |:---:|:---:|:---:|
 | ![Create grid](docs/images/create-grid.gif) | ![Assign windows](docs/images/assign-windows.gif) | ![Recall workspace](docs/images/workspace-recall.gif) |
 
-![MaxPane layout](docs/images/maxpane-layout.png)
+---
 
 ## Installation
 
 ### ReaPack (recommended)
 
-1. In REAPER, go to **Extensions > ReaPack > Import repositories...**
+1. In REAPER, go to **Extensions → ReaPack → Import repositories…**
 2. Paste this URL:
    ```
    https://raw.githubusercontent.com/b451c/MaxPane/main/index.xml
    ```
-3. Go to **Extensions > ReaPack > Browse packages**, search for **MaxPane**.
-4. Right-click > **Install**, then restart REAPER.
+3. Go to **Extensions → ReaPack → Browse packages**, search for **MaxPane**.
+4. Right-click → **Install**, then restart REAPER.
 
-ReaPack will automatically notify you of future updates.
+ReaPack will notify you of future updates automatically.
 
 ### Manual install
 
-1. Download the binary for your platform from the [Releases](../../releases) page.
-2. Copy it to your REAPER resource path:
-
-| Platform | Path |
-|----------|------|
-| **macOS** | `~/Library/Application Support/REAPER/UserPlugins/` |
-| **Windows** | `%APPDATA%\REAPER\UserPlugins\` |
-| **Linux** | `~/.config/REAPER/UserPlugins/` |
-
+1. Download the macOS binary from the [Releases](../../releases) page
+   (`reaper_maxpane-arm64.dylib` for Apple Silicon,
+   `reaper_maxpane-x86_64.dylib` for Intel).
+2. Copy it to `~/Library/Application Support/REAPER/UserPlugins/`.
 3. Restart REAPER.
-4. Open via **Actions > MaxPane: Open Container**, or assign a keyboard shortcut.
+4. Open via **Actions → MaxPane: Open Container**, or assign a keyboard
+   shortcut.
 
-### Build from source
+---
 
-See [Building](#building) below.
+## Quick start
 
-## Usage
+1. **Open MaxPane** — run the action `MaxPane: Open Container` from
+   REAPER's Actions menu.
+2. **First time?** The launcher card grid is empty. Click any **▼ menu**
+   button on a pane tab bar, or right-click any pane, to capture your
+   first window. Or click `[Drag]` on the nav bar and drag a REAPER
+   window from outside into the pane.
+3. **Split panes** via the pane menu (Split Left/Right or Split
+   Top/Bottom) or via drag-to-dock with an edge zone.
+4. **Tabbed windows** — drop multiple windows on the same pane; click
+   tabs to switch, drag tabs between panes to rearrange.
+5. **Save a workspace** — click `[Save]` on the nav bar (or right-click
+   → Save Workspace…). Name it; it shows up in the launcher next time.
+6. **Recall a workspace** — when a container is empty, click its card.
+   Or click `[Home]` to overlay the picker on top of your current layout
+   without disturbing it.
+7. **Bind a hotkey** — in REAPER's Actions dialog, search for
+   `MaxPane: Workspace Slot 1` (etc.) or
+   `MaxPane: Workspace pickup` (single hotkey for all 32 slots).
 
-1. **Open MaxPane** — Run the action "MaxPane: Open Container" from REAPER's Actions menu.
-2. **Right-click** any pane header, or click the **▼ button** at the right of any tab bar, to open the pane context menu.
-3. **Choose a window** from the Known Windows list, or browse Open Windows for any visible REAPER window.
-4. **Split panes** via the context menu (Split Left/Right or Split Top/Bottom).
-5. **Drag tabs** between panes to rearrange, or within the same pane to reorder.
-6. **Solo a pane** via right-click > Solo Pane to temporarily maximize it. Right-click > Exit Solo to restore.
-7. **Right-click a tab** to close it, move it, color it, or add it to Favorites.
-8. **Save a workspace** via right-click > Workspaces > Save Current.
-9. **Drag splitter bars** to resize panes. **Double-click** a splitter to reset to 50/50.
-10. **Bind keyboard shortcuts** — In REAPER's Actions dialog, search for "MaxPane" to find Next/Prev Tab, Next/Prev Pane, and Solo Toggle.
+---
 
-## Building
+## Building from source
 
-### Prerequisites
-
-- **CMake** 3.15+
-- **C++17** compiler (Clang on macOS, GCC on Linux, MSVC on Windows)
-- **REAPER SDK** — clone into `cpp/sdk/`:
-  ```bash
-  git clone https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
-  ```
-- **WDL** — clone into `cpp/WDL/`:
-  ```bash
-  git clone https://github.com/justinfrankel/WDL.git cpp/WDL
-  ```
-
-### Compile and install (macOS)
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full workflow. Quick path:
 
 ```bash
-cd cpp/build
+git clone https://github.com/b451c/MaxPane.git
+cd MaxPane
+git clone https://github.com/justinfrankel/reaper-sdk.git cpp/sdk
+git clone https://github.com/justinfrankel/WDL.git cpp/WDL
+
+mkdir -p cpp/build && cd cpp/build
 cmake .. -DCMAKE_BUILD_TYPE=Release
-make
-cp reaper_maxpane.dylib ~/Library/Application\ Support/REAPER/UserPlugins/
+cmake --build . --parallel
 ```
 
-### Compile and install (Linux)
+Then copy the resulting `reaper_maxpane.{dylib,so,dll}` to your REAPER
+UserPlugins directory (paths above).
 
-```bash
-cd cpp/build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-make
-cp reaper_maxpane.so ~/.config/REAPER/UserPlugins/
-```
+Architecture, module map, the three SetParent paths, the
+close-mechanism deep-dive, and the v2.0 feature surface — see
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
-### Compile and install (Windows)
-
-```bash
-cd cpp/build
-cmake .. -G "Visual Studio 17 2022" -A x64
-cmake --build . --config Release
-copy Release\reaper_maxpane.dll "%APPDATA%\REAPER\UserPlugins\"
-```
-
-### Debug build
-
-Debug builds enable verbose logging to `/tmp/maxpane_debug.log`:
-
-```bash
-cmake .. -DCMAKE_BUILD_TYPE=Debug
-make
-```
+---
 
 ## Requirements
 
 - **REAPER** 7.0+ (tested on 7.62)
-- **macOS** arm64 (Apple Silicon) and x86_64 (Intel) — **stable, fully functional**
-- **Windows** x64 — ⚠️ **alpha** (loads in REAPER but mouse input/window capture not working yet)
-- **Linux** x86_64 — ⚠️ **alpha** (loads in REAPER but not functional yet)
+- **macOS** arm64 (Apple Silicon) and x86_64 (Intel) — **stable**
 
-## Architecture
+Windows and Linux builds will be published once they pass smoke testing
+on those platforms — see [#8](https://github.com/b451c/MaxPane/issues/8)
+(Windows) and [#9](https://github.com/b451c/MaxPane/issues/9) (Linux)
+for tracking.
 
-```
-cpp/src/
-  main.cpp                  Entry point, API imports, action registration
-  container.h               Container class declaration, shared structs (TabBarLayout, DragState, …)
-  container.cpp             Lifecycle, DlgProc, context menus, OnTimer, OnPaneMenuButtonClick
-  container_paint.cpp       OnPaint, DrawTabBar (rendering only)
-  container_input.cpp       Mouse events, tab hit-testing, drag-and-drop, CalcTabBarLayout, GetTabRect
-  container_state.cpp       SaveState, LoadState, ApplyPaneState, workspace save/load/delete
-  split_tree.h/cpp          Binary tree layout engine (split/merge/drag/recalculate)
-  window_manager.h/cpp      Window capture via SetParent, tab management (close/move/reposition)
-  capture_queue.h/cpp       Async window capture with retry + dock frame detection
-  favorites_manager.h/cpp   Persistent favorites with action command strings
-  workspace_manager.h/cpp   State save/restore, named workspace snapshots
-  context_menu.h/cpp        Context menu construction (pane + tab menus)
-  config.h                  Constants: colors, geometry, timing, window definitions
-  project_state.h/cpp       RPP chunk I/O (project_config_extension_t callbacks)
-  state_accessor.h          Polymorphic StateAccessor for global/project/RPP state
-  globals.h/cpp             REAPER API function pointers, safe_strncpy, helpers
-  debug.h                   Conditional debug logging (Debug builds only)
-```
-
-The extension works by reparenting REAPER windows (via `SetParent`) into a custom container dialog. The container uses a binary split tree for layout, with each leaf node representing a pane that holds tabbed windows. Global state is persisted via REAPER's ExtState API; per-project state is saved inside `.RPP` files via `project_config_extension_t`.
+---
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) and
+[ARCHITECTURE.md](ARCHITECTURE.md) first. CI runs the full 5-platform
+matrix on every PR — your change has to be green there before review.
 
-## Support
+---
 
-If you find MaxPane useful, consider supporting its development:
+## Support development
+
+MaxPane is MIT-licensed and free. If it saves you time, please support
+its development:
 
 - [Ko-fi](https://ko-fi.com/quickmd)
 - [Buy Me a Coffee](https://buymeacoffee.com/bsroczynskh)
 - [PayPal](https://paypal.me/b451c)
+
+---
 
 ## License
 
@@ -191,4 +255,4 @@ If you find MaxPane useful, consider supporting its development:
 - **REAPER** — https://www.reaper.fm
 - **ReaPack** — https://reapack.com
 - **REAPER SDK** — https://github.com/justinfrankel/reaper-sdk
-- **WDL/SWELL** — https://github.com/justinfrankel/WDL
+- **WDL / SWELL** — https://github.com/justinfrankel/WDL

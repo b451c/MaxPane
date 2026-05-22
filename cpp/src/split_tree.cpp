@@ -281,7 +281,7 @@ void SplitTree::Recalculate(int w, int h)
   m_branchCount = 0;
   memset(m_paneRects, 0, sizeof(m_paneRects));
 
-  RECT full = {0, 0, w, h};
+  RECT full = { m_originX, m_originY, m_originX + w, m_originY + h };
   RecalcNode(m_root, full);
 }
 
@@ -490,8 +490,8 @@ void SplitTree::SaveSnapshot(NodeSnapshot* out, int& nodeCount) const
 
 bool SplitTree::LoadSnapshot(const NodeSnapshot* in, int nodeCount)
 {
-  // Root must exist
-  if (nodeCount < 1 || in[0].type == NODE_EMPTY) {
+  // Root must exist; reject out-of-range counts before touching memory
+  if (nodeCount < 1 || nodeCount > MAX_TREE_NODES || in[0].type == NODE_EMPTY) {
     DBG("[MaxPane] LoadSnapshot: empty or rootless snapshot (nodeCount=%d)\n", nodeCount);
     Reset();
     return false;

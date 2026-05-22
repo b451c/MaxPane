@@ -2,6 +2,10 @@
 // (OnPaint, DrawTabBar)
 #include "container.h"
 #include "config.h"
+#include "launcher.h"
+#include "nav_bar.h"
+#include "drag_dock.h"
+#include "workspace_manager.h"
 #include "swell_cocoa_helpers.h"
 
 // =========================================================================
@@ -12,6 +16,41 @@ void MaxPaneContainer::OnPaint(HDC hdc)
 {
   RECT rc;
   GetClientRect(m_hwnd, &rc);
+  bool dark = MaxPaneIsDarkMode();
+
+  // ADR-026 — paint the persistent nav bar at the very top first. The
+  // pane grid below renders into the reserved client area (tree origin
+  // already set to NAV_BAR_HEIGHT). Done before any other paint so all
+  // states paint *under* the bar, never overlapping into it.
+  NavBar::Layout navLay = {};
+  if (m_navBarVisible) {
+    navLay = NavBar::Compute(rc);
+    NavBar::State navState;
+    navState.hoverButton = m_navHover;
+    navState.dragModeArmed = (m_drag.mode != DragDock::IDLE);
+    navState.homeActive    = m_homeOverlay;
+    NavBar::Paint(hdc, navLay, navState, dark);
+  }
+
+  // Empty-container launcher hero (ADR-013): when the whole container is
+  // empty and idle, replace the generic empty-pane UI with a premium
+  // workspace launcher. Disappears as soon as any pane has content. We
+  // pass a sub-rect that excludes the nav bar strip so the launcher
+  // re-centers below the toolbar.
+  if (IsInLauncherMode()) {
+    RECT below = rc;
+    below.top += NavBarReservedHeight();
+    Launcher::Layout lay = Launcher::Compute(below, *m_wsMgr);
+    Launcher::Paint(hdc, lay, *m_wsMgr, m_launcherHover, dark);
+    if (m_launcherTooltipCard >= 0) {
+      Launcher::PaintTooltip(hdc, lay, *m_wsMgr, m_launcherTooltipCard, dark);
+    }
+    if (m_navBarVisible && m_navTooltipBtn != NavBar::BTN_NONE) {
+      NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, dark);
+    }
+    PaintToast(hdc, rc);
+    return;
+  }
 
   // Background — paint only areas NOT occupied by captured child windows.
   // SWELL doesn't implement WS_CLIPCHILDREN, so a full-area FillRect would
@@ -91,7 +130,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
       }
       RECT headerTextRect = headerRect;
       headerTextRect.left += 4;
-      DrawText(hdc, headerText, -1, &headerTextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      DrawTextUtf8(hdc, headerText, -1, &headerTextRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 
       RECT contentRect = paneRect;
       contentRect.top += TAB_BAR_HEIGHT;
@@ -121,7 +160,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
       }
 
       SetTextColor(hdc, IsSystemDarkMode() ? RGB(120, 120, 120) : RGB(80, 80, 80));
-      DrawText(hdc, "Click header to assign a window", -1, &contentRect,
+      DrawTextUtf8(hdc, "Click header to assign a window", -1, &contentRect,
                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
   }
@@ -157,6 +196,44 @@ void MaxPaneContainer::OnPaint(HDC hdc)
       DeleteObject(insertPen);
     }
   }
+
+  // ADR-026 — drag-to-dock preview during TRACKING. Renders the live
+  // drop-zone highlight + hint label inside whatever pane the cursor is
+  // hovering. Painted after pane grid so the highlight sits on top of
+  // tab bars + content; nav bar still wins because it occupies its own
+  // reserved strip.
+  if (m_drag.mode == DragDock::TRACKING &&
+      m_drag.targetPaneId >= 0 &&
+      m_drag.zone != DragDock::ZONE_NONE &&
+      m_tree.IsPaneIdUsed(m_drag.targetPaneId)) {
+    const RECT& pr = m_tree.GetPaneRect(m_drag.targetPaneId);
+    DragDock::PaintPreview(hdc, pr, m_drag.zone, dark);
+    DragDock::PaintIndicator(hdc, pr, m_drag.zone, dark, m_drag.sourceTitle);
+  }
+
+  // ADR-026 — Home overlay: paint a backdrop over the pane grid + the
+  // workspace launcher cards on top. Non-destructive — ESC / click
+  // outside cards returns to the underlying pane state untouched.
+  if (m_homeOverlay) {
+    RECT below = rc;
+    below.top += NavBarReservedHeight();
+    // Backdrop — solid panel-bg color (SWELL has no per-pixel alpha; the
+    // pane grid below is fully obscured for a clean "modal" feel).
+    HBRUSH backdrop = CreateSolidBrush(dark ? RGB(28, 28, 28) : RGB(240, 240, 240));
+    FillRect(hdc, &below, backdrop);
+    DeleteObject(backdrop);
+    Launcher::Layout lay = Launcher::Compute(below, *m_wsMgr);
+    Launcher::Paint(hdc, lay, *m_wsMgr, m_homeOverlayHover, dark);
+  }
+
+  // ADR-026 — nav bar tooltip, drawn last so it sits above every other
+  // pane-grid pixel (tooltip dips into the pane area below the bar).
+  if (m_navBarVisible && m_navTooltipBtn != NavBar::BTN_NONE) {
+    NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, dark);
+  }
+
+  // Toast overlay last so it sits above every other layer (Sprint 3.2).
+  PaintToast(hdc, rc);
 }
 
 // =========================================================================
@@ -228,14 +305,25 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
     RECT textRect = tabRect;
     textRect.left += TAB_TEXT_LEFT_PAD;
     textRect.right -= TAB_TEXT_RIGHT_MARGIN;
+    // C2 (ADR-027) — pinned tabs prepend a small bullet glyph as a pin
+    // indicator. Kept ASCII-safe ("• ") instead of 📌 emoji because the
+    // dock font on macOS doesn't always have the emoji glyph at this
+    // size; the bullet renders at every system font.
+    if (ps->tabs[t].pinned) {
+      RECT pinRect = textRect;
+      pinRect.right = pinRect.left + 10;
+      DrawTextUtf8(hdc, "\xE2\x80\xA2", -1, &pinRect,
+               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      textRect.left += 10;
+    }
     const char* tabName = ps->tabs[t].name[0] ? ps->tabs[t].name : "?";
-    DrawText(hdc, tabName, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+    DrawTextUtf8(hdc, tabName, -1, &textRect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
 
-    // Only draw close button if tab is wide enough to avoid overlap
-    if (lay.tabWidth >= TAB_MIN_WIDTH) {
+    // Only draw close button if tab is wide enough to avoid overlap (B9)
+    if (lay.tabWidth >= TAB_CLOSE_MIN_WIDTH) {
       SetTextColor(hdc, COLOR_TAB_CLOSE_TEXT);
       RECT closeRect = { tabRight - 16, tabBarTop + 2, tabRight - 2, tabBarBottom - 2 };
-      DrawText(hdc, "x", 1, &closeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      DrawTextUtf8(hdc, "x", 1, &closeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     if (t < ps->tabCount - 1) {
@@ -263,6 +351,6 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
 
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, menuBtnHover ? RGB(230, 230, 230) : RGB(190, 190, 190));
-    DrawText(hdc, "\xe2\x96\xbc", -1, &btnRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    DrawTextUtf8(hdc, "\xe2\x96\xbc", -1, &btnRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   }
 }

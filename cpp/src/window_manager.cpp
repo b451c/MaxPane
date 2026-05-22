@@ -91,14 +91,14 @@ const char* GetDynamicTitlePrefix(const char* title)
 
 // Detect REAPER toggle action for toolbar windows by title.
 // Returns action ID or 0 if not a toolbar.
-// Toolbar 1-16: action 41679 + (N-1).  Toolbar Docker: 41084.
 int GetToolbarToggleAction(const char* title)
 {
   if (!title) return 0;
-  if (strcmp(title, "Toolbar Docker") == 0) return 41084;
+  if (strcmp(title, "Toolbar Docker") == 0) return TOOLBAR_DOCKER_ACTION;
   if (strncmp(title, "Toolbar ", 8) == 0) {
     int n = atoi(title + 8);
-    if (n >= 1 && n <= 16) return 41678 + n;
+    if (n >= 1 && n <= TOOLBAR_ACTION_COUNT)
+      return TOOLBAR_ACTION_BASE + (n - 1);
   }
   return 0;
 }
@@ -123,12 +123,13 @@ int LookupToggleAction(const char* title)
 bool GetSearchTitleForAction(int action, char* buf, int bufSize)
 {
   if (action <= 0 || !buf || bufSize <= 0) return false;
-  // Toolbars: action 41679..41694 → "Toolbar 1".."Toolbar 16"
-  if (action >= 41679 && action <= 41694) {
-    snprintf(buf, bufSize, "Toolbar %d", action - 41678);
+  // Toolbars: TOOLBAR_ACTION_BASE..+COUNT-1 → "Toolbar 1".."Toolbar 16"
+  if (action >= TOOLBAR_ACTION_BASE &&
+      action < TOOLBAR_ACTION_BASE + TOOLBAR_ACTION_COUNT) {
+    snprintf(buf, bufSize, "Toolbar %d", action - TOOLBAR_ACTION_BASE + 1);
     return true;
   }
-  if (action == 41084) {
+  if (action == TOOLBAR_DOCKER_ACTION) {
     safe_strncpy(buf, "Toolbar Docker", bufSize);
     return true;
   }
@@ -197,6 +198,12 @@ static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
   if (dockedSuffix) *dockedSuffix = '\0';
 
   if (strstr(matchBuf, data->searchTitle) == matchBuf) {
+    // B22: defend against known prefix collisions. "Mixer" otherwise greedily
+    // matches "Mixer Master" (REAPER's master-strip inspector), capturing the
+    // wrong window. For this specific search, require an exact title match.
+    if (strcmp(data->searchTitle, "Mixer") == 0 && strcmp(matchBuf, "Mixer") != 0) {
+      return TRUE;
+    }
     DBG("[MaxPane] %s: PREFIX match '%s' for '%s' hwnd=%p\n", data->dbgPrefix, buf, data->searchTitle, (void*)hwnd);
     data->result = hwnd;
     return FALSE;
@@ -475,6 +482,19 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   return false;
 }
 
+// Verify that a SetParent call achieved the expected parent.
+// Returns true if GetParent(target) == expectedParent. Logs on mismatch.
+// SWELL on macOS does honor GetParent after SetParent; on Win32 SetParent can
+// fail (NULL return / cross-thread / target in destruction) without us noticing.
+static bool VerifySetParent(HWND target, HWND expectedParent, const char* siteTag)
+{
+  HWND actual = GetParent(target);
+  if (actual == expectedParent) return true;
+  DBG("[MaxPane] SetParent VERIFY FAILED at %s: target=%p expected=%p actual=%p\n",
+      siteTag, (void*)target, (void*)expectedParent, (void*)actual);
+  return false;
+}
+
 bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd)
 {
   if (!targetHwnd || !containerHwnd) return false;
@@ -495,6 +515,11 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   }
 
   tab.originalParent = GetParent(targetHwnd);
+  // B27 — snapshot the window's screen rect BEFORE we steal it. DoRelease
+  // restores this position to the orphan NSWindow before triggering close so
+  // REAPER's wnd_vis saves a sensible coord (not the (0,0) default that
+  // SWELL's recreated NSWindow lands at).
+  GetWindowRect(targetHwnd, &tab.originalRect);
 
   char targetTitle[256] = {};
   GetWindowText(targetHwnd, targetTitle, sizeof(targetTitle));
@@ -506,11 +531,30 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   HWND currentParent = tab.originalParent;
   if (currentParent && currentParent != g_reaperMainHwnd) {
     DBG("[MaxPane] DoCapture: detaching from docker parent=%p\n", (void*)currentParent);
+    // B20: REAPER's docker manager (DockWindowAddEx system) keeps the captured
+    // window registered as one of its tabs even after we SetParent the NSView
+    // away. Result: ghost tab placeholder in REAPER's docker, and if user
+    // closes that docker REAPER destroys the view (which is now ours in
+    // MaxPane). Tell REAPER to forget about it BEFORE we steal the NSView.
+    if (g_DockWindowRemove) {
+      g_DockWindowRemove(targetHwnd);
+      DBG("[MaxPane] DoCapture: DockWindowRemove called on %p\n", (void*)targetHwnd);
+    }
     SetParent(targetHwnd, g_reaperMainHwnd);
+    // Best-effort verify; if detach failed, the next reparent is still the gate.
+    VerifySetParent(targetHwnd, g_reaperMainHwnd, "DoCapture/detach");
   }
 
   // Reparent to our container
   SetParent(targetHwnd, containerHwnd);
+  if (!VerifySetParent(targetHwnd, containerHwnd, "DoCapture/attach")) {
+    // Reparent failed: try to restore original parent so we don't leave the
+    // window in an indeterminate state, then abandon this capture.
+    SetParent(targetHwnd, tab.originalParent);
+    DBG("[MaxPane] DoCapture: ABANDONED — reparent to container failed, restored originalParent=%p\n",
+        (void*)tab.originalParent);
+    return false;
+  }
 
   // Preserve original style bits, just add WS_CHILD | WS_VISIBLE and strip
   // top-level window chrome.  Stripping all styles breaks frameless windows
@@ -524,13 +568,23 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   tab.captured = true;
 
   ShowWindow(targetHwnd, SW_SHOWNA);
-  SetWindowPos(targetHwnd, nullptr, 0, 0, 0, 0,
-               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+
+  // B23: reset frame to container area so a previously floating window
+  // (whose NSView frame still has on-screen coordinates from its prior
+  // top-level NSWindow) is visible inside the pane immediately. RefreshLayout
+  // (called by every capture entry point) re-runs RepositionAll right after
+  // and tightens this to the actual pane rect; this is just to avoid the
+  // intermediate state where the view sits off-screen with negative coords.
+  RECT cr;
+  GetClientRect(containerHwnd, &cr);
+  SetWindowPos(targetHwnd, nullptr, 0, 0, cr.right, cr.bottom,
+               SWP_FRAMECHANGED | SWP_NOZORDER | SWP_NOACTIVATE);
 
   // Force Cocoa layout + display pass.  SWELL's SetParent does NOT trigger
   // setNeedsLayout: on the reparented NSView, so child controls (e.g.
   // Routing Matrix grid) may have stale frames from before reparent.
   ForceViewLayoutAndDisplay(targetHwnd);
+  InvalidateRect(targetHwnd, nullptr, TRUE);
 
   // Subclass toolbar windows to prevent REAPER's drag-to-undock on background click
   if (GetToolbarToggleAction(targetTitle) > 0) {
@@ -554,26 +608,169 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
     UnsubclassToolbar(tab.hwnd);
 
     if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand) {
-      // Restore the window to a true top-level NSWindow before toggling.
-      // While WS_CHILD in our container SWELL destroys the NSWindow; calling
-      // g_Main_OnCommand without a real NSWindow causes REAPER to open a NEW
-      // floating window instead of closing the existing one (state stays 1).
-      // SetParent(nullptr) recreates the NSWindow so REAPER can close it
-      // properly and set the toggle state to 0.
-      SetParent(tab.hwnd, nullptr);
-      int toggleState = g_GetToggleCommandState ? g_GetToggleCommandState(tab.toggleAction) : -1;
-      DBG("[MaxPane] DoRelease: restored to top-level, toggle state=%d action=%d\n",
-          toggleState, tab.toggleAction);
-      if (toggleState != 0)
+      int preState = g_GetToggleCommandState
+                       ? g_GetToggleCommandState(tab.toggleAction) : -1;
+
+      // ===== B27 DEBUG INSTRUMENTATION =====
+      // Capture full state at entry to diagnose why action toggle doesn't
+      // update REAPER's tracker on close.
+      RECT preReleaseRect = {};
+      GetWindowRect(tab.hwnd, &preReleaseRect);
+      DBG("[B27] === DoRelease ENTER ===\n");
+      DBG("[B27]   name='%s' isArbitrary=%d hwnd=%p action=%d\n",
+          tab.name, tab.isArbitrary, tab.hwnd, tab.toggleAction);
+      DBG("[B27]   actionCmd='%s' searchTitle='%s'\n",
+          tab.actionCmd[0] ? tab.actionCmd : "(empty)",
+          tab.searchTitle[0] ? tab.searchTitle : "(empty)");
+      DBG("[B27]   preState=%d preReleaseRect=(%ld,%ld,%ld,%ld) IsWindowVisible=%d\n",
+          preState,
+          (long)preReleaseRect.left, (long)preReleaseRect.top,
+          (long)preReleaseRect.right, (long)preReleaseRect.bottom,
+          IsWindowVisible(tab.hwnd) ? 1 : 0);
+      DBG("[B27]   originalParent=%p current=GetParent=%p reaperMain=%p\n",
+          tab.originalParent, GetParent(tab.hwnd), g_reaperMainHwnd);
+      DBG("[B27]   originalRect=(%ld,%ld,%ld,%ld)\n",
+          (long)tab.originalRect.left, (long)tab.originalRect.top,
+          (long)tab.originalRect.right, (long)tab.originalRect.bottom);
+
+      // Fire toggle while WS_CHILD.
+      if (preState != 0) {
+        DBG("[B27] >>> calling g_Main_OnCommand(%d, 0) pre-detach\n", tab.toggleAction);
         g_Main_OnCommand(tab.toggleAction, 0);
+        int postState = g_GetToggleCommandState
+                          ? g_GetToggleCommandState(tab.toggleAction) : -1;
+        DBG("[B27] <<< action done: postState=%d (was %d), IsWindowVisible=%d\n",
+            postState, preState, IsWindowVisible(tab.hwnd) ? 1 : 0);
+        if (postState == 1 && preState == 1) {
+          DBG("[B27] >>> action NO-OP, sending WM_CLOSE\n");
+          SendMessage(tab.hwnd, WM_CLOSE, 0, 0);
+#ifdef MAXPANE_DEBUG
+          int post2 = g_GetToggleCommandState
+                        ? g_GetToggleCommandState(tab.toggleAction) : -1;
+          DBG("[B27] <<< WM_CLOSE done: postState=%d, IsWindowVisible=%d\n",
+              post2, IsWindowVisible(tab.hwnd) ? 1 : 0);
+#endif
+        }
+      } else {
+        DBG("[B27] preState==0 — skipping toggle/close\n");
+      }
+
+      // Detach.
+      DBG("[B27] >>> SetParent(hwnd, nullptr)\n");
+      SetParent(tab.hwnd, nullptr);
+      VerifySetParent(tab.hwnd, nullptr, "DoRelease/post-toggle");
+      DBG("[B27] <<< SetParent done: GetParent=%p IsWindowVisible=%d\n",
+          GetParent(tab.hwnd), IsWindowVisible(tab.hwnd) ? 1 : 0);
+
+      // Restore position.
+      if (tab.originalRect.right > tab.originalRect.left &&
+          tab.originalRect.bottom > tab.originalRect.top) {
+        int w = tab.originalRect.right - tab.originalRect.left;
+        int h = tab.originalRect.bottom - tab.originalRect.top;
+        DBG("[B27] >>> SetWindowPos to originalRect %dx%d at (%ld,%ld)\n",
+            w, h, (long)tab.originalRect.left, (long)tab.originalRect.top);
+        SetWindowPos(tab.hwnd, nullptr,
+                     tab.originalRect.left, tab.originalRect.top, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        RECT after = {};
+        GetWindowRect(tab.hwnd, &after);
+        DBG("[B27] <<< rect after SetWindowPos: (%ld,%ld,%ld,%ld)\n",
+            (long)after.left, (long)after.top, (long)after.right, (long)after.bottom);
+      }
+
+      // Apply chrome.
+      if (tab.isArbitrary && GetToolbarToggleAction(tab.name) <= 0) {
+        DBG("[B27] >>> ApplyFloatingWindowChrome('%s')\n", tab.name);
+        ApplyFloatingWindowChrome(tab.hwnd, tab.name);
+        DBG("[B27] <<< chrome applied\n");
+      } else {
+        DBG("[B27] chrome skipped (isArbitrary=%d toolbar=%d)\n",
+            tab.isArbitrary, GetToolbarToggleAction(tab.name));
+      }
+
+#ifdef MAXPANE_DEBUG
+      int finalState = g_GetToggleCommandState
+                        ? g_GetToggleCommandState(tab.toggleAction) : -1;
+      DBG("[B27] === DoRelease FINAL: toggle state=%d visible=%d ===\n",
+          finalState, IsWindowVisible(tab.hwnd) ? 1 : 0);
+#endif
     } else {
-      // No toggle — reparent to REAPER main and hide.
-      HWND restoreParent = tab.originalParent;
-      if (!restoreParent || !IsWindow(restoreParent)) restoreParent = g_reaperMainHwnd;
-      SetParent(tab.hwnd, restoreParent);
-      DBG("[MaxPane] DoRelease: reparented to %p\n", (void*)restoreParent);
+      // No toggle action known — custom plugins / ReaImGui scripts captured
+      // via click/drag/Open Windows where LookupToggleAction couldn't
+      // resolve. Best-effort close: send WM_CLOSE so the window's own
+      // close handler runs. ReaImGui's NSWindow delegate typically
+      // responds with script teardown, which updates REAPER's tracker
+      // (toolbar buttons, menu checkmarks) via the script's own logic.
+      // For windows that don't respond — at least we tried.
+      RECT preClose = {};
+      GetWindowRect(tab.hwnd, &preClose);
+      DBG("[B27] no-action ELSE branch: name='%s' toggleOff=%d actionCmd='%s'\n",
+          tab.name, toggleOff,
+          tab.actionCmd[0] ? tab.actionCmd : "(empty)");
+      DBG("[B27]   preClose rect=(%ld,%ld,%ld,%ld) visible=%d\n",
+          (long)preClose.left, (long)preClose.top,
+          (long)preClose.right, (long)preClose.bottom,
+          IsWindowVisible(tab.hwnd) ? 1 : 0);
+
+      // B27 v7 — chrome-restore approach. Sequence:
+      // 1. WM_CLOSE while WS_CHILD: script's NSWindow delegate fires,
+      //    script hides its current view-host NSWindow.
+      // 2. SetParent(nullptr): SWELL creates a NEW NSWindow with the
+      //    NSView as its contentView. THIS is the key — only contentView
+      //    NSWindows can have chrome applied.
+      // 3. ApplyFloatingWindowChrome: titled + closable + resizable mask
+      //    on the new orphan NSWindow.
+      // 4. Restore originalRect on the orphan.
+      // 5. Below: SW_HIDE + ForceHide — orphan is hidden.
+      //
+      // When the user re-fires the script action, the script logic finds
+      // the existing NSView (alive) and shows its current NSWindow
+      // (which is OUR chromed orphan) → window appears with proper frame.
+      if (toggleOff) {
+        DBG("[B27] >>> SendMessage(WM_CLOSE) on WS_CHILD (no-action path)\n");
+        SendMessage(tab.hwnd, WM_CLOSE, 0, 0);
+        DBG("[B27] <<< WM_CLOSE done: alive=%d visible=%d\n",
+            IsWindow(tab.hwnd) ? 1 : 0,
+            (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+      }
+
+      if (IsWindow(tab.hwnd)) {
+        DBG("[B27] >>> SetParent(nullptr) so view is contentView of fresh NSWindow\n");
+        SetParent(tab.hwnd, nullptr);
+        VerifySetParent(tab.hwnd, nullptr, "DoRelease/no-action-detach");
+        DBG("[B27] <<< detached, GetParent=%p\n", GetParent(tab.hwnd));
+
+        // Chrome NOW applies (view IS contentView of the new orphan).
+        if (tab.isArbitrary && GetToolbarToggleAction(tab.name) <= 0) {
+          DBG("[B27] >>> ApplyFloatingWindowChrome\n");
+          ApplyFloatingWindowChrome(tab.hwnd, tab.name);
+          DBG("[B27] <<< chrome applied to orphan\n");
+        }
+
+        // Restore originalRect so the chromed orphan has sensible geometry.
+        if (tab.originalRect.right > tab.originalRect.left &&
+            tab.originalRect.bottom > tab.originalRect.top) {
+          int w = tab.originalRect.right - tab.originalRect.left;
+          int h = tab.originalRect.bottom - tab.originalRect.top;
+          DBG("[B27] >>> SetWindowPos to (%ld,%ld) %dx%d\n",
+              (long)tab.originalRect.left, (long)tab.originalRect.top, w, h);
+          SetWindowPos(tab.hwnd, nullptr,
+                       tab.originalRect.left, tab.originalRect.top, w, h,
+                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+      }
     }
     ShowWindow(tab.hwnd, SW_HIDE);
+    // B14: SWELL's SW_HIDE on a top-level NSWindow that "lives" in REAPER's
+    // HWND tree but visually occupies its own NSWindow (Media Explorer, FX
+    // Browser, Undo History — REAPER actions don't reliably toggle them off
+    // either) does not actually orderOut: the NSWindow. Bypass SWELL: call
+    // Cocoa orderOut: directly so the user-visible window vanishes regardless
+    // of REAPER's wnd_vis tracking.
+    ForceHideWindow(tab.hwnd);
+    DBG("[MaxPane] DoRelease: ForceHide applied to '%s' hwnd=%p, visible=%d\n",
+        tab.name, (void*)tab.hwnd,
+        (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
   }
 
   tab.hwnd = nullptr;
@@ -719,6 +916,44 @@ void WindowManager::SetTabColor(int paneId, int tabIndex, int colorIndex)
   ps.tabs[tabIndex].colorIndex = colorIndex;
 }
 
+void WindowManager::SetTabPinned(int paneId, int tabIndex, bool pinned)
+{
+  if (paneId < 0 || paneId >= MAX_PANES) return;
+  PaneState& ps = m_panes[paneId];
+  if (tabIndex < 0 || tabIndex >= ps.tabCount) return;
+  if (ps.tabs[tabIndex].pinned == pinned) return;  // no-op
+
+  // Capture identity of tabs before reordering so we can track activeTab.
+  HWND activeHwnd = (ps.activeTab >= 0 && ps.activeTab < ps.tabCount)
+    ? ps.tabs[ps.activeTab].hwnd : nullptr;
+
+  ps.tabs[tabIndex].pinned = pinned;
+
+  // Stable partition: pinned tabs first (in their original order), unpinned
+  // after (in their original order). Copy out → write back in two passes.
+  TabEntry sorted[MAX_TABS_PER_PANE];
+  int outCount = 0;
+  for (int pass = 0; pass < 2; pass++) {
+    const bool wantPinned = (pass == 0);
+    for (int t = 0; t < ps.tabCount; t++) {
+      if (ps.tabs[t].pinned == wantPinned) {
+        sorted[outCount++] = ps.tabs[t];
+      }
+    }
+  }
+  for (int t = 0; t < outCount; t++) ps.tabs[t] = sorted[t];
+
+  // Restore activeTab to follow the same HWND through the reorder.
+  if (activeHwnd) {
+    for (int t = 0; t < ps.tabCount; t++) {
+      if (ps.tabs[t].hwnd == activeHwnd) {
+        ps.activeTab = t;
+        break;
+      }
+    }
+  }
+}
+
 // =========================================================================
 // Release
 // =========================================================================
@@ -836,7 +1071,35 @@ bool WindowManager::CheckAlive()
       TabEntry& tab = ps.tabs[t];
 
       if (tab.captured) {
-        if (!tab.hwnd || !IsWindow(tab.hwnd)) {
+        bool dead = (!tab.hwnd || !IsWindow(tab.hwnd));
+        if (!dead) {
+          // B2: detect external reparent. IsWindow is still true, but REAPER
+          // (e.g. on project-tab switch) may have pulled the window back into
+          // its own docker. Our state has desynced from reality.
+          HWND p = GetParent(tab.hwnd);
+          if (p != m_containerHwnd) {
+            DBG("[MaxPane] CheckAlive: external reparent for '%s' hwnd=%p actual=%p expected=%p\n",
+                tab.name, (void*)tab.hwnd, (void*)p, (void*)m_containerHwnd);
+            // Try to reclaim. DoCapture (with B1 verification) returns false
+            // if SetParent doesn't stick — then we fall through to release.
+            HWND savedOriginal = tab.originalParent;
+            if (DoCapture(tab, tab.hwnd, m_containerHwnd)) {
+              tab.originalParent = savedOriginal;  // keep the truly-original parent
+              if (t == ps.activeTab) ShowWindow(tab.hwnd, SW_SHOWNA);
+              else                   ShowWindow(tab.hwnd, SW_HIDE);
+              DBG("[MaxPane] CheckAlive: reclaimed '%s' into container\n", tab.name);
+              changed = true;
+            } else {
+              DBG("[MaxPane] CheckAlive: reclaim failed for '%s', releasing tab\n", tab.name);
+              // B6 follow-up: the HWND is alive but no longer ours. Strip
+              // our toolbar subclass before abandoning it, or it lingers on
+              // an HWND we don't track anymore.
+              if (tab.hwnd && IsWindow(tab.hwnd)) UnsubclassToolbar(tab.hwnd);
+              dead = true;
+            }
+          }
+        }
+        if (dead) {
           if (tab.dynamicTitle) {
             // Dynamic-title tab lost its HWND (e.g. MIDI Editor on project switch).
             // Keep the tab entry for recapture on next tick.
@@ -863,7 +1126,16 @@ bool WindowManager::CheckAlive()
         // Uncaptured dynamic tab — try to recapture
         HWND h = FindReaperWindow(tab.searchTitle, m_containerHwnd);
         if (h && !IsWindowCaptured(h)) {
-          if (DoCapture(tab, h, m_containerHwnd)) {
+          // B3: re-verify capturability between find and capture. REAPER may
+          // have destroyed the window (project switch) or moved it into a
+          // docker we shouldn't grab — DoCapture would silently fail otherwise.
+          bool capturable = IsWindow(h);
+          HWND hp = capturable ? GetParent(h) : nullptr;
+          if (capturable && hp && hp != g_reaperMainHwnd) capturable = false;
+          if (!capturable) {
+            DBG("[MaxPane] CheckAlive: B3 race — '%s' hwnd=%p not capturable (parent=%p alive=%d), retry next tick\n",
+                tab.searchTitle, (void*)h, (void*)hp, IsWindow(h) ? 1 : 0);
+          } else if (DoCapture(tab, h, m_containerHwnd)) {
             // Update display name to new window title
             char newTitle[256];
             GetWindowText(h, newTitle, sizeof(newTitle));

@@ -25,6 +25,11 @@ cpp/WDL/
 # Debug logs
 maxpane_debug.log
 
+# SWELL dialog resgen output (generated from cpp/resources/*.rc by
+# swell_resgen.pl at build time; macOS/Linux only)
+cpp/resources/*.rc_mac_dlg
+cpp/resources/*.rc_mac_menu
+
 # Forum post drafts
 forum_post*.txt
 forum_replies.txt
@@ -32,5 +37,23 @@ forum_replies.txt
 # Bugfix handoff (temporary, between sessions)
 cpp/BUGFIX_HANDOFF.md
 
-# Claude Code project files
+# Local dev metadata — AI image-gen prompts used to produce the toolbar
+# icons in Icons/. The generated PNGs are committed; the source prompts
+# stay local (no value to distribution, large to diff).
+assets/
+
+# ASAN-instrumented build tree (separate from cpp/build/).
+cpp/build_asan/
+
+# Nested ReaBeat assets accidentally landed under Icons/toolbar_icons/
+# during dev. Not part of MaxPane distribution — kept locally so the
+# unrelated plugin's artwork stays available, but never committed.
+Icons/toolbar_icons/toolbar_icons/
+
+# Process documents — owner directive: public repo (GitHub) carries
+# clean code + builds + user-facing docs only, never the dev process
+# (audits, ADRs, session plans, AI assistant config). Everything below
+# stays on the local disk; we just don't ship it anywhere remote.
+CLAUDE.md
+docs/v2/
 .claude/

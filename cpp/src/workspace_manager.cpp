@@ -8,6 +8,8 @@
 
 WorkspaceManager::WorkspaceManager()
   : m_count(0)
+  , m_section(EXT_SECTION)
+  , m_listSection(EXT_SECTION)
 {
   memset(m_workspaces, 0, sizeof(m_workspaces));
 }
@@ -34,116 +36,134 @@ const WorkspaceEntry* WorkspaceManager::Find(const char* name) const
 // Shared serialization helpers
 // =========================================================================
 
-void WorkspaceManager::WriteTreeNodesStatic(const char* prefix, const NodeSnapshot* snap, int count,
-                                      StateAccessor& state)
+void WorkspaceManager::WriteTreeNodesStatic(const char* section, const char* prefix,
+                                      const NodeSnapshot* snap, int count, StateAccessor& state)
 {
   char buf[256];
   char key[128];
 
   snprintf(key, sizeof(key), "%stree_node_count", prefix);
   snprintf(buf, sizeof(buf), "%d", count);
-  state.Set(EXT_SECTION, key, buf, true);
+  state.Set(section, key, buf, true);
 
   for (int i = 0; i < count; i++) {
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
     snprintf(buf, sizeof(buf), "%d", (int)snap[i].type);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
     snprintf(buf, sizeof(buf), "%d", (int)snap[i].orient);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
     snprintf(buf, sizeof(buf), "%.4f", snap[i].ratio);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].childA);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].childB);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].paneId);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
     snprintf(buf, sizeof(buf), "%d", snap[i].parent);
-    state.Set(EXT_SECTION, key, buf, true);
+    state.Set(section, key, buf, true);
   }
 
   // Clear any stale nodes beyond current count
   for (int i = count; i < MAX_TREE_NODES; i++) {
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
-    const char* val = state.Get(EXT_SECTION, key);
+    const char* val = state.Get(section, key);
     if (!val) break;  // no more stale data
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
-    state.Set(EXT_SECTION, key, "", true);
+    state.Set(section, key, "", true);
   }
 }
 
-int WorkspaceManager::ReadTreeNodesStatic(const char* prefix, NodeSnapshot* snap,
-                                    StateAccessor& state)
+int WorkspaceManager::ReadTreeNodesStatic(const char* section, const char* prefix,
+                                    NodeSnapshot* snap, StateAccessor& state)
 {
   char key[128];
   snprintf(key, sizeof(key), "%stree_node_count", prefix);
-  const char* ncStr = state.Get(EXT_SECTION, key);
+  const char* ncStr = state.Get(section, key);
   int count = safe_atoi_clamped(ncStr, 0, MAX_TREE_NODES);
 
   for (int i = 0; i < count; i++) {
     const char* val;
 
     snprintf(key, sizeof(key), "%stn_%d_type", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].type = (SplitNodeType)safe_atoi_clamped(val, 0, 2);
 
     snprintf(key, sizeof(key), "%stn_%d_orient", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].orient = (SplitterOrientation)safe_atoi_clamped(val, 0, 1);
 
     snprintf(key, sizeof(key), "%stn_%d_ratio", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].ratio = safe_atof_clamped(val, 0.05f, 0.95f);
 
     snprintf(key, sizeof(key), "%stn_%d_childA", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].childA = safe_atoi_clamped(val, -1, MAX_TREE_NODES - 1);
 
     snprintf(key, sizeof(key), "%stn_%d_childB", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].childB = safe_atoi_clamped(val, -1, MAX_TREE_NODES - 1);
 
     snprintf(key, sizeof(key), "%stn_%d_paneId", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].paneId = safe_atoi_clamped(val, -1, MAX_PANES - 1);
 
     snprintf(key, sizeof(key), "%stn_%d_parent", prefix, i);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     snap[i].parent = safe_atoi_clamped(val, -1, MAX_TREE_NODES - 1);
   }
 
   return count;
 }
 
-void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapshot* panes,
-                                     int maxPanes, const WindowManager* winMgr,
-                                     StateAccessor& state)
+void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* prefix,
+                                     const PaneSnapshot* panes, int maxPanes,
+                                     const WindowManager* winMgr, StateAccessor& state)
 {
   char buf[256];
   char key[128];
+
+  // B21: pre-clear all pane keys so that overwriting a slot with a smaller
+  // layout (e.g. former 7-pane workspace → new 2-pane workspace) doesn't
+  // leave behind ws_N_pane_3..7 keys that ReadPaneTabsStatic would later
+  // resurrect as phantom panes. Valid panes are re-written below; anything
+  // beyond maxPanes (or with ps==nullptr in live path) stays cleared.
+  for (int p = 0; p < MAX_PANES; p++) {
+    snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
+    state.Set(section, key, "0", true);
+    snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
+    state.Set(section, key, "0", true);
+    for (int t = 0; t < MAX_TABS_PER_PANE; t++) {
+      snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
+      state.Set(section, key, "", true);
+      snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
+      state.Set(section, key, "", true);
+    }
+  }
 
   for (int p = 0; p < maxPanes && p < MAX_PANES; p++) {
     if (winMgr) {
@@ -153,11 +173,11 @@ void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapsho
 
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
       snprintf(buf, sizeof(buf), "%d", ps->tabCount);
-      state.Set(EXT_SECTION, key, buf, true);
+      state.Set(section, key, buf, true);
 
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
       snprintf(buf, sizeof(buf), "%d", ps->activeTab);
-      state.Set(EXT_SECTION, key, buf, true);
+      state.Set(section, key, buf, true);
 
       for (int t = 0; t < ps->tabCount; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
@@ -173,34 +193,41 @@ void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapsho
             }
             char val[512];
             snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, tab.name);
-            state.Set(EXT_SECTION, key, val, true);
+            state.Set(section, key, val, true);
           } else {
-            state.Set(EXT_SECTION, key, tab.name, true);
+            state.Set(section, key, tab.name, true);
           }
         } else {
-          state.Set(EXT_SECTION, key, "", true);
+          state.Set(section, key, "", true);
         }
         // Save tab color
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
         snprintf(buf, sizeof(buf), "%d", tab.colorIndex);
-        state.Set(EXT_SECTION, key, buf, true);
+        state.Set(section, key, buf, true);
+      }
+      // Save pinned flag per tab (C2 — ADR-027)
+      for (int t = 0; t < ps->tabCount; t++) {
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, t);
+        state.Set(section, key, ps->tabs[t].pinned ? "1" : "0", true);
       }
       // Clear any leftover tabs from previous state
       for (int t = ps->tabCount; t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
-        state.Set(EXT_SECTION, key, "", true);
+        state.Set(section, key, "", true);
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
-        state.Set(EXT_SECTION, key, "", true);
+        state.Set(section, key, "", true);
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, t);
+        state.Set(section, key, "", true);
       }
     } else {
       // Saving from snapshot data
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
       snprintf(buf, sizeof(buf), "%d", panes[p].tabCount);
-      state.Set(EXT_SECTION, key, buf, true);
+      state.Set(section, key, buf, true);
 
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
       snprintf(buf, sizeof(buf), "%d", panes[p].activeTab);
-      state.Set(EXT_SECTION, key, buf, true);
+      state.Set(section, key, buf, true);
 
       for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
@@ -209,36 +236,39 @@ void WorkspaceManager::WritePaneTabsStatic(const char* prefix, const PaneSnapsho
             ? panes[p].tabs[t].actionCommand : "0";
           char val[512];
           snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, panes[p].tabs[t].name);
-          state.Set(EXT_SECTION, key, val, true);
+          state.Set(section, key, val, true);
         } else {
-          state.Set(EXT_SECTION, key, panes[p].tabs[t].name, true);
+          state.Set(section, key, panes[p].tabs[t].name, true);
         }
         // Save tab color from snapshot
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
         snprintf(buf, sizeof(buf), "%d", panes[p].tabs[t].colorIndex);
-        state.Set(EXT_SECTION, key, buf, true);
+        state.Set(section, key, buf, true);
+        // Save pinned flag (C2 — ADR-027)
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, t);
+        state.Set(section, key, panes[p].tabs[t].pinned ? "1" : "0", true);
       }
     }
   }
 }
 
-void WorkspaceManager::ReadPaneTabsStatic(const char* prefix, PaneSnapshot* panes, int maxPanes,
-                                    StateAccessor& state)
+void WorkspaceManager::ReadPaneTabsStatic(const char* section, const char* prefix,
+                                    PaneSnapshot* panes, int maxPanes, StateAccessor& state)
 {
   char key[128];
 
   for (int p = 0; p < maxPanes && p < MAX_PANES; p++) {
     snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
-    const char* val = state.Get(EXT_SECTION, key);
+    const char* val = state.Get(section, key);
     panes[p].tabCount = safe_atoi_clamped(val, 0, MAX_TABS_PER_PANE);
 
     snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
-    val = state.Get(EXT_SECTION, key);
+    val = state.Get(section, key);
     panes[p].activeTab = safe_atoi_clamped(val, 0, MAX_TABS_PER_PANE - 1);
 
     for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
       snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
-      val = state.Get(EXT_SECTION, key);
+      val = state.Get(section, key);
       DBG("[MaxPane] ReadPaneTabs: %s = '%s'\n", key, val ? val : "(null)");
       if (val) {
         if (strncmp(val, "arb:", 4) == 0) {
@@ -287,85 +317,14 @@ void WorkspaceManager::ReadPaneTabsStatic(const char* prefix, PaneSnapshot* pane
       }
       // Read tab color
       snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
-      val = state.Get(EXT_SECTION, key);
+      val = state.Get(section, key);
       panes[p].tabs[t].colorIndex = safe_atoi_clamped(val, 0, TAB_COLOR_COUNT - 1);
+      // Read pinned flag (C2 — ADR-027). Missing key → false (backward compat).
+      snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, t);
+      val = state.Get(section, key);
+      panes[p].tabs[t].pinned = (val && val[0] == '1');
     }
   }
-}
-
-// =========================================================================
-// Current state persistence
-// =========================================================================
-
-void WorkspaceManager::SaveCurrentState(const SplitTree& tree, const WindowManager& winMgr)
-{
-  if (!g_SetExtState) return;
-
-  GlobalStateAccessor globalState;
-
-  // Save tree version marker
-  globalState.Set(EXT_SECTION, "tree_version", "2", true);
-
-  // Save tree nodes
-  NodeSnapshot snap[MAX_TREE_NODES];
-  int nodeCount = 0;
-  tree.SaveSnapshot(snap, nodeCount);
-
-  // Validate snapshot before saving — branches must have distinct children
-  bool corrupt = false;
-  for (int i = 0; i < nodeCount; i++) {
-    if (snap[i].type == NODE_BRANCH && snap[i].childA == snap[i].childB) {
-      DBG("[MaxPane] SaveCurrentState: WARNING — node %d has childA==childB==%d (corrupt tree)\n",
-          i, snap[i].childA);
-      corrupt = true;
-    }
-  }
-  if (corrupt) {
-    DBG("[MaxPane] SaveCurrentState: corrupt tree detected, skipping save\n");
-    return;
-  }
-  WriteTreeNodesStatic("", snap, nodeCount, globalState);
-
-  // Save pane tab assignments for all used paneIds
-  WritePaneTabsStatic("", nullptr, MAX_PANES, &winMgr, globalState);
-
-  // Verify what was saved
-  for (int p = 0; p < MAX_PANES; p++) {
-    const PaneState* ps = winMgr.GetPaneState(p);
-    if (ps && ps->tabCount > 0) {
-      DBG("[MaxPane] SaveCurrentState: pane %d has %d tabs, tab0='%s' captured=%d\n",
-          p, ps->tabCount, ps->tabs[0].name[0] ? ps->tabs[0].name : "(null)",
-          ps->tabs[0].captured);
-    }
-  }
-}
-
-bool WorkspaceManager::LoadCurrentState(NodeSnapshot* outSnap, int& outNodeCount,
-                                        PaneSnapshot outPanes[MAX_PANES],
-                                        bool& outHasTreeFormat) const
-{
-  if (!g_GetExtState) return false;
-
-  GlobalStateAccessor globalState;
-
-  // Check tree version
-  const char* treeVer = globalState.Get(EXT_SECTION, "tree_version");
-  outHasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
-
-  if (outHasTreeFormat) {
-    memset(outSnap, 0, sizeof(NodeSnapshot) * MAX_TREE_NODES);
-    outNodeCount = ReadTreeNodesStatic("", outSnap, globalState);
-    if (outNodeCount < 1) return false;
-  } else {
-    // Legacy format: caller must handle preset loading
-    outNodeCount = 0;
-  }
-
-  // Read pane tabs (format is the same regardless of tree version)
-  memset(outPanes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-  ReadPaneTabsStatic("", outPanes, MAX_PANES, globalState);
-
-  return true;
 }
 
 // =========================================================================
@@ -379,7 +338,7 @@ void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
 
   ProjectStateAccessor projState(proj);
 
-  projState.Set(EXT_SECTION, "tree_version", "2", true);
+  projState.Set(m_section, "tree_version", "2", true);
 
   NodeSnapshot snap[MAX_TREE_NODES];
   int nodeCount = 0;
@@ -397,8 +356,8 @@ void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
     DBG("[MaxPane] SaveProjectState: corrupt tree detected, skipping save\n");
     return;
   }
-  WriteTreeNodesStatic("", snap, nodeCount, projState);
-  WritePaneTabsStatic("", nullptr, MAX_PANES, &winMgr, projState);
+  WriteTreeNodesStatic(m_section, "", snap, nodeCount, projState);
+  WritePaneTabsStatic(m_section, "", nullptr, MAX_PANES, &winMgr, projState);
 
   DBG("[MaxPane] SaveProjectState: saved %d nodes to proj=%p\n", nodeCount, proj);
 
@@ -419,12 +378,12 @@ bool WorkspaceManager::LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap,
 
   ProjectStateAccessor projState(proj);
 
-  const char* treeVer = projState.Get(EXT_SECTION, "tree_version");
+  const char* treeVer = projState.Get(m_section, "tree_version");
   outHasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
 
   if (outHasTreeFormat) {
     memset(outSnap, 0, sizeof(NodeSnapshot) * MAX_TREE_NODES);
-    outNodeCount = ReadTreeNodesStatic("", outSnap, projState);
+    outNodeCount = ReadTreeNodesStatic(m_section, "", outSnap, projState);
     if (outNodeCount < 1) return false;
   } else {
     outNodeCount = 0;
@@ -432,7 +391,7 @@ bool WorkspaceManager::LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap,
   }
 
   memset(outPanes, 0, sizeof(PaneSnapshot) * MAX_PANES);
-  ReadPaneTabsStatic("", outPanes, MAX_PANES, projState);
+  ReadPaneTabsStatic(m_section, "", outPanes, MAX_PANES, projState);
 
   return true;
 }
@@ -443,7 +402,7 @@ bool WorkspaceManager::HasProjectState(ReaProject* proj) const
 
   // Try both our section name and uppercase variant
   char rawBuf[64] = {};
-  g_GetProjExtState(proj, EXT_SECTION, "tree_version", rawBuf, sizeof(rawBuf));
+  g_GetProjExtState(proj, m_section, "tree_version", rawBuf, sizeof(rawBuf));
 
   // Also try uppercase section + key in case REAPER needs exact RPP case after reload
   char rawBuf2[64] = {};
@@ -496,6 +455,7 @@ void WorkspaceManager::Save(const char* name, const SplitTree& tree, const Windo
       ws.panes[p].tabs[t].isArbitrary = tab.isArbitrary;
       ws.panes[p].tabs[t].toggleAction = tab.toggleAction;
       ws.panes[p].tabs[t].colorIndex = tab.colorIndex;
+      ws.panes[p].tabs[t].pinned = tab.pinned;
       if (tab.isArbitrary && tab.actionCmd[0]) {
         safe_strncpy(ws.panes[p].tabs[t].actionCommand, tab.actionCmd,
                      sizeof(ws.panes[p].tabs[t].actionCommand));
@@ -529,6 +489,33 @@ void WorkspaceManager::Delete(const char* name)
   }
 }
 
+bool WorkspaceManager::Rename(int index, const char* newName)
+{
+  if (index < 0 || index >= m_count) return false;
+  if (!newName || !newName[0]) return false;
+  if (!m_workspaces[index].used) return false;
+  // Reject collision (case-sensitive — matches Find/Delete behavior).
+  if (Find(newName)) return false;
+  safe_strncpy(m_workspaces[index].name, newName, MAX_WORKSPACE_NAME);
+  SaveList();
+  return true;
+}
+
+bool WorkspaceManager::Duplicate(int sourceIndex, const char* newName)
+{
+  if (sourceIndex < 0 || sourceIndex >= m_count) return false;
+  if (!newName || !newName[0]) return false;
+  if (!m_workspaces[sourceIndex].used) return false;
+  if (Find(newName)) return false;
+  if (m_count >= MAX_WORKSPACES) return false;
+
+  m_workspaces[m_count] = m_workspaces[sourceIndex];  // value copy — preserves snapshot
+  safe_strncpy(m_workspaces[m_count].name, newName, MAX_WORKSPACE_NAME);
+  m_count++;
+  SaveList();
+  return true;
+}
+
 // =========================================================================
 // Workspace list persistence
 // =========================================================================
@@ -542,7 +529,8 @@ void WorkspaceManager::LoadList()
 
   GlobalStateAccessor globalState;
 
-  const char* countStr = globalState.Get(EXT_SECTION, "ws_count");
+  // B25/ADR-012: workspace list lives in m_listSection (shared across instances).
+  const char* countStr = globalState.Get(m_listSection, "ws_count");
   if (!countStr) return;
 
   int count = safe_atoi_clamped(countStr, 0, MAX_WORKSPACES);
@@ -551,7 +539,7 @@ void WorkspaceManager::LoadList()
 
   for (int w = 0; w < count; w++) {
     snprintf(key, sizeof(key), "ws_%d_name", w);
-    const char* name = globalState.Get(EXT_SECTION, key);
+    const char* name = globalState.Get(m_listSection, key);
     if (!name) continue;
 
     WorkspaceEntry& ws = m_workspaces[m_count];
@@ -561,28 +549,28 @@ void WorkspaceManager::LoadList()
 
     // Check if workspace uses tree format
     snprintf(key, sizeof(key), "ws_%d_tree_version", w);
-    const char* tvStr = globalState.Get(EXT_SECTION, key);
+    const char* tvStr = globalState.Get(m_listSection, key);
     ws.treeVersion = safe_atoi_clamped(tvStr, 0, 2);
 
     if (ws.treeVersion == 2) {
       // Load tree snapshot using shared helper
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      ws.nodeCount = ReadTreeNodesStatic(prefix, ws.nodes, globalState);
+      ws.nodeCount = ReadTreeNodesStatic(m_listSection, prefix, ws.nodes, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
-      const char* val = globalState.Get(EXT_SECTION, key);
+      const char* val = globalState.Get(m_listSection, key);
       ws.layoutPreset = safe_atoi_clamped(val, 0, PRESET_COUNT - 1);
 
       for (int r = 0; r < MAX_SPLITTERS; r++) {
         snprintf(key, sizeof(key), "ws_%d_ratio_%d", w, r);
-        val = globalState.Get(EXT_SECTION, key);
+        val = globalState.Get(m_listSection, key);
         ws.ratios[r] = safe_atof_clamped(val, 0.05f, 0.95f);
       }
 
       snprintf(key, sizeof(key), "ws_%d_pane_count", w);
-      val = globalState.Get(EXT_SECTION, key);
+      val = globalState.Get(m_listSection, key);
       ws.paneCount = safe_atoi_clamped(val, 0, MAX_PANES);
     }
 
@@ -590,7 +578,7 @@ void WorkspaceManager::LoadList()
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    ReadPaneTabsStatic(prefix, ws.panes, maxPanes, globalState);
+    ReadPaneTabsStatic(m_listSection, prefix, ws.panes, maxPanes, globalState);
 
     m_count++;
   }
@@ -605,44 +593,45 @@ void WorkspaceManager::SaveList()
   char buf[256];
   char key[128];
 
+  // B25/ADR-012: workspace list lives in m_listSection (shared across instances).
   snprintf(buf, sizeof(buf), "%d", m_count);
-  globalState.Set(EXT_SECTION, "ws_count", buf, true);
+  globalState.Set(m_listSection, "ws_count", buf, true);
 
   for (int w = 0; w < m_count; w++) {
     WorkspaceEntry& ws = m_workspaces[w];
 
     snprintf(key, sizeof(key), "ws_%d_name", w);
-    globalState.Set(EXT_SECTION, key, ws.name, true);
+    globalState.Set(m_listSection, key, ws.name, true);
 
     snprintf(key, sizeof(key), "ws_%d_tree_version", w);
     snprintf(buf, sizeof(buf), "%d", ws.treeVersion);
-    globalState.Set(EXT_SECTION, key, buf, true);
+    globalState.Set(m_listSection, key, buf, true);
 
     if (ws.treeVersion == 2) {
       char prefix[32];
       snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-      WriteTreeNodesStatic(prefix, ws.nodes, ws.nodeCount, globalState);
+      WriteTreeNodesStatic(m_listSection, prefix, ws.nodes, ws.nodeCount, globalState);
     } else {
       // Legacy format
       snprintf(key, sizeof(key), "ws_%d_preset", w);
       snprintf(buf, sizeof(buf), "%d", ws.layoutPreset);
-      globalState.Set(EXT_SECTION, key, buf, true);
+      globalState.Set(m_listSection, key, buf, true);
 
       for (int r = 0; r < MAX_SPLITTERS; r++) {
         snprintf(key, sizeof(key), "ws_%d_ratio_%d", w, r);
         snprintf(buf, sizeof(buf), "%.4f", ws.ratios[r]);
-        globalState.Set(EXT_SECTION, key, buf, true);
+        globalState.Set(m_listSection, key, buf, true);
       }
 
       snprintf(key, sizeof(key), "ws_%d_pane_count", w);
       snprintf(buf, sizeof(buf), "%d", ws.paneCount);
-      globalState.Set(EXT_SECTION, key, buf, true);
+      globalState.Set(m_listSection, key, buf, true);
     }
 
     // Save pane tab data using shared helper
     int maxPanes = (ws.treeVersion == 2) ? MAX_PANES : (ws.paneCount > 0 ? ws.paneCount : 4);
     char prefix[32];
     snprintf(prefix, sizeof(prefix), "ws_%d_", w);
-    WritePaneTabsStatic(prefix, ws.panes, maxPanes, nullptr, globalState);
+    WritePaneTabsStatic(m_listSection, prefix, ws.panes, maxPanes, nullptr, globalState);
   }
 }

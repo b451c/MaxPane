@@ -4,7 +4,8 @@
     <reapack name="reaper_maxpane" type="extension" desc="MaxPane: Nested Docker Layouts for REAPER">
       <metadata>
         <link rel="website">https://github.com/b451c/MaxPane</link>
-        <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-hero.png</link>
+        <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_launcher.png</link>
+        <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_settings.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-layout.png</link>
         <link rel="donation">https://ko-fi.com/quickmd</link>
         <description><![CDATA[{\rtf1\ansi\deff0{\fonttbl{\f0 \fswiss Helvetica;}{\f1 \fmodern Courier;}}
@@ -12,30 +13,69 @@
 \widowctrl\hyphauto
 
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 MaxPane - Nested Docker Layouts for REAPER\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 A native C++ extension that lets you build custom multi-pane workspaces with tabbed windows, drag-and-drop, and instant workspace switching.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Features\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Flexible split layouts (up to 16 panes)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Tabbed windows with drag-and-drop and reorder\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Solo/maximize pane - expand any pane to fill the container\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab 15 known REAPER windows with one-click capture\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Arbitrary window capture (including ReaImGui scripts)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Keyboard shortcuts - 5 REAPER actions bindable in Actions dialog\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Named workspaces (save/restore complete layouts)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Favorites, tab colors, layout presets\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS dark mode support\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Per-project state saved inside .RPP files\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 A native C++ extension that turns any REAPER window into a tile inside a multi-pane workspace. Up to 8 independent containers, drag-to-dock from outside, 32 saved workspaces, hotkeys for everything, Quick Switcher, floating mode, and a launcher that remembers your layouts.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 What's new in 2.0\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Drag-to-dock - grab any REAPER window and drop it on a pane with live preview\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Up to 8 independent MaxPane containers per session (multi-instance)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Floating mode - detach a container into its own OS window, multi-monitor aware, always-on-top toggle\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Quick Switcher - fuzzy-match across open tabs, workspaces, and favorites\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab 32 workspace slots + 32 favorite slots with bindable hotkeys\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Persistent navigation toolbar (Home, Drag, Switch, Save, Load, Settings, Support)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Workspace launcher - card grid with mini layout previews on empty containers\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Reopen last closed tab, pinned tabs, Close Others / to Right / All\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Settings dialog with dark-mode override and live preference editing\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Reliability: close-leak bugs eliminated; WM_CLOSE primary, action toggle fallback, startup ghost cleanup\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Core features\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Flexible split layouts (up to 16 panes), tabbed panes, drag-and-drop\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Solo/maximize pane, 5 layout presets, tab colors\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab 15 known REAPER windows with one-click capture, plus arbitrary capture (toolbars, ReaImGui scripts)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Per-project state saved inside .RPP files via project_config_extension\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Dockable into REAPER's native docker system\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Zero dependencies - pure C++ extension\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS dark/light mode auto + manual override\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Zero scripting dependencies - pure C++ extension\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER 7.0+\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS (arm64, x86_64)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Windows (x64)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Linux (x86_64)\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS arm64 + x86_64\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Windows + Linux builds will land after testing on those platforms completes.\par}
 {\pard \qc \f0 \sa180 \li0 \fi0 \emdash\emdash\emdash\emdash\emdash\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 MIT License | https://github.com/b451c/MaxPane\par}
 }
 ]]></description>
       </metadata>
+
+      <version name="2.0.0" author="b451c" time="2026-05-22T00:00:00Z">
+        <changelog><![CDATA[Major release
+
+New features:
+- Drag-to-dock: grab any REAPER window from outside and drop it on a pane with live preview (split L/R/T/B, tab-bar, body-center, Shift+drop replace)
+- Multi-instance: up to 8 independent MaxPane containers per session
+- Floating mode: detach a container into its own OS window with native chrome, multi-monitor aware, optional always-on-top
+- Quick Switcher: fuzzy-match across open tabs / workspaces / favorites, bind your own hotkey
+- 32 workspace slots + 32 favorite slots with bindable hotkeys + "Workspace pickup" single-hotkey-for-all-slots action
+- Persistent navigation toolbar (Home / Drag / Switch / Save / Load / Settings / Support)
+- Workspace launcher card grid with mini layout previews on empty containers, plus Home overlay (non-destructive picker)
+- Reopen last closed tab, pinned tabs, Close Others / to Right / All
+- Settings dialog with auto-open, nav-bar toggle, dark-mode override
+- Toast bar for non-fatal feedback; custom Save Workspace dialog
+
+Reliability:
+- Close mechanism reworked: WM_CLOSE primary, action toggle fallback, stale-list safety net at next REAPER startup
+- B1-B7, B9, B12-B23, B25, B27 fixed - the "windows fall out of MaxPane" class of bugs eliminated
+- B27 in particular: ReaImGui plugins (ReaBeat, ReaMD, reamix.me) no longer reopen frameless after capture+release+relaunch
+- Aggressive startup ghost-cleanup polling cuts visible flash from ~250ms to ~30ms on macOS restart
+
+Build + test:
+- 4-platform CI matrix (macOS arm64, macOS x86_64, Ubuntu, Windows)
+- Catch2 unit tests for pure-logic translation units (SplitTree, WorkspaceManager serialization)
+- ARCHITECTURE.md created from scratch for OSS contributor onboarding
+
+macOS only for v2.0.0. Windows + Linux builds will be added after they pass smoke testing on those platforms (issue #8 Windows mouse input, issue #9 Linux FX Browser close are the open blockers).
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.0/reaper_maxpane-x86_64.dylib</source>
+      </version>
 
       <version name="1.5.2" author="b451c" time="2026-03-04T00:00:00Z">
         <changelog><![CDATA[Bug fix release

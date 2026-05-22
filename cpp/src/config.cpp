@@ -1,27 +1,43 @@
 #include "config.h"
 #include "swell_cocoa_helpers.h"
+#include "globals.h"
+#include <cstring>
 
-// Cached dark mode state — checked once at startup
+// Cached effective dark mode — invalidated when Settings dialog changes
+// the user override (see InvalidateMaxPaneDarkModeCache).
 static bool g_darkModeChecked = false;
 static bool g_darkModeActive = false;
 
-static bool IsDarkMode()
+bool MaxPaneIsDarkMode()
 {
   if (!g_darkModeChecked) {
-    g_darkModeActive = IsSystemDarkMode();
+    // ExtState override: "dark"/"light" force; "auto" or absent falls back.
+    const char* mode = g_GetExtState ? g_GetExtState("MaxPane_cpp", "dark_mode") : nullptr;
+    if (mode && std::strcmp(mode, "dark") == 0) {
+      g_darkModeActive = true;
+    } else if (mode && std::strcmp(mode, "light") == 0) {
+      g_darkModeActive = false;
+    } else {
+      g_darkModeActive = IsSystemDarkMode();
+    }
     g_darkModeChecked = true;
   }
   return g_darkModeActive;
 }
 
+void InvalidateMaxPaneDarkModeCache()
+{
+  g_darkModeChecked = false;
+}
+
 COLORREF GetPaneBgColor()
 {
-  return IsDarkMode() ? RGB(51, 51, 51) : RGB(172, 172, 172);
+  return MaxPaneIsDarkMode() ? RGB(51, 51, 51) : RGB(172, 172, 172);
 }
 
 COLORREF GetPaneGridLineColor()
 {
-  return IsDarkMode() ? RGB(65, 65, 65) : RGB(158, 158, 158);
+  return MaxPaneIsDarkMode() ? RGB(65, 65, 65) : RGB(158, 158, 158);
 }
 
 const char* const EXT_SECTION = "MaxPane_cpp";
