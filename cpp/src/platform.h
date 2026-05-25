@@ -35,7 +35,12 @@ inline HWND CreateMaxPaneDialog(HWND parent, DLGPROC dlgProc, LPARAM param) {
   #pragma pack(push, 4)
   struct { DLGTEMPLATE tmpl; WORD menu; WORD wndClass; WORD title; } dlg = {};
   #pragma pack(pop)
-  dlg.tmpl.style = WS_CHILD | DS_CONTROL;
+  // Sprint 1 Entry 3 — WS_CLIPCHILDREN | WS_CLIPSIBLINGS prevents the container
+  // paint from blitting over captured child rects during resize (Mixer columns
+  // smearing across the container). WS_CLIPSIBLINGS future-proofs side-by-side
+  // captured panes. Direct2D children still smear under default copy-bits
+  // behaviour — Entry 19 handles that via SWP_NOCOPYBITS on arbitrary captures.
+  dlg.tmpl.style = WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | DS_CONTROL;
   dlg.tmpl.cx = 400;
   dlg.tmpl.cy = 300;
   return CreateDialogIndirectParam(GetModuleHandle(nullptr), &dlg.tmpl, parent, dlgProc, param);

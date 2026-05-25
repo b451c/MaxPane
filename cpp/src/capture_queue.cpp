@@ -179,15 +179,35 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         GetWindowText(found, foundTitle, sizeof(foundTitle));
 
         bool foundIsDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
-        if (!foundIsDockFrame && pc.retryCount <= 8) {
+        // Sprint 1 Entry 16 — skip dock-frame wait for window classes that
+        // will never have one. Originally this also skipped Lua scripts
+        // ("the wrapper never appears on Main_OnCommand restore"). On
+        // macOS that assumption failed: REAPER 7.73 + a workspace that
+        // auto-docked a ReaImGui script crashed REAPER inside
+        // ReaImGui's Docker::moveTo with a null-deref at offset 0x20.
+        // Root cause: when MaxPane reparents the INNER ReaImGui window
+        // (because we skipped waiting for the dock-frame to materialize),
+        // ReaImGui's internal Docker bookkeeping still holds a pointer
+        // to the old hierarchy; the next heartbeat dereferences a stale
+        // field and crashes. Per MEMORY.md "always capture the dock
+        // frame, never the inner window". The Lua-script fast-path is
+        // therefore reverted — scripts wait the full 8 retries for the
+        // dock-frame wrapper before falling through to inner. The
+        // empty-title plugin fast-path stays (ReaBeat / Reamix on
+        // Win32 — they never have a dock-frame wrapper at all).
+        const bool isPluginNoTitle = (foundTitle[0] == '\0');
+        if (!foundIsDockFrame && !isPluginNoTitle && pc.retryCount <= 8) {
           // We found the inner window but no dock frame yet — wait for it
           if (pc.retryCount == 1) {
-            // Dump all windows once to see if dock frame exists anywhere
             WindowManager::DumpAllWindowTitles(pc.displayName);
           }
           DBG("[MaxPane] CaptureQueue: found inner '%s' hwnd=%p but no dock frame yet, waiting (retry=%d)\n",
               pc.displayName, (void*)found, pc.retryCount);
           continue;
+        }
+        if (isPluginNoTitle) {
+          DBG("[MaxPane] CaptureQueue: empty-title plugin '%s' — skipping dock-frame wait (Entry 16)\n",
+              pc.displayName);
         }
         if (!foundIsDockFrame) {
           DBG("[MaxPane] CaptureQueue: no dock frame appeared for '%s' after %d retries, using inner window\n",

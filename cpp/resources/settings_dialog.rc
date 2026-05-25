@@ -18,10 +18,20 @@ CAPTION "MaxPane Settings"
 BEGIN
     // ---- General ----
     LTEXT           "GENERAL", -1, 15, 12, 100, 10
+#ifdef _WIN32
+    // Sprint 1 Entry 7 — Win32 rc.exe compiles CHECKBOX as BS_CHECKBOX
+    // (manual-toggle). AUTOCHECKBOX (BS_AUTOCHECKBOX) flips state on click;
+    // SWELL macOS already treats CHECKBOX as auto-toggling.
+    AUTOCHECKBOX    "Open MaxPane automatically when REAPER starts",
+                    IDC_SET_AUTOOPEN, 25, 28, 320, 14
+    AUTOCHECKBOX    "Show navigation bar at top of every MaxPane",
+                    IDC_SET_SHOWNAVBAR, 25, 44, 320, 14
+#else
     CHECKBOX        "Open MaxPane automatically when REAPER starts",
                     IDC_SET_AUTOOPEN, 25, 28, 320, 14
     CHECKBOX        "Show navigation bar at top of every MaxPane",
                     IDC_SET_SHOWNAVBAR, 25, 44, 320, 14
+#endif
 
     // ---- Appearance ----
     LTEXT           "APPEARANCE", -1, 15, 72, 100, 10
@@ -38,7 +48,10 @@ BEGIN
 
     // ---- Advanced ----
     LTEXT           "ADVANCED", -1, 15, 233, 100, 10
-    LTEXT           "MaxPane v2.0 (development) — 32 workspace slots, 32 favorite slots, up to 8 instances.",
+    // Sprint 1 Entry 7 — em-dash → "--": rc.exe defaults to ACP for
+    // string literals; UTF-8 em-dash byte sequence renders as Latin-1
+    // mojibake (â€¡). Defer real fix (#pragma code_page(65001)) to v2.1.
+    LTEXT           "MaxPane v2.0 (development) -- 32 workspace slots, 32 favorite slots, up to 8 instances.",
                     IDC_SET_VERSION_LBL, 25, 248, 320, 18
 
     // ---- Bottom button row (full breathing space above) ----

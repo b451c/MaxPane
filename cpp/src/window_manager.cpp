@@ -5,6 +5,12 @@
 #include <cstring>
 #include <cstdio>
 
+#ifdef _WIN32
+#include <psapi.h>  // EnumProcessModules, GetModuleInformation (Entry 12)
+#else
+#include <strings.h>  // strcasecmp / strncasecmp (Entry 15 cross-platform)
+#endif
+
 // =========================================================================
 // Toolbar subclass — block background drag (REAPER's undock-by-drag)
 // =========================================================================
@@ -448,9 +454,21 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   safe_strncpy(tab.searchTitle, displayName, sizeof(tab.searchTitle));
   // Auto-detect toggle action from window title if caller didn't provide one
   tab.toggleAction = (toggleAction > 0) ? toggleAction : LookupToggleAction(displayName);
+  // Sprint 1 Entry 15 — for empty-title plugins (ReaBeat, Reamix, Lua
+  // scripts) LookupToggleAction returns 0. Scan REAPER's action table
+  // for the matching show/hide action via module name + title-token
+  // scoring; result drives correct workspace-restore + close-WM_CLOSE.
+  if (tab.toggleAction <= 0) {
+    tab.toggleAction = DiscoverActionForWindow(targetHwnd, displayName);
+  }
   tab.isArbitrary = true;
   if (actionCmd && actionCmd[0]) {
     safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
+  }
+  // Auto-fill actionCmd so the workspace save round-trips through
+  // ResolveActionCommand on load. Skip if caller already provided one.
+  if (tab.toggleAction > 0 && !tab.actionCmd[0]) {
+    GetActionCommandString(tab.toggleAction, tab.actionCmd, sizeof(tab.actionCmd));
   }
 
   // Detect dynamic-title windows (e.g. MIDI Editor "MIDI take: ...")
@@ -486,6 +504,412 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
 // Returns true if GetParent(target) == expectedParent. Logs on mismatch.
 // SWELL on macOS does honor GetParent after SetParent; on Win32 SetParent can
 // fail (NULL return / cross-thread / target in destruction) without us noticing.
+// =========================================================================
+// Sprint 1 Entry 12 — plugin module-DLL display-name resolution
+// =========================================================================
+// JUCE / Direct2D plugins (ReaBeat, Reamix) draw their own titlebars and
+// never call SetWindowText — GetWindowText returns "". The Open Windows
+// menu (Entry 9) and capture-by-click (Entry 13) need a human-readable
+// label. Waterfall:
+//   1) GetWindowText (already handled by callers)
+//   2) TryGetAppNameFromModule — GCLP_HMODULE then DWLP_DLGPROC/GWLP_WNDPROC
+//      walked through EnumProcessModules + GetModuleInformation
+//   3) TryExtractAppNameFromChildren — longest Static-child label
+//   4) Synthetic "#<classname> (untitled)" so the menu line is never empty.
+
+#ifdef _WIN32
+namespace {
+
+// System DLLs whose ownership doesn't identify a user-installed plugin —
+// dialog windows registered by user32/comctl32 etc. resolve to one of these.
+static const char* const kSystemModules[] = {
+  "user32", "kernel32", "kernelbase", "ntdll", "comctl32",
+  "gdi32", "ole32", "shell32", "psapi", "uxtheme",
+  "msctf", "imm32", "reaper", "reaper_maxpane",
+  nullptr
+};
+
+static bool IsSystemModule(const char* name)
+{
+  if (!name || !name[0]) return true;
+  for (int i = 0; kSystemModules[i]; i++) {
+    if (_stricmp(name, kSystemModules[i]) == 0) return true;
+  }
+  return false;
+}
+
+// Strip directory, .dll suffix, "reaper_" prefix; capitalize first letter.
+// Returns false if the cleaned name is empty or matches a system module.
+static bool CleanPluginModuleName(const char* fullPath, char* buf, int bufSize)
+{
+  if (!fullPath || !buf || bufSize <= 0) return false;
+  buf[0] = '\0';
+  const char* lastSlash = strrchr(fullPath, '\\');
+  if (!lastSlash) lastSlash = strrchr(fullPath, '/');
+  const char* basename = lastSlash ? lastSlash + 1 : fullPath;
+  char tmp[128];
+  safe_strncpy(tmp, basename, sizeof(tmp));
+  char* dot = strrchr(tmp, '.');
+  if (dot) *dot = '\0';
+  const char* nameStart = tmp;
+  if (_strnicmp(tmp, "reaper_", 7) == 0) nameStart += 7;
+  if (!nameStart[0]) return false;
+  if (IsSystemModule(nameStart)) return false;
+  safe_strncpy(buf, nameStart, (size_t)bufSize);
+  if (buf[0] >= 'a' && buf[0] <= 'z') buf[0] = (char)(buf[0] - 'a' + 'A');
+  return true;
+}
+
+// Find the loaded module whose address range contains `addr`.
+static HMODULE FindModuleByAddress(void* addr)
+{
+  if (!addr) return nullptr;
+  HMODULE mods[256];
+  DWORD needed = 0;
+  HANDLE proc = GetCurrentProcess();
+  if (!EnumProcessModules(proc, mods, sizeof(mods), &needed)) return nullptr;
+  const DWORD count = needed / sizeof(HMODULE);
+  for (DWORD i = 0; i < count && i < 256; i++) {
+    MODULEINFO mi = {};
+    if (!GetModuleInformation(proc, mods[i], &mi, sizeof(mi))) continue;
+    BYTE* base = (BYTE*)mi.lpBaseOfDll;
+    BYTE* end  = base + mi.SizeOfImage;
+    if ((BYTE*)addr >= base && (BYTE*)addr < end) return mods[i];
+  }
+  return nullptr;
+}
+
+// EnumChildWindows callback for TryExtractAppNameFromChildren.
+struct ChildScanData { char best[256]; int bestLen; };
+static BOOL CALLBACK ScanStaticChildProc(HWND child, LPARAM lp)
+{
+  ChildScanData* d = (ChildScanData*)lp;
+  char cls[64] = {};
+  GetClassNameA(child, cls, sizeof(cls));
+  if (_stricmp(cls, "Static") != 0) return TRUE;
+  char text[256];
+  int n = GetWindowTextA(child, text, sizeof(text));
+  if (n <= 0) return TRUE;
+  bool hasLetter = false;
+  for (int i = 0; text[i]; i++) {
+    char c = text[i];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) { hasLetter = true; break; }
+  }
+  if (!hasLetter) return TRUE;
+  if (n > d->bestLen) {
+    d->bestLen = n;
+    safe_strncpy(d->best, text, sizeof(d->best));
+  }
+  return TRUE;
+}
+
+}  // namespace
+#endif  // _WIN32
+
+bool WindowManager::TryGetAppNameFromModule(HWND hwnd, char* buf, int bufSize)
+{
+  if (!hwnd || !buf || bufSize <= 0) return false;
+  buf[0] = '\0';
+#ifdef _WIN32
+  if (!IsWindow(hwnd)) return false;
+
+  char modPath[MAX_PATH];
+
+  // 1) GCLP_HMODULE — owning DLL for custom-registered window classes.
+  HMODULE classMod = (HMODULE)GetClassLongPtr(hwnd, GCLP_HMODULE);
+  if (classMod && GetModuleFileNameA(classMod, modPath, sizeof(modPath))) {
+    if (CleanPluginModuleName(modPath, buf, bufSize)) return true;
+  }
+
+  // 2)/3) Dialog DLGPROC or plain WNDPROC — walk address range to find
+  //       the owning module via EnumProcessModules + GetModuleInformation.
+  char clsName[64] = {};
+  GetClassNameA(hwnd, clsName, sizeof(clsName));
+  bool isDialog = (clsName[0] == '#') || (strstr(clsName, "Dialog") != nullptr);
+
+  void* procAddr = nullptr;
+  if (isDialog) {
+    procAddr = (void*)GetWindowLongPtr(hwnd, DWLP_DLGPROC);
+    if (!procAddr) procAddr = (void*)GetWindowLongPtr(hwnd, GWLP_WNDPROC);
+  } else {
+    procAddr = (void*)GetWindowLongPtr(hwnd, GWLP_WNDPROC);
+  }
+
+  HMODULE procMod = FindModuleByAddress(procAddr);
+  if (procMod && GetModuleFileNameA(procMod, modPath, sizeof(modPath))) {
+    if (CleanPluginModuleName(modPath, buf, bufSize)) return true;
+  }
+  return false;
+#else
+  (void)hwnd; (void)buf; (void)bufSize;
+  return false;
+#endif
+}
+
+bool WindowManager::TryExtractAppNameFromChildren(HWND hwnd, char* buf, int bufSize)
+{
+  if (!hwnd || !buf || bufSize <= 0) return false;
+  buf[0] = '\0';
+#ifdef _WIN32
+  ChildScanData d = {{0}, 0};
+  EnumChildWindows(hwnd, ScanStaticChildProc, (LPARAM)&d);
+  if (d.bestLen > 0) {
+    safe_strncpy(buf, d.best, (size_t)bufSize);
+    return true;
+  }
+  return false;
+#else
+  (void)hwnd; (void)buf; (void)bufSize;
+  return false;
+#endif
+}
+
+void WindowManager::ResolveWindowDisplayName(HWND hwnd, char* buf, int bufSize)
+{
+  if (!buf || bufSize <= 0) return;
+  buf[0] = '\0';
+  if (!hwnd || !IsWindow(hwnd)) return;
+
+  GetWindowText(hwnd, buf, bufSize);
+  if (buf[0]) return;
+
+  if (TryGetAppNameFromModule(hwnd, buf, bufSize)) return;
+  if (TryExtractAppNameFromChildren(hwnd, buf, bufSize)) return;
+
+#ifdef _WIN32
+  char clsName[64] = {};
+  GetClassNameA(hwnd, clsName, sizeof(clsName));
+  snprintf(buf, (size_t)bufSize, "#%s (untitled)", clsName[0] ? clsName : "?");
+#else
+  snprintf(buf, (size_t)bufSize, "#untitled");
+#endif
+}
+
+// =========================================================================
+// Sprint 1 Entry 15 — DiscoverActionForWindow (action-table scoring)
+// =========================================================================
+// Cross-platform body (Entry 15 follow-up): the algorithm is REAPER-API only
+// (g_GetToggleCommandState / g_ReverseNamedCommandLookup / g_kbd_getTextFromCmd
+// — all available on macOS/Linux from REAPER 6.71). Only the optional
+// module-DLL fallback (Entry 12 TryGetAppNameFromModule) is Win32-specific.
+// macOS/Linux fall back to title-token scoring only, which covers the common
+// case of REAPER plugins whose NSWindow / GTK window has a SetWindowText
+// title (ReaBeat, Reamix, Lua scripts via ReaImGui).
+namespace {
+
+#ifdef _WIN32
+  #define MP_STRICMP  _stricmp
+  #define MP_STRNICMP _strnicmp
+#else
+  #define MP_STRICMP  strcasecmp
+  #define MP_STRNICMP strncasecmp
+#endif
+
+// Per-(module, title) cache. ReaImGui hosts many scripts; a module-only cache
+// would alias the first script's action to every later one. On macOS/Linux
+// module is empty — cache keys on title alone.
+struct DiscoverCacheEntry { char module[64]; char title[256]; int actionId; };
+static DiscoverCacheEntry g_discoverCache[64];
+static int g_discoverCacheCount = 0;
+
+static int LookupDiscoverCache(const char* module, const char* title)
+{
+  if (!module || !title) return -1;
+  for (int i = 0; i < g_discoverCacheCount; i++) {
+    if (MP_STRICMP(g_discoverCache[i].module, module) == 0 &&
+        MP_STRICMP(g_discoverCache[i].title, title) == 0) {
+      return g_discoverCache[i].actionId;
+    }
+  }
+  return -1;  // sentinel: not cached (a real 0 result IS cached as 0)
+}
+
+static void StoreDiscoverCache(const char* module, const char* title, int actionId)
+{
+  if (!module || !title) return;
+  if (g_discoverCacheCount >= 64) {
+    memmove(&g_discoverCache[0], &g_discoverCache[1],
+            sizeof(DiscoverCacheEntry) * 63);
+    g_discoverCacheCount = 63;
+  }
+  DiscoverCacheEntry& e = g_discoverCache[g_discoverCacheCount++];
+  safe_strncpy(e.module, module, sizeof(e.module));
+  safe_strncpy(e.title, title, sizeof(e.title));
+  e.actionId = actionId;
+}
+
+static void StripArchSuffix(char* name)
+{
+  if (!name || !name[0]) return;
+  static const char* const kArch[] = {
+    "-x64", "-x86", "-arm64", "-arm", "-win32", "-win64", "-i386", nullptr
+  };
+  size_t len = strlen(name);
+  for (int i = 0; kArch[i]; i++) {
+    size_t slen = strlen(kArch[i]);
+    if (len > slen && MP_STRICMP(name + len - slen, kArch[i]) == 0) {
+      name[len - slen] = '\0';
+      return;
+    }
+  }
+}
+
+// Tokenize on non-alphanumeric, lowercase, length ≥ 3, cap at maxTokens.
+static int TokenizeTitle(const char* title, char tokens[][32], int maxTokens)
+{
+  if (!title) return 0;
+  int count = 0;
+  const char* p = title;
+  auto isAN = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           (c >= '0' && c <= '9');
+  };
+  while (*p && count < maxTokens) {
+    while (*p && !isAN(*p)) p++;
+    if (!*p) break;
+    char buf[32]; int n = 0;
+    while (*p && n < (int)sizeof(buf) - 1 && isAN(*p)) {
+      char c = *p++;
+      if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+      buf[n++] = c;
+    }
+    buf[n] = '\0';
+    if (n >= 3) { safe_strncpy(tokens[count], buf, 32); count++; }
+  }
+  return count;
+}
+
+static bool ContainsCaseInsensitive(const char* haystack, const char* needle)
+{
+  if (!haystack || !needle) return false;
+  size_t hlen = strlen(haystack), nlen = strlen(needle);
+  if (nlen == 0 || nlen > hlen) return false;
+  for (size_t i = 0; i + nlen <= hlen; i++) {
+    if (MP_STRNICMP(haystack + i, needle, nlen) == 0) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+HWND WindowManager::ResolveCaptureSourceForClick(HWND underCursor)
+{
+  if (!underCursor || underCursor == g_reaperMainHwnd) return nullptr;
+#ifdef _WIN32
+  // Walk up looking for the shallowest plugin match. Two acceptance signals:
+  //   (1) title resolves to a known REAPER toggle action (KNOWN_WINDOWS /
+  //       toolbars / similar)
+  //   (2) WndProc lives in a plugin DLL (via TryGetAppNameFromModule)
+  // Track the shallowest plugin-DLL match; the moment the chain leaves a
+  // plugin DLL the most recent plugin HWND wins. This avoids capturing the
+  // REAPER docker frame's inner WS_CHILD container for docked plugins.
+  HWND cur = underCursor;
+  HWND bestPlugin = nullptr;
+  int hops = 0;
+  while (cur && cur != g_reaperMainHwnd && hops < 32) {
+    char title[256] = {};
+    GetWindowText(cur, title, sizeof(title));
+    if (title[0] && LookupToggleAction(title) > 0) return cur;
+
+    char modName[128] = {};
+    if (TryGetAppNameFromModule(cur, modName, sizeof(modName))) {
+      bestPlugin = cur;
+    } else if (bestPlugin) {
+      return bestPlugin;  // chain just exited plugin DLL — pick last plugin HWND
+    }
+    cur = GetParent(cur);
+    hops++;
+  }
+  return bestPlugin;
+#else
+  HWND topLevel = underCursor;
+  HWND parent = GetParent(topLevel);
+  while (parent && parent != g_reaperMainHwnd) {
+    topLevel = parent;
+    parent = GetParent(topLevel);
+  }
+  return (topLevel == g_reaperMainHwnd) ? nullptr : topLevel;
+#endif
+}
+
+int WindowManager::DiscoverActionForWindow(HWND hwnd, const char* windowTitle)
+{
+  if (!hwnd || !IsWindow(hwnd)) return 0;
+  if (!g_GetToggleCommandState || !g_ReverseNamedCommandLookup ||
+      !g_kbd_getTextFromCmd) return 0;
+
+  // Win32 — module-DLL waterfall (Entry 12) gives us a fallback when title
+  // tokens don't score confidently. macOS/Linux have no comparable per-
+  // window module identification (NSWindow / GTK don't expose dylib
+  // ownership in the same way), so module stays empty and we rely on
+  // title-token scoring alone.
+  char module[64] = {};
+#ifdef _WIN32
+  TryGetAppNameFromModule(hwnd, module, sizeof(module));
+#endif
+
+  const bool hasTitle = (windowTitle && windowTitle[0]);
+  // Need at least one signal — empty title AND no module = no foothold.
+  if (!module[0] && !hasTitle) return 0;
+
+  const char* cacheModule = module[0] ? module : "";
+  if (hasTitle) {
+    int cached = LookupDiscoverCache(cacheModule, windowTitle);
+    if (cached >= 0) return cached;
+  }
+
+  // Module base name lowered + arch-suffix stripped (Reabeat-x64 → reabeat).
+  // Empty on macOS/Linux — moduleFallbackId stays 0 and the title threshold
+  // is the sole gate.
+  char modBase[64] = {};
+  if (module[0]) {
+    safe_strncpy(modBase, module, sizeof(modBase));
+    StripArchSuffix(modBase);
+    for (int i = 0; modBase[i]; i++) {
+      if (modBase[i] >= 'A' && modBase[i] <= 'Z') {
+        modBase[i] = (char)(modBase[i] - 'A' + 'a');
+      }
+    }
+  }
+
+  char tokens[8][32] = {{0}};
+  int tokenCount = hasTitle ? TokenizeTitle(windowTitle, tokens, 8) : 0;
+
+  int bestId = 0, bestHits = -1;
+  int moduleFallbackId = 0;
+
+  for (int id = 1; id < 200000; id++) {
+    int state = g_GetToggleCommandState(id);
+    if (state != 1) {
+      if (state != -1) continue;
+      const char* named = g_ReverseNamedCommandLookup(id);
+      if (!named || named[0] != 'R' || named[1] != 'S') continue;  // RS = script
+    }
+    const char* actionName = g_kbd_getTextFromCmd(id, nullptr);
+    if (!actionName || !actionName[0]) continue;
+
+    int hits = 0;
+    for (int t = 0; t < tokenCount; t++) {
+      if (ContainsCaseInsensitive(actionName, tokens[t])) hits++;
+    }
+    if (hits > bestHits) { bestHits = hits; bestId = id; }
+    if (!moduleFallbackId && modBase[0] &&
+        ContainsCaseInsensitive(actionName, modBase)) {
+      moduleFallbackId = id;
+    }
+  }
+
+  // Confidence threshold — generic tokens like "imgui" appear in every
+  // ReaImGui action; require ≥2 hits when title yields ≥2 tokens.
+  int threshold = (tokenCount >= 2) ? 2 : (tokenCount == 1 ? 1 : 0);
+  int result = 0;
+  if (bestHits >= threshold && bestId > 0) result = bestId;
+  else if (moduleFallbackId > 0)            result = moduleFallbackId;
+
+  if (hasTitle) StoreDiscoverCache(cacheModule, windowTitle, result);
+  return result;
+}
+
 static bool VerifySetParent(HWND target, HWND expectedParent, const char* siteTag)
 {
   HWND actual = GetParent(target);
@@ -493,6 +917,29 @@ static bool VerifySetParent(HWND target, HWND expectedParent, const char* siteTa
   DBG("[MaxPane] SetParent VERIFY FAILED at %s: target=%p expected=%p actual=%p\n",
       siteTag, (void*)target, (void*)expectedParent, (void*)actual);
   return false;
+}
+
+// Sprint 1 Entry 11 — detach a previously WS_CHILD'd window back to top-level.
+// Plain SetParent(hwnd, nullptr) on Win32 leaves the window WS_CHILD-of-desktop
+// per MSDN SetParent Remarks: "if hWndNewParent is NULL, you should also clear
+// the WS_CHILD bit and set the WS_POPUP style **after** calling SetParent".
+// Without the style flip, Win32 silently parks the orphan under a default
+// docker frame and the next DoCapture/Reaper-side close can surface zombie
+// tabs. SWELL macOS/Linux preserve the v2.0 behaviour (plain SetParent).
+static void DetachToTopLevel(HWND hwnd)
+{
+  if (!hwnd || !IsWindow(hwnd)) return;
+#ifdef _WIN32
+  ShowWindow(hwnd, SW_HIDE);
+  SetParent(hwnd, nullptr);
+  LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+  style = (style & ~WS_CHILD) | WS_POPUP;
+  SetWindowLongPtr(hwnd, GWL_STYLE, style);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#else
+  SetParent(hwnd, nullptr);
+#endif
 }
 
 bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd)
@@ -545,11 +992,47 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
     VerifySetParent(targetHwnd, g_reaperMainHwnd, "DoCapture/detach");
   }
 
-  // Reparent to our container
+#ifdef _WIN32
+  // Sprint 1 Entries 4 + 14 — canonical Win32 top-level → child reparent:
+  //   hide → strip top-level bits (incl. WS_POPUP, per MSDN SetParent +
+  //   WS_CHILD docs: the two styles cannot co-exist) → strip GWL_EXSTYLE
+  //   chrome bits (WS_EX_WINDOWEDGE / CLIENTEDGE / STATICEDGE /
+  //   DLGMODALFRAME, otherwise dialog-class plugins like ReaBeat show
+  //   a visible 3D frame inside the pane) → SWP_FRAMECHANGED so the NC
+  //   area is recomputed for the new style → SetParent → restore
+  //   WS_VISIBLE. The previous "SetParent first, style strip after" order
+  //   left WS_POPUP and WS_CHILD set simultaneously and parked the GUI
+  //   thread in NtUserSetParent (capture-of-REAPER-native = REAPER freeze).
+  ShowWindow(targetHwnd, SW_HIDE);
+  LONG_PTR origStyle   = GetWindowLongPtr(targetHwnd, GWL_STYLE);
+  LONG_PTR origExStyle = GetWindowLongPtr(targetHwnd, GWL_EXSTYLE);
+  LONG_PTR stripMask   = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU | WS_POPUP;
+  LONG_PTR exStripMask = WS_EX_WINDOWEDGE | WS_EX_CLIENTEDGE
+                       | WS_EX_STATICEDGE | WS_EX_DLGMODALFRAME;
+  LONG_PTR newStyle    = (origStyle & ~stripMask) | WS_CHILD;
+  LONG_PTR newExStyle  = origExStyle & ~exStripMask;
+  SetWindowLongPtr(targetHwnd, GWL_STYLE,   newStyle);
+  SetWindowLongPtr(targetHwnd, GWL_EXSTYLE, newExStyle);
+  SetWindowPos(targetHwnd, nullptr, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
   SetParent(targetHwnd, containerHwnd);
   if (!VerifySetParent(targetHwnd, containerHwnd, "DoCapture/attach")) {
-    // Reparent failed: try to restore original parent so we don't leave the
+    // Reparent failed — restore style/exstyle/parent so we don't leave the
     // window in an indeterminate state, then abandon this capture.
+    SetWindowLongPtr(targetHwnd, GWL_STYLE,   origStyle);
+    SetWindowLongPtr(targetHwnd, GWL_EXSTYLE, origExStyle);
+    SetParent(targetHwnd, tab.originalParent);
+    DBG("[MaxPane] DoCapture: ABANDONED — reparent to container failed, restored originalParent=%p\n",
+        (void*)tab.originalParent);
+    return false;
+  }
+  SetWindowLongPtr(targetHwnd, GWL_STYLE,
+      GetWindowLongPtr(targetHwnd, GWL_STYLE) | WS_VISIBLE);
+#else
+  // SWELL ordering: style transform safely runs after SetParent on macOS/Linux
+  // (the Cocoa/GTK reparent doesn't observe Win32 WS_POPUP semantics).
+  SetParent(targetHwnd, containerHwnd);
+  if (!VerifySetParent(targetHwnd, containerHwnd, "DoCapture/attach")) {
     SetParent(targetHwnd, tab.originalParent);
     DBG("[MaxPane] DoCapture: ABANDONED — reparent to container failed, restored originalParent=%p\n",
         (void*)tab.originalParent);
@@ -563,6 +1046,7 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   LONG_PTR stripMask = WS_CAPTION | WS_THICKFRAME | WS_SYSMENU;
   LONG_PTR newStyle = (origStyle & ~stripMask) | WS_CHILD | WS_VISIBLE;
   SetWindowLongPtr(targetHwnd, GWL_STYLE, newStyle);
+#endif
 
   tab.hwnd = targetHwnd;
   tab.captured = true;
@@ -655,9 +1139,10 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
         DBG("[B27] preState==0 — skipping toggle/close\n");
       }
 
-      // Detach.
-      DBG("[B27] >>> SetParent(hwnd, nullptr)\n");
-      SetParent(tab.hwnd, nullptr);
+      // Detach. Entry 11 — DetachToTopLevel flips WS_CHILD → WS_POPUP after
+      // SetParent on Win32; SWELL macOS/Linux keeps plain SetParent.
+      DBG("[B27] >>> DetachToTopLevel (post-toggle)\n");
+      DetachToTopLevel(tab.hwnd);
       VerifySetParent(tab.hwnd, nullptr, "DoRelease/post-toggle");
       DBG("[B27] <<< SetParent done: GetParent=%p IsWindowVisible=%d\n",
           GetParent(tab.hwnd), IsWindowVisible(tab.hwnd) ? 1 : 0);
@@ -726,7 +1211,29 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       // When the user re-fires the script action, the script logic finds
       // the existing NSView (alive) and shows its current NSWindow
       // (which is OUR chromed orphan) → window appears with proper frame.
-      if (toggleOff) {
+      // Sprint 1 follow-up — ReaImGui crash fix. Scripts whose toggle
+      // state is -1 (fire-and-show, no on/off tracking) track their
+      // own windows internally via ImGui Docker. Reparenting the window
+      // externally (DetachToTopLevel below) leaves ImGui's Docker
+      // pointer stale; the next heartbeat dereferences a freed field
+      // and crashes inside Docker::moveTo. Fire the script's own
+      // action so it tears down its window cleanly — this MUST happen
+      // even on workspace switch (toggleOff=false), otherwise the
+      // workspace-switch path is the canonical crash trigger.
+      bool isReaImGuiScript = false;
+      if (tab.toggleAction > 0 && g_GetToggleCommandState &&
+          g_GetToggleCommandState(tab.toggleAction) == -1) {
+        isReaImGuiScript = true;
+      }
+
+      if (isReaImGuiScript && g_Main_OnCommand) {
+        DBG("[B27] >>> Main_OnCommand(%d) for live ReaImGui script (pre-detach, toggleOff=%d)\n",
+            tab.toggleAction, toggleOff);
+        g_Main_OnCommand(tab.toggleAction, 0);
+        DBG("[B27] <<< script closed: alive=%d visible=%d\n",
+            IsWindow(tab.hwnd) ? 1 : 0,
+            (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+      } else if (toggleOff) {
         DBG("[B27] >>> SendMessage(WM_CLOSE) on WS_CHILD (no-action path)\n");
         SendMessage(tab.hwnd, WM_CLOSE, 0, 0);
         DBG("[B27] <<< WM_CLOSE done: alive=%d visible=%d\n",
@@ -735,8 +1242,12 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       }
 
       if (IsWindow(tab.hwnd)) {
-        DBG("[B27] >>> SetParent(nullptr) so view is contentView of fresh NSWindow\n");
-        SetParent(tab.hwnd, nullptr);
+        // Entry 11 — DetachToTopLevel on Win32 (WS_CHILD→WS_POPUP after
+        // SetParent); SWELL keeps plain SetParent (B27 path — Cocoa
+        // recreates the NSWindow when SetParent(nullptr) is called, so
+        // the NSView ends up as the contentView of a fresh orphan window).
+        DBG("[B27] >>> DetachToTopLevel (no-action path)\n");
+        DetachToTopLevel(tab.hwnd);
         VerifySetParent(tab.hwnd, nullptr, "DoRelease/no-action-detach");
         DBG("[B27] <<< detached, GetParent=%p\n", GetParent(tab.hwnd));
 
@@ -1034,8 +1545,17 @@ void WindowManager::RepositionAll(const SplitTree& tree)
       if (!IsWindow(tab.hwnd)) continue;
 
       if (t == ps.activeTab) {
-        SetWindowPos(tab.hwnd, HWND_TOP, x, y, w, h,
-                     SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED);
+        // Sprint 1 Entry 19 — Direct2D-rendered children (ReaImGui, JUCE,
+        // Reabeat) leave the previous client-area bits on screen after
+        // SetWindowPos because the default copy-bits behaviour copies old
+        // pixels to the new position and the plugin's swap chain doesn't
+        // repaint synchronously — old tab-bar text stacks during interactive
+        // resize. SWP_NOCOPYBITS discards stale bits and lets the plugin
+        // present a fresh frame. KNOWN_WINDOWS native captures (GDI-based)
+        // stay on the default copy-bits path — flicker-free for them.
+        UINT swpFlags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED;
+        if (tab.isArbitrary) swpFlags |= SWP_NOCOPYBITS;
+        SetWindowPos(tab.hwnd, HWND_TOP, x, y, w, h, swpFlags);
         SendMessage(tab.hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h));
 
         // Propagate WM_SIZE to child controls — SWELL doesn't cascade

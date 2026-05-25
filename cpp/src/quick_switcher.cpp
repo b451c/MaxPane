@@ -290,7 +290,7 @@ INT_PTR CALLBACK QSDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
 void OpenQuickSwitcher(HWND parent)
 {
   QSState st;
-  DialogBoxParam(nullptr, MAKEINTRESOURCE(IDD_QUICK_SWITCHER),
+  DialogBoxParam(g_hInstance, MAKEINTRESOURCE(IDD_QUICK_SWITCHER),
                  parent, QSDialogProc, (LPARAM)&st);
   // EDIT subclass is restored implicitly — when the dialog HWND is
   // destroyed, the subclassed WndProc pointer dies with it. No leak.

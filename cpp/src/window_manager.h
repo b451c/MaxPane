@@ -82,6 +82,30 @@ public:
   static HWND FindChildInParent(HWND parent, const char* title);
   static void DumpAllWindowTitles(const char* context = nullptr);
 
+  // Sprint 1 Entry 12 — plugin window display-name resolution. Empty-title
+  // dialogs (Direct2D-rendered plugins like ReaBeat, Reamix) require a
+  // module-DLL lookup waterfall to surface a human-readable label in the
+  // Open Windows menu and capture-by-click. All three are no-ops on
+  // non-Win32 platforms (return false / leave buf untouched).
+  static bool TryGetAppNameFromModule(HWND hwnd, char* buf, int bufSize);
+  static bool TryExtractAppNameFromChildren(HWND hwnd, char* buf, int bufSize);
+  static void ResolveWindowDisplayName(HWND hwnd, char* buf, int bufSize);
+
+  // Sprint 1 Entry 15 — scan REAPER's action table (cmd 1..200000) for the
+  // plugin's show/hide action via title-token scoring against
+  // kbd_getTextFromCmd output, plus a module-name fallback. Returns the
+  // action ID, or 0 if no confident match. Cached per (module, title).
+  // No-op on non-Win32 (returns 0).
+  static int DiscoverActionForWindow(HWND hwnd, const char* windowTitle);
+
+  // Sprint 1 Entry 13 — walk up from `underCursor` looking for the
+  // SHALLOWEST window whose toggle action is known (LookupToggleAction)
+  // or whose WndProc lives in a plugin DLL (TryGetAppNameFromModule).
+  // Fixes docked-plugin capture where the legacy walk-to-top stopped at
+  // the REAPER dock frame (a WS_CHILD inner container) instead of the
+  // plugin window itself. SWELL uses the v2.0 walk-to-top behaviour.
+  static HWND ResolveCaptureSourceForClick(HWND underCursor);
+
 private:
   PaneState m_panes[MAX_PANES];
   HWND m_containerHwnd;  // stored for CheckAlive recapture

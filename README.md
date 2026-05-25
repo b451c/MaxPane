@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Latest Release](https://img.shields.io/github/v/release/b451c/MaxPane)](https://github.com/b451c/MaxPane/releases/latest)
-[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey.svg)](#requirements)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey.svg)](#requirements)
 [![CI](https://github.com/b451c/MaxPane/actions/workflows/ci.yml/badge.svg)](https://github.com/b451c/MaxPane/actions/workflows/ci.yml)
 
 **Nested docker layouts for REAPER** — a native C++ extension that turns any
@@ -121,9 +121,9 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
 ### Platform
 - **macOS arm64 + x86_64** — stable, fully functional.
-- Windows + Linux builds land after their respective smoke testing
-  completes — see [#8](https://github.com/b451c/MaxPane/issues/8) and
-  [#9](https://github.com/b451c/MaxPane/issues/9) for tracking.
+- **Windows x64** — stable as of v2.0.1 (closes [#8](https://github.com/b451c/MaxPane/issues/8) Windows mouse input).
+- Linux build pending smoke testing on the open blocker
+  [#9](https://github.com/b451c/MaxPane/issues/9) (Linux FX Browser close).
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -216,13 +216,13 @@ close-mechanism deep-dive, and the v2.0 feature surface — see
 
 ## Requirements
 
-- **REAPER** 7.0+ (tested on 7.62)
+- **REAPER** 7.0+ (tested on 7.62 and 7.73)
 - **macOS** arm64 (Apple Silicon) and x86_64 (Intel) — **stable**
+- **Windows** x64 — **stable** as of v2.0.1
 
-Windows and Linux builds will be published once they pass smoke testing
-on those platforms — see [#8](https://github.com/b451c/MaxPane/issues/8)
-(Windows) and [#9](https://github.com/b451c/MaxPane/issues/9) (Linux)
-for tracking.
+The Linux build will be published once it passes smoke testing on the
+open blocker [#9](https://github.com/b451c/MaxPane/issues/9) (FX Browser
+close crash).
 
 ---
 

@@ -4,6 +4,122 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.1] - 2026-05-25
+
+**Adds Windows x64 to the public build matrix and fixes a class of
+workspace-restore bugs that affected captured C++ plugins (ReaBeat,
+Reamix) and ReaImGui scripts on every platform.**
+
+### Added
+
+- **Windows x64 binary** is now part of the public Release. Closes
+  [#8](https://github.com/b451c/MaxPane/issues/8) (Windows mouse input
+  not reaching the container) — see _Windows native_ below for the
+  list of Win32-specific fixes.
+- **Current workspace name in the navigation bar.** The center of the
+  nav bar now shows the loaded workspace's name with a `•` dirty
+  indicator when the layout has been changed since the last save.
+  Hover to see the full name in a tooltip when ellipsis-truncated.
+- **Async workspace Save.** "Save Workspace" is now non-blocking — the
+  click frame returns immediately with a "Saving '<name>'…" toast and
+  the ExtState writes flush on the next REAPER tick (becomes "Saved
+  '<name>'" / "Replaced '<name>'" when done). Up to 2 queued saves
+  collapse; quit-time flush prevents data loss. Eliminates the 100+ ms
+  freeze on click for workspaces with many captures.
+- **Plugin window action discovery.** Captures of third-party C++
+  plugins and ReaImGui Lua scripts now find and persist the toggle/
+  show action automatically, so saved workspaces reopen those windows
+  on load — previously they saved without an action and silently
+  failed to restore. Cross-platform; uses `kbd_getTextFromCmd`
+  (REAPER 6.71+) for action-name scoring.
+
+### Fixed
+
+#### Windows native (B10 / issue #8)
+- **Mouse buttons reach `DlgProc`.** `WM_NCHITTEST` now publishes its
+  result via `SetWindowLongPtr(DWLP_MSGRESULT, …)` and returns `TRUE`
+  per the Win32 `DialogProc` contract — previously `return HTCLIENT`
+  was read as `TRUE`-handled with `DWLP_MSGRESULT` defaulting to 0
+  (`HTNOWHERE`), so every `WM_LBUTTONDOWN` / `WM_RBUTTONDOWN` /
+  `WM_CONTEXTMENU` got routed past us.
+- **Captures stop freezing REAPER.** `DoCapture` no longer leaves
+  windows with both `WS_POPUP` and `WS_CHILD` set simultaneously
+  during reparent (`NtUserSetParent` parked the GUI thread).
+- **Captured plugins lose their 3D frame.** `GWL_EXSTYLE` strip
+  removes `WS_EX_WINDOWEDGE` / `WS_EX_CLIENTEDGE` / `WS_EX_STATICEDGE`
+  / `WS_EX_DLGMODALFRAME` so dialog-class plugins (ReaBeat) sit
+  flush in the pane.
+- **Save / Settings / Quick Switcher dialogs open.** Native Win32
+  `DialogBoxParam` now uses the plugin DLL's `HINSTANCE` (captured
+  in `ReaperPluginEntry`) — previously `nullptr` resolved to the
+  host EXE which doesn't carry MaxPane's resources, and the call
+  returned `-1` silently.
+- **Detach to floating works.** Native Win32 implementations of the
+  Cocoa-helper API (`ApplyFloatingWindowChrome`, `IsSystemDarkMode`
+  via the `AppsUseLightTheme` registry value, `OpenUrlPlatform`
+  via `ShellExecuteA`, `ClampRectToVisibleScreen` via
+  `MonitorFromRect`, …) — previously all `{}` stubs.
+- **Capture-by-click no longer self-triggers** on the menu / button
+  click that entered capture mode (rising-edge LMB detection) and
+  walks parent chains correctly for **docked plugins** (returns
+  the shallowest plugin-DLL-owned HWND instead of the dock frame's
+  inner container).
+- **Open Windows menu** stops listing foreign-process windows
+  (Firefox, Program Manager) and REAPER internal UI children, while
+  also surfacing empty-title Direct2D plugins via owning-DLL lookup.
+- **GDI captures stop smearing on resize** (`WS_CLIPCHILDREN |
+  WS_CLIPSIBLINGS` in the dialog template); Direct2D captures
+  stop stacking pixel residue (`SWP_NOCOPYBITS` on arbitrary tabs).
+- **`AUTOCHECKBOX` + ASCII em-dashes** in Settings / Quick Switcher
+  `.rc` files (native `rc.exe` doesn't auto-toggle plain `CHECKBOX`;
+  UTF-8 em-dash rendered as Latin-1 mojibake).
+- **Debug log** lands in `%TEMP%\maxpane_debug.log` instead of the
+  POSIX `/tmp` path that doesn't exist on Windows.
+
+#### Cross-platform
+- **ReaImGui crash on workspace switch fixed.** Scripts (action state
+  `-1`) now get a `Main_OnCommand` close-fire before MaxPane reparents
+  their window — previously the external `SetParent` left ReaImGui's
+  internal `Docker` pointer stale and the next heartbeat crashed in
+  `Docker::moveTo` with a null-deref.
+- **Workspace restore for captured plugins / scripts.** Cross-platform
+  action discovery (title-token scoring against
+  `kbd_getTextFromCmd`) now finds the show/hide action for plugins
+  with titled windows (ReaBeat, Reamix) and for Lua scripts with
+  `RS…`-prefixed named commands (state `-1`). Saved workspaces that
+  carry these captures actually reopen them on load.
+- **Stale list across workspaces.** Every saved workspace's tab list
+  contributes its action IDs to `stale_toggle_actions` so windows
+  released by a workspace SWITCH (not still in any active pane)
+  survive REAPER restart cleanly instead of returning as floating
+  ghosts. State `-1` cleanup now sends `WM_CLOSE` + hide instead of
+  silently skipping.
+- **Auto-open survives Windows quit.** `was_visible` now persists
+  the intent flag (`m_visible`) instead of `IsWindowVisible()` —
+  the Win32 parent-chain teardown at quit hid the still-open
+  container and overwrote `was_visible=0`.
+- **Workspace save round-trips named commands** (`_RS…`). Both
+  `GetActionCommandString` (adds the leading `_`) and
+  `ResolveActionCommand` (retries with one prepended for backward
+  compat) close the SDK contract gap.
+- Home-overlay workspace card tooltips now appear (the timer was
+  only armed in fresh launcher mode).
+- `DoRelease` flips `WS_CHILD` → `WS_POPUP` after `SetParent(nullptr)`
+  per MSDN, so released windows land as proper top-level instead of
+  silent `WS_CHILD`-of-desktop.
+
+### Known issues
+
+- Linux remains pending — open blocker
+  [#9](https://github.com/b451c/MaxPane/issues/9) (FX Browser close
+  crash). Linux build is still produced as a workflow artifact for
+  internal testing; not yet in the public Release.
+- Old workspaces saved before v2.0.1 that carry plugin captures with
+  no action info (`arb:0:<name>`) won't auto-restore. Re-save the
+  workspace once with the new build to populate the action ID.
+
+---
+
 ## [2.0.0] - 2026-05-22
 
 v2.0 reworks the docking core for reliability, adds multi-instance /

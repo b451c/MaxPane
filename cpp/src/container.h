@@ -3,12 +3,18 @@
 #include "window_manager.h"
 #include "nav_bar.h"
 #include "drag_dock.h"
+#include "config.h"      // MAX_WORKSPACE_NAME (Feature A nav-bar workspace label)
 #include <memory>
 
 // Capture mode: user clicks any window to grab it into a pane
 struct CaptureMode {
   bool active;
   int targetPaneId;
+  // Sprint 1 Entry 13 — rising-edge LMB tracking. Polling "currently down"
+  // misses sub-tick LMB transitions and the button click that entered
+  // capture mode would self-trigger the timer immediately. Init to true at
+  // every mode entry so the first real click after entry counts as rising.
+  bool prevLmbDown;
 };
 
 // Drag state: dragging a tab between panes or reordering within a pane
@@ -80,6 +86,14 @@ public:
   void Show();
   void Toggle();
   bool IsVisible() const;
+  // Sprint 1 Entry 10 — intent-level visibility independent of Win32 parent
+  // chain. IsVisible() = IsWindowVisible which on Win32 quit walks the
+  // parent chain; the docker is hidden before plugin unload, so a still-
+  // open container reports false → was_visible persisted as "0" → next
+  // start fails to auto-open. WasIntendedVisible returns m_visible
+  // (true between Create/Show and Shutdown). Use at unload-persistence
+  // sites only; live action routing still wants OS truth.
+  bool WasIntendedVisible() const;
 
   // F1a (ADR-024) — per-container floating mode. Detach turns the whole
   // container into a top-level OS window with own chrome (title bar, close,
@@ -209,6 +223,17 @@ private:
   bool m_navBarVisible = true;        // read from ExtState in Create; default ON
   int  m_navHover = NavBar::BTN_NONE; // which nav button under cursor (-1 = none)
   int  m_navTooltipBtn = NavBar::BTN_NONE; // which nav button's tooltip is shown
+  // Feature A — name of the most recently loaded workspace (empty = none).
+  // Rendered centered in the nav bar between the two button groups. Persists
+  // to per-instance ExtState as `current_workspace_name` alongside
+  // `was_visible` so re-opening into a workspace restores the label.
+  // Cleared by: Toggle close, ApplyPreset, deletion of the active workspace
+  // (rename updates in-place). Truncated to MAX_WORKSPACE_NAME-1 chars.
+  char m_currentWorkspaceName[MAX_WORKSPACE_NAME] = {};
+  // Feature A — true when the live tree/captures have been modified since
+  // the workspace was loaded or saved. Drawn as a trailing "•" next to the
+  // name. Cleared on Save / next Load. Persisted as `workspace_dirty`.
+  bool m_workspaceDirty = false;
   // ADR-026 — Home overlay state. When true, OnPaint paints workspace
   // cards (Launcher hero geometry) over the pane grid. Click on card =
   // load + close. Esc or click on empty area = close (no state change).
@@ -220,6 +245,29 @@ private:
 
   void LoadNavBarPref();
   void SaveNavBarPref();
+
+  // Feature A — workspace-name state helpers.
+  //
+  // SetCurrentWorkspace: success path from LoadWorkspace — copies the name
+  // into m_currentWorkspaceName, clears m_workspaceDirty, persists, and
+  // refreshes the NavBar shim cache so hover hit-tests in
+  // container_nav.cpp pick up the new label.
+  // ClearCurrentWorkspace: name unset (e.g. Toggle close, workspace
+  // delete, ApplyPreset). Persists empty strings and clears the shim cache.
+  // MarkWorkspaceDirty: any mutation that changes the captured/layout
+  // state vs. the loaded workspace (capture, release, split, merge, tab
+  // move, color change, pin/unpin). No-op if no workspace is loaded —
+  // dirty has no meaning when there's no name to compare against.
+  // PersistWorkspaceLabel: writes current_workspace_name + workspace_dirty
+  // ExtState. Called from the other helpers + load/save paths.
+  // RefreshNavBarLabelCache: pushes the current label into the NavBar
+  // module-level cache used by the legacy single-arg Compute(rect) shim.
+  void SetCurrentWorkspace(const char* name);
+  void ClearCurrentWorkspace();
+  void MarkWorkspaceDirty();
+  void PersistWorkspaceLabel();
+  void RefreshNavBarLabelCache();
+
   // Nav bar input dispatch — returns true if the click/move was consumed
   // (caller skips the pane-grid pathways).
   bool OnNavBarMouseMove(int x, int y);
@@ -290,8 +338,25 @@ private:
 
   // Toast bar — transient feedback for non-fatal events (Sprint 3.2).
   // m_toastDeadlineMs holds the steady_clock monotonic deadline; 0 = no toast.
+  // m_toastSticky: when true, PaintToast ignores the deadline and the toast
+  // sits indefinitely until the next ShowToast / DismissToast call. Feature B
+  // uses this for the "Saving '<name>'…" phase whose lifetime is bounded by
+  // the actual flush completion rather than a fixed timeout — we don't know
+  // a priori whether ExtState will take 50 ms or 500 ms.
   char m_toastMessage[256] = {};
   long long m_toastDeadlineMs = 0;
+  bool m_toastSticky = false;
+
+  // Feature B — latest enqueued save name. Held so the post-flush toast
+  // can name it ("Saved '<name>'") even after the queue was popped.
+  // With 2-deep queuing, the last Enqueue's name is what the user sees
+  // in the final confirmation toast (final-save-wins; intermediate names
+  // collapse). m_wsMgr->HasPendingSave() is the canonical "is a flush
+  // in transit?" predicate — we don't shadow it here.
+  char m_pendingWorkspaceName[MAX_WORKSPACE_NAME] = {};
+  // Distinguish "new save" vs "replace existing" so the final toast can
+  // mirror the synchronous wording from before Feature B (Saved vs Replaced).
+  bool m_pendingWorkspaceWasReplace = false;
 
   // GDI object cache (created once in constructor, destroyed in destructor)
   HBRUSH m_brushTabBarBg = nullptr;
@@ -356,8 +421,25 @@ private:
   // TIMER_ID_TOAST timer driving the fade animation. PaintToast renders
   // the bar overlaid on the bottom of the client area; OnPaint calls it
   // last so the toast sits above any other UI state.
+  // Feature B — sticky toast variant for the "Saving '<name>'…" indicator:
+  // m_toastSticky=true means the deadline-based dismiss is skipped, the
+  // bar paints at full opacity, and only the next ShowToast (or a manual
+  // DismissToast) replaces it. The TIMER_ID_TOAST fade tick is suppressed
+  // while sticky so we don't burn CPU on no-op repaints.
   void ShowToast(const char* msg);
+  void ShowStickyToast(const char* msg);
   void PaintToast(HDC hdc, const RECT& clientRect);
+
+  // Feature B — schedule the deferred workspace ExtState write. Called by
+  // SaveWorkspace after EnqueueSave has captured the snapshot + toasted
+  // "Saving…". Arms a one-shot TIMER_ID_WORKSPACE_FLUSH that fires the
+  // FlushWorkspaceTick handler. If a flush is already armed, this is a
+  // no-op — the existing tick will drain whatever's in the queue.
+  void ArmWorkspaceFlushTimer();
+  // Feature B — timer callback. Pops one queue entry via
+  // m_wsMgr->FlushNextPendingSave, then either re-arms (queue still has
+  // depth) or transitions the toast to "Saved '<name>'".
+  void OnWorkspaceFlushTick();
 
   // Context menu command dispatch
   void HandleTabMenuCommand(int cmd, int paneId, int tabIdx);

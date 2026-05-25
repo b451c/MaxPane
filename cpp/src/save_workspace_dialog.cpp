@@ -133,7 +133,7 @@ bool OpenSaveWorkspaceDialog(HWND parent, const WorkspaceManager& wsMgr,
   st.wsMgr = &wsMgr;
   st.accepted = false;
 
-  DialogBoxParam(nullptr, MAKEINTRESOURCE(IDD_SAVE_WORKSPACE),
+  DialogBoxParam(g_hInstance, MAKEINTRESOURCE(IDD_SAVE_WORKSPACE),
                  parent, SaveDialogProc, (LPARAM)&st);
 
   if (st.accepted && st.outName[0]) {

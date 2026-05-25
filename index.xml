@@ -35,13 +35,54 @@
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Zero scripting dependencies - pure C++ extension\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER 7.0+\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS arm64 + x86_64\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Windows + Linux builds will land after testing on those platforms completes.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS arm64 + x86_64\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Windows x64 (v2.0.1+)\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Linux build will land after the FX Browser close blocker (issue #9) clears.\par}
 {\pard \qc \f0 \sa180 \li0 \fi0 \emdash\emdash\emdash\emdash\emdash\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 MIT License | https://github.com/b451c/MaxPane\par}
 }
 ]]></description>
       </metadata>
+
+      <version name="2.0.1" author="b451c" time="2026-05-25T00:00:00Z">
+        <changelog><![CDATA[Adds Windows x64 to the public Release. Fixes a class of workspace-restore bugs for captured C++ plugins (ReaBeat, Reamix) and ReaImGui Lua scripts on every platform.
+
+Added:
+- Windows x64 binary in public Release (closes #8 Windows mouse input)
+- Current workspace name shown in the navigation bar with dirty indicator
+- Async workspace Save - no more click-frame freeze for workspaces with many captures
+- Plugin window action discovery - workspace restore now reopens captured C++ plugins and Lua scripts (previously saved with no action info, silently failed to restore)
+
+Windows native (#8 closed):
+- WM_NCHITTEST now publishes via DWLP_MSGRESULT - mouse buttons reach DlgProc again
+- DoCapture style transform reordered: strip WS_POPUP before SetParent (eliminates NtUserSetParent freeze on REAPER native capture)
+- GWL_EXSTYLE strip removes plugin 3D frame inside the pane
+- Save / Settings / Quick Switcher dialogs use plugin HINSTANCE (previously nullptr resolved to host EXE)
+- Native Win32 implementations for ApplyFloatingWindowChrome, IsSystemDarkMode (registry), OpenUrlPlatform (ShellExecute), ClampRectToVisibleScreen, etc.
+- Capture-by-click no longer self-triggers, walks parent chains correctly for docked plugins
+- Open Windows menu PID filter (no more Firefox / Program Manager) + tightened acceptance criterion
+- WS_CLIPCHILDREN / WS_CLIPSIBLINGS in DLGTEMPLATE (no GDI smear); SWP_NOCOPYBITS for Direct2D arbitrary captures
+- AUTOCHECKBOX + ASCII em-dashes in Settings / Quick Switcher .rc
+- Debug log path uses %TEMP% on Windows
+
+Cross-platform:
+- ReaImGui crash on workspace switch fixed - scripts now get a close-fire before reparent
+- Action discovery works on macOS / Windows / Linux via kbd_getTextFromCmd title-token scoring
+- Stale-list workspace pass + state==-1 WM_CLOSE handler eliminate floating ghosts after restart
+- Auto-open survives quit (was_visible reads intent flag, not Win32 parent-chain visibility)
+- Named command underscore round-trip (GetActionCommandString prepends "_", ResolveActionCommand retries)
+- DoRelease flips WS_CHILD -> WS_POPUP after SetParent(nullptr) per MSDN
+
+Known issues:
+- Linux build still pending (blocker #9 FX Browser close crash) - workflow artifact only
+- Workspaces saved before v2.0.1 with arb:0:<name> entries need re-saving to populate the action ID
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.1/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.1/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.0.1/reaper_maxpane-x64.dll</source>
+      </version>
 
       <version name="2.0.0" author="b451c" time="2026-05-22T00:00:00Z">
         <changelog><![CDATA[Major release

@@ -135,7 +135,7 @@ INT_PTR CALLBACK SettingsDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*
 
 void OpenSettingsDialog(HWND parent)
 {
-  DialogBoxParam(nullptr, MAKEINTRESOURCE(IDD_SETTINGS),
+  DialogBoxParam(g_hInstance, MAKEINTRESOURCE(IDD_SETTINGS),
                  parent, SettingsDialogProc, 0);
 }
 

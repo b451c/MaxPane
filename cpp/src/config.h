@@ -162,3 +162,11 @@ static const int DRAG_DOCK_TICK_MS        = 16;   // ~60 Hz preview update
 // versa). Same 600 ms delay.
 static const int TIMER_ID_NAVBAR_TIP      = 7;
 static const int NAVBAR_TOOLTIP_DELAY_MS  = 600;
+
+// Feature B — async workspace save flush. One-shot timer that fires the
+// deferred ExtState write off the user-click frame. Interval is short so
+// the perceived "Saving…" → "Saved" transition feels snappy (sub-100 ms
+// for typical workspace sizes — still way under the human-noticeable
+// click-frame jank threshold of ~16 ms).
+static const int TIMER_ID_WORKSPACE_FLUSH = 8;
+static const int WORKSPACE_FLUSH_DELAY_MS = 30;

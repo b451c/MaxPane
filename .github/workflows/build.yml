@@ -93,20 +93,28 @@ jobs:
       contents: write
 
     steps:
-      # Only the macOS dylibs are uploaded to the public Release. Win + Linux
-      # binaries stay as workflow artifacts on the Actions page for internal
-      # smoke testing until #8 (Windows mouse input) and #9 (Linux FX Browser
-      # close) are cleared. They'll join the public Release in a follow-up.
+      # macOS dylibs + Windows .dll are uploaded to the public Release.
+      # Linux .so binaries stay as workflow artifacts on the Actions page
+      # for internal smoke testing until #9 (Linux FX Browser close) is
+      # cleared; they will join the public Release in v2.0.2.
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           pattern: reaper_maxpane-*.dylib
 
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: reaper_maxpane-x64.dll
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/**/*.dylib
+          files: |
+            artifacts/**/*.dylib
+            artifacts/**/*.dll
           generate_release_notes: false
           body: |
             ## MaxPane ${{ github.ref_name }}
@@ -119,14 +127,15 @@ jobs:
             |----------|------|--------|
             | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Stable |
             | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable |
+            | Windows x64 | `reaper_maxpane-x64.dll` | ✅ Stable |
 
-            > Windows + Linux builds are available as workflow artifacts (Actions page) for internal smoke testing. They will be added to the public Release once smoke testing on those platforms clears the open blockers — see [#8](https://github.com/b451c/MaxPane/issues/8) (Windows mouse input) and [#9](https://github.com/b451c/MaxPane/issues/9) (Linux FX Browser close).
+            > Linux build is available as a workflow artifact (Actions page) for internal smoke testing. It will be added to the public Release once smoke testing clears the FX Browser close blocker — see [#9](https://github.com/b451c/MaxPane/issues/9).
 
             ### Installation
 
             Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
 
-            > macOS (arm64 + x86_64) is fully functional. Windows and Linux are pending smoke-test clearance — see issues above. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+            > macOS (arm64 + x86_64) and Windows x64 are fully functional. Linux is pending smoke-test clearance — see issue above. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
             See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
 

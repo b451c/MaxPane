@@ -22,13 +22,17 @@ void MaxPaneContainer::OnPaint(HDC hdc)
   // pane grid below renders into the reserved client area (tree origin
   // already set to NAV_BAR_HEIGHT). Done before any other paint so all
   // states paint *under* the bar, never overlapping into it.
+  // Feature A — pass current workspace name + dirty flag so NavBar paints
+  // the centered label between the two button groups.
   NavBar::Layout navLay = {};
+  NavBar::State navState{};
   if (m_navBarVisible) {
-    navLay = NavBar::Compute(rc);
-    NavBar::State navState;
-    navState.hoverButton = m_navHover;
-    navState.dragModeArmed = (m_drag.mode != DragDock::IDLE);
-    navState.homeActive    = m_homeOverlay;
+    navState.hoverButton    = m_navHover;
+    navState.dragModeArmed  = (m_drag.mode != DragDock::IDLE);
+    navState.homeActive     = m_homeOverlay;
+    navState.workspaceName  = m_currentWorkspaceName[0] ? m_currentWorkspaceName : nullptr;
+    navState.workspaceDirty = m_workspaceDirty;
+    navLay = NavBar::Compute(rc, navState, hdc);
     NavBar::Paint(hdc, navLay, navState, dark);
   }
 
@@ -46,7 +50,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
       Launcher::PaintTooltip(hdc, lay, *m_wsMgr, m_launcherTooltipCard, dark);
     }
     if (m_navBarVisible && m_navTooltipBtn != NavBar::BTN_NONE) {
-      NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, dark);
+      NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, navState, dark);
     }
     PaintToast(hdc, rc);
     return;
@@ -224,12 +228,18 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     DeleteObject(backdrop);
     Launcher::Layout lay = Launcher::Compute(below, *m_wsMgr);
     Launcher::Paint(hdc, lay, *m_wsMgr, m_homeOverlayHover, dark);
+    // Sprint 1 Entry 18 — tooltip on home-overlay cards. Symmetric to
+    // the IsInLauncherMode branch above; the previous block only ran
+    // PaintTooltip when no captures were active.
+    if (m_launcherTooltipCard >= 0) {
+      Launcher::PaintTooltip(hdc, lay, *m_wsMgr, m_launcherTooltipCard, dark);
+    }
   }
 
   // ADR-026 — nav bar tooltip, drawn last so it sits above every other
   // pane-grid pixel (tooltip dips into the pane area below the bar).
   if (m_navBarVisible && m_navTooltipBtn != NavBar::BTN_NONE) {
-    NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, dark);
+    NavBar::PaintTooltip(hdc, navLay, m_navTooltipBtn, navState, dark);
   }
 
   // Toast overlay last so it sits above every other layer (Sprint 3.2).

@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 2.0.0 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 2.0.1 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 2.0.0 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 2.0.1 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -87,6 +87,7 @@ elseif(WIN32)
   target_sources(reaper_maxpane PRIVATE
     ${CMAKE_SOURCE_DIR}/resources/save_workspace_dialog.rc
     ${CMAKE_SOURCE_DIR}/resources/settings_dialog.rc
+    ${CMAKE_SOURCE_DIR}/resources/quick_switcher.rc
   )
 endif()
 
@@ -139,6 +140,9 @@ elseif(WIN32)
   target_compile_definitions(reaper_maxpane PRIVATE
     WIN32_LEAN_AND_MEAN
   )
+  # Sprint 1 Entry 12 — Psapi for EnumProcessModules / GetModuleInformation
+  # used by the plugin module-DLL display-name resolver.
+  target_link_libraries(reaper_maxpane PRIVATE Psapi)
 elseif(UNIX)
   set_target_properties(reaper_maxpane PROPERTIES
     SUFFIX ".so"

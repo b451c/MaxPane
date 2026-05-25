@@ -22,6 +22,9 @@
 #define REAPERAPI_WANT_SetProjExtState
 #define REAPERAPI_WANT_MarkProjectDirty
 #define REAPERAPI_WANT_GetCurrentProjectInLoadSave
+// Sprint 1 Entry 15 — kbd_getTextFromCmd (REAPER 6.71+) for action display
+// names used by DiscoverActionForWindow.
+#define REAPERAPI_WANT_kbd_getTextFromCmd
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
@@ -385,14 +388,26 @@ static void RegisterOpenActions(reaper_plugin_info_t* rec)
 extern "C" {
 
 REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
-  HINSTANCE /*hInstance*/, reaper_plugin_info_t* rec)
+  HINSTANCE hInstance, reaper_plugin_info_t* rec)
 {
+  // Sprint 1 Entry 5 — capture plugin HINSTANCE before any branch so
+  // dialogs can use it as the resource module (Windows native rc.exe path).
+  g_hInstance = hInstance;
+
   if (!rec) {
     // Save visibility state for each live instance before shutdown — if open,
     // mark for restore on next start.
     if (g_SetExtState) {
       InstanceManager::Get().ForEach([](int /*id*/, MaxPaneContainer& c) {
-        g_SetExtState(c.ExtSection(), "was_visible", c.IsVisible() ? "1" : "0", true);
+        // Sprint 1 Entry 10 — WasIntendedVisible() reads the m_visible
+        // intent flag instead of IsWindowVisible(). On Win32 quit the
+        // docker parent is hidden BEFORE plugin unload, so IsWindowVisible
+        // walks the parent chain and reports false even when MaxPane was
+        // still open — was_visible persisted as "0" and the next start
+        // didn't auto-open. SWELL doesn't reproduce the race but the
+        // intent semantics are conceptually correct everywhere.
+        g_SetExtState(c.ExtSection(), "was_visible",
+                      c.WasIntendedVisible() ? "1" : "0", true);
       });
     }
     InstanceManager::Get().DestroyAll();
@@ -417,6 +432,10 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_GetToggleCommandState = GetToggleCommandState;
   g_NamedCommandLookup = NamedCommandLookup;
   g_ReverseNamedCommandLookup = ReverseNamedCommandLookup;
+  // Sprint 1 Entry 15 — cast through (const char* (*)(int, void*)) because
+  // globals.h hides KbdSectionInfo behind void* to keep the header free of
+  // SDK type dependencies.
+  g_kbd_getTextFromCmd = (const char* (*)(int, void*))kbd_getTextFromCmd;
   g_EnumProjects = EnumProjects;
   g_GetProjExtState = GetProjExtState;
   g_SetProjExtState = SetProjExtState;

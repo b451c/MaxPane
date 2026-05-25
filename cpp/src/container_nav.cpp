@@ -365,6 +365,10 @@ void MaxPaneContainer::CloseHomeOverlay()
   if (!m_homeOverlay) return;
   m_homeOverlay = false;
   m_homeOverlayHover = -1;
+  // Sprint 1 Entry 18 — clear tooltip state so reopening the overlay
+  // shows fresh state, not a stale tooltip from the previous session.
+  m_launcherTooltipCard = -1;
+  KillTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP);
   // Restore the captures we hid in OpenHomeOverlay. If a workspace was
   // loaded instead (OnHomeOverlayClick card path), it bypasses this
   // function and lets LoadWorkspace release the captures cleanly.
@@ -383,6 +387,14 @@ bool MaxPaneContainer::OnHomeOverlayMouseMove(int x, int y)
   int hit = Launcher::HitTest(lay, x, y);
   if (hit != m_homeOverlayHover) {
     m_homeOverlayHover = hit;
+    // Sprint 1 Entry 18 — home overlay tooltip wiring. Tooltip worked in
+    // empty-launcher mode but not when home was opened over an active
+    // workspace; the hover handler tracked m_homeOverlayHover but never
+    // armed TIMER_ID_LAUNCHER_TIP. Symmetric to launcher hover (see
+    // OnMouseMove launcher branch).
+    if (m_launcherTooltipCard >= 0) m_launcherTooltipCard = -1;
+    if (hit >= 0) SetTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP, LAUNCHER_TOOLTIP_DELAY_MS, nullptr);
+    else          KillTimer(m_hwnd, TIMER_ID_LAUNCHER_TIP);
     InvalidateRect(m_hwnd, nullptr, FALSE);
   }
   return true;
@@ -422,6 +434,9 @@ bool MaxPaneContainer::OnHomeOverlayClick(int x, int y)
     if (paneId >= 0) {
       m_captureMode.active = true;
       m_captureMode.targetPaneId = paneId;
+      // Sprint 1 Entry 13 — nav-bar capture-button click is already-down
+      // when the timer fires; init true so the first NEW click is rising.
+      m_captureMode.prevLmbDown = true;
       InvalidateRect(m_hwnd, nullptr, FALSE);
       StartCaptureTimer();
     }

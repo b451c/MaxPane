@@ -106,6 +106,24 @@ bool MaxPaneContainer::Create()
   SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
   m_favMgr->Load();
   m_wsMgr->LoadList();   // launcher needs the workspace list available at first paint
+
+  // Feature A — restore the persisted workspace name + dirty flag BEFORE
+  // LoadState so the nav bar's first paint shows the label that matches
+  // the layout we're about to apply. The pair is written under m_extSection
+  // alongside was_visible; absent keys → no workspace loaded (empty label).
+  if (g_GetExtState) {
+    const char* persistedName  = g_GetExtState(m_extSection, "current_workspace_name");
+    const char* persistedDirty = g_GetExtState(m_extSection, "workspace_dirty");
+    if (persistedName && persistedName[0]) {
+      safe_strncpy(m_currentWorkspaceName, persistedName, sizeof(m_currentWorkspaceName));
+      m_workspaceDirty = (persistedDirty && persistedDirty[0] == '1');
+    } else {
+      m_currentWorkspaceName[0] = '\0';
+      m_workspaceDirty = false;
+    }
+    RefreshNavBarLabelCache();
+  }
+
   LoadState();
 
   if (m_floating) {
@@ -222,6 +240,18 @@ void MaxPaneContainer::Shutdown()
 
   DBG("[MaxPane] Shutdown: starting, hwnd=%p atexitSaved=%d\n", m_hwnd, g_atexitSaved);
 
+  // Feature B — drain any pending async workspace save synchronously before
+  // the host process can exit. The async path moves the ExtState freeze off
+  // the click frame; this brings it back at shutdown (where the user is
+  // already waiting on REAPER's quit) so no save is silently lost.
+  if (m_wsMgr && (m_wsMgr->HasPendingSave() || m_wsMgr->HasPendingLoadList())) {
+    DBG("[MaxPane] Shutdown: draining %d pending workspace save(s)\n",
+        m_wsMgr->HasPendingSave() ? 1 : 0);
+    KillTimer(m_hwnd, TIMER_ID_WORKSPACE_FLUSH);
+    m_wsMgr->FlushAllPending();
+    m_pendingWorkspaceName[0] = '\0';
+  }
+
   if (!g_atexitSaved) {
     SaveState();
     // F1a (ADR-024) — persist final floating geometry so user's last
@@ -269,6 +299,10 @@ void MaxPaneContainer::Shutdown()
   DestroyWindow(m_hwnd);
   m_hwnd = nullptr;
   m_visible = false;
+
+  // Feature A — drop the NavBar shim cache so a future container created
+  // at the same address doesn't inherit our stale label.
+  NavBar::ResetActiveWorkspaceLabel();
 }
 
 void MaxPaneContainer::Show()
@@ -285,6 +319,11 @@ void MaxPaneContainer::Toggle()
   if (g_SetExtState) {
     g_SetExtState(m_extSection, "was_visible", "0", true);
   }
+  // Feature A — closing the container loses any "currently loaded workspace"
+  // context; clear the nav bar label so a subsequent re-open without an
+  // explicit Load comes up with an empty label (premium auto-open into
+  // launcher state — ADR-013).
+  ClearCurrentWorkspace();
   // Record currently-captured action IDs so the next REAPER startup can close
   // any ghosts REAPER restores from its wnd_vis cache. A prior LoadWorkspace
   // may already have written entries here for pre-switch windows still
@@ -296,6 +335,15 @@ void MaxPaneContainer::Toggle()
 bool MaxPaneContainer::IsVisible() const
 {
   return m_hwnd && IsWindowVisible(m_hwnd);
+}
+
+bool MaxPaneContainer::WasIntendedVisible() const
+{
+  // Sprint 1 Entry 10 — m_visible is set true in Create/Show and false in
+  // Shutdown. Unlike IsVisible(), it survives Win32's quit-time parent-
+  // chain teardown that would otherwise mask a still-open container as
+  // "not visible" during the plugin unload write.
+  return m_visible;
 }
 
 // Whole container empty + no other UI mode active = launcher hero state
@@ -368,6 +416,11 @@ void MaxPaneContainer::ApplyPreset(LayoutPreset preset)
 
   RefreshLayout();
   SaveState();
+  // Feature A — applying a layout preset wipes the captured tabs (via
+  // ReleaseAll) and rebuilds the tree from a fresh preset. The result no
+  // longer represents the loaded workspace's stored layout, so drop the
+  // active-workspace association entirely.
+  ClearCurrentWorkspace();
 }
 
 void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
@@ -382,6 +435,7 @@ void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
   m_tree.SplitLeaf(nodeIdx, orient, 0.5f);
   RefreshLayout();
   SaveState();
+  MarkWorkspaceDirty();  // Feature A — layout no longer matches loaded ws
 }
 
 void MaxPaneContainer::MergePane(int paneId)
@@ -413,6 +467,7 @@ void MaxPaneContainer::MergePane(int paneId)
   m_tree.MergeNode(nodeIdx);
   RefreshLayout();
   SaveState();
+  MarkWorkspaceDirty();  // Feature A — layout no longer matches loaded ws
 }
 
 void MaxPaneContainer::ToggleSolo(int paneId)
@@ -739,6 +794,14 @@ void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
         if (strcmp(buf, srcEntry.name) == 0) break;   // no-op
         char msg[160];
         if (m_wsMgr->Rename(cardIdx, buf)) {
+          // Feature A — if the renamed workspace was the active one,
+          // update the nav bar label to match.
+          if (m_currentWorkspaceName[0] &&
+              strcmp(m_currentWorkspaceName, srcEntry.name) == 0) {
+            safe_strncpy(m_currentWorkspaceName, buf, sizeof(m_currentWorkspaceName));
+            PersistWorkspaceLabel();
+            RefreshNavBarLabelCache();
+          }
           snprintf(msg, sizeof(msg), "Renamed to '%s'", buf);
           ShowToast(msg);
           InvalidateRect(m_hwnd, nullptr, FALSE);
@@ -776,7 +839,10 @@ void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
     case MenuIds::LAUNCHER_CARD_DELETE: {
       char msg[160];
       snprintf(msg, sizeof(msg), "Deleted '%s'", srcEntry.name);
-      m_wsMgr->Delete(srcEntry.name);
+      // Feature A — DeleteWorkspace clears m_currentWorkspaceName if the
+      // deleted entry is the active one. Going through the wrapper keeps
+      // that branch on a single path.
+      DeleteWorkspace(srcEntry.name);
       ShowToast(msg);
       InvalidateRect(m_hwnd, nullptr, FALSE);
       break;
@@ -801,6 +867,11 @@ void MaxPaneContainer::ShowToast(const char* msg)
   safe_strncpy(m_toastMessage, msg, sizeof(m_toastMessage));
   m_toastDeadlineMs = std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count() + TOAST_DURATION_MS;
+  // Feature B — a fresh (non-sticky) ShowToast clears any prior sticky state.
+  // This is the path the WM_TIMER fade-out runs through: when the flush
+  // tick replaces "Saving…" with "Saved", we want normal fade behaviour
+  // back, not the indefinite hold.
+  m_toastSticky = false;
   if (m_hwnd) {
     SetTimer(m_hwnd, TIMER_ID_TOAST, TOAST_TICK_MS, nullptr);
     RECT cr;
@@ -810,6 +881,90 @@ void MaxPaneContainer::ShowToast(const char* msg)
     if (bar.top < cr.top) bar.top = cr.top;
     InvalidateRect(m_hwnd, &bar, FALSE);
   }
+}
+
+// Feature B — sticky variant for the "Saving '<X>'…" indicator. The toast
+// sits at full opacity until the next ShowToast / ShowStickyToast call
+// (typically the post-flush "Saved" message). No TIMER_ID_TOAST is armed
+// — there's nothing to animate while sticky, and the next ShowToast
+// replaces sticky with the normal fade-out path.
+void MaxPaneContainer::ShowStickyToast(const char* msg)
+{
+  if (!msg) msg = "";
+  safe_strncpy(m_toastMessage, msg, sizeof(m_toastMessage));
+  // Use a far-future deadline so PaintToast's "now >= deadline" reap
+  // branch never fires, and the fade-alpha math inside PaintToast keeps
+  // alpha at 255 because msLeft is always far larger than TOAST_FADE_MS.
+  m_toastDeadlineMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    std::chrono::steady_clock::now().time_since_epoch()).count() + 24LL * 60LL * 60LL * 1000LL;
+  m_toastSticky = true;
+  // No SetTimer — sticky toasts don't fade, so the per-tick repaint is
+  // wasteful. The next ShowToast (or DismissToast) re-arms the timer.
+  if (m_hwnd) {
+    KillTimer(m_hwnd, TIMER_ID_TOAST);
+    RECT cr;
+    GetClientRect(m_hwnd, &cr);
+    RECT bar = cr;
+    bar.top = cr.bottom - TOAST_BAR_HEIGHT;
+    if (bar.top < cr.top) bar.top = cr.top;
+    InvalidateRect(m_hwnd, &bar, FALSE);
+  }
+}
+
+// Feature B — arm the one-shot flush timer. Called from SaveWorkspace
+// (after EnqueueSave) and re-armed by OnWorkspaceFlushTick when the queue
+// still has depth.
+void MaxPaneContainer::ArmWorkspaceFlushTimer()
+{
+  if (!m_hwnd) return;
+  // SetTimer with the same id is idempotent on both Win32 and SWELL
+  // (replaces existing timer with a new period). This means a rapid burst
+  // of Enqueue calls only ever drives one outstanding flush timer, which
+  // is what we want — the timer doesn't need to fire N times for N
+  // enqueues; one fire per Flush is enough, and Flush re-arms itself.
+  SetTimer(m_hwnd, TIMER_ID_WORKSPACE_FLUSH, WORKSPACE_FLUSH_DELAY_MS, nullptr);
+}
+
+// Feature B — Phase 2. Pops one queue entry, writes ExtState, then either
+// re-arms (queue still deeper than 1) or transitions the toast to the
+// completion message ("Saved" / "Replaced") + clears pending flag.
+void MaxPaneContainer::OnWorkspaceFlushTick()
+{
+  KillTimer(m_hwnd, TIMER_ID_WORKSPACE_FLUSH);
+
+  // Drain any pending LoadList first so a fresh launcher repaint after
+  // the flush sees the freshest list. EnqueueLoadList isn't currently
+  // called by any synchronous path inside MaxPane, but the helper exists
+  // so external (e.g. future inter-instance sync) paths can defer reads
+  // the same way Save defers writes.
+  m_wsMgr->FlushPendingLoadList();
+
+  const bool flushed = m_wsMgr->FlushNextPendingSave();
+  if (!flushed) {
+    // Nothing was queued — defensive cleanup, shouldn't normally happen.
+    m_pendingWorkspaceName[0] = '\0';
+    return;
+  }
+
+  if (m_wsMgr->HasPendingSave()) {
+    // Queue depth was 2 — drain on the next tick. Toast stays sticky.
+    DBG("[MaxPane] OnWorkspaceFlushTick: queue still deep, re-arming\n");
+    ArmWorkspaceFlushTimer();
+    return;
+  }
+
+  // Queue drained — flip toast from sticky "Saving…" to timed completion.
+  char msg[MAX_WORKSPACE_NAME + 64];
+  snprintf(msg, sizeof(msg),
+           m_pendingWorkspaceWasReplace ? "Replaced '%s'" : "Saved '%s'",
+           m_pendingWorkspaceName[0] ? m_pendingWorkspaceName : "workspace");
+  ShowToast(msg);
+  m_pendingWorkspaceName[0] = '\0';
+  // Launcher cards may need a repaint if the workspace count changed.
+  // ShowToast already invalidated the toast strip; nuke the rest as well
+  // since launcher cards live above the bar.
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+  DBG("[MaxPane] OnWorkspaceFlushTick: flush complete, toast='%s'\n", msg);
 }
 
 void MaxPaneContainer::PaintToast(HDC hdc, const RECT& clientRect)
@@ -823,8 +978,11 @@ void MaxPaneContainer::PaintToast(HDC hdc, const RECT& clientRect)
   const long long msLeft = m_toastDeadlineMs - now;
 
   // Fade alpha 0..255 — linear ramp during the trailing TOAST_FADE_MS window.
+  // Sticky toasts (Feature B's "Saving…" indicator) skip the fade entirely:
+  // we hold them at full opacity until the next ShowToast replaces them
+  // with a timed message.
   int alpha = 255;
-  if (msLeft < TOAST_FADE_MS) {
+  if (!m_toastSticky && msLeft < TOAST_FADE_MS) {
     alpha = (int)((msLeft * 255) / TOAST_FADE_MS);
     if (alpha < 0) alpha = 0;
   }
@@ -873,6 +1031,7 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     m_winMgr.CloseTab(paneId, tabIdx);
     RefreshLayout();
     SaveState();
+    MarkWorkspaceDirty();  // Feature A
   } else if (cmd == MenuIds::TAB_CLOSE_OTHERS ||
              cmd == MenuIds::TAB_CLOSE_TO_RIGHT ||
              cmd == MenuIds::TAB_CLOSE_ALL) {
@@ -910,6 +1069,7 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     }
     RefreshLayout();
     SaveState();
+    MarkWorkspaceDirty();  // Feature A
   } else if (cmd == MenuIds::TAB_TOGGLE_PINNED) {
     // C2 (ADR-027) — flip pinned, then SetTabPinned re-sorts the pane.
     const TabEntry* t = m_winMgr.GetTab(paneId, tabIdx);
@@ -917,12 +1077,14 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
       m_winMgr.SetTabPinned(paneId, tabIdx, !t->pinned);
       RefreshLayout();
       SaveState();
+      MarkWorkspaceDirty();  // Feature A
     }
   } else if (cmd >= MenuIds::TAB_MOVE_BASE && cmd < MenuIds::TAB_MOVE_BASE + MAX_PANES) {
     int targetPane = cmd - MenuIds::TAB_MOVE_BASE;
     m_winMgr.MoveTab(paneId, tabIdx, targetPane);
     RefreshLayout();
     SaveState();
+    MarkWorkspaceDirty();  // Feature A
   } else if (cmd >= MenuIds::TAB_COLOR_BASE && cmd < MenuIds::TAB_COLOR_BASE + TAB_COLOR_COUNT) {
     int newColor = cmd - MenuIds::TAB_COLOR_BASE;
     m_winMgr.SetTabColor(paneId, tabIdx, newColor);
@@ -931,6 +1093,7 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     if (tr.right > tr.left) InvalidateRect(m_hwnd, &tr, FALSE);
     else InvalidateRect(m_hwnd, nullptr, FALSE);
     SaveState();
+    MarkWorkspaceDirty();  // Feature A
   } else if (cmd == MenuIds::FAV_ADD) {
     const TabEntry* tab = m_winMgr.GetTab(paneId, tabIdx);
     if (tab && tab->captured && tab->name[0]) {
@@ -982,9 +1145,11 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
       m_winMgr.CaptureByIndex(paneId, idx, m_hwnd);
       RefreshLayout();
       SaveState();
+      MarkWorkspaceDirty();  // Feature A
     } else if (g_Main_OnCommand) {
       m_captureQueue->EnqueueKnown(paneId, idx);
       StartCaptureTimer();
+      MarkWorkspaceDirty();  // Feature A
     }
     return;
   }
@@ -1021,6 +1186,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
         RefreshLayout();
         SaveState();
+        MarkWorkspaceDirty();  // Feature A
       }
     }
     return;
@@ -1030,6 +1196,9 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
   if (cmd == MenuIds::CAPTURE_BY_CLICK) {
     m_captureMode.active = true;
     m_captureMode.targetPaneId = paneId;
+    // Sprint 1 Entry 13 — the menu click is "already down"; initial true
+    // suppresses self-trigger on the next timer tick.
+    m_captureMode.prevLmbDown = true;
     InvalidateRect(m_hwnd, nullptr, FALSE);
     StartCaptureTimer();
     return;
@@ -1078,6 +1247,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     }
     RefreshLayout();
     SaveState();
+    MarkWorkspaceDirty();  // Feature A
     return;
   }
 
@@ -1143,16 +1313,20 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
   }
 
   // Workspace save — modal dialog (Sprint 3.3 / ADR-020).
+  // Feature B — async path: SaveWorkspace enqueues + arms the deferred flush
+  // timer. The completion toast ("Saved '<X>'" / "Replaced '<X>'") fires
+  // from OnWorkspaceFlushTick once the ExtState write actually completes.
+  // The sticky "Saving '<X>'…" indicator below makes the deferral visible
+  // for users with large workspaces where the click→flush window is long
+  // enough to perceive (>30 ms).
   if (cmd == MenuIds::WS_SAVE) {
     m_wsMgr->LoadList();  // freshen list before showing
     char wsName[MAX_WORKSPACE_NAME] = "";
     if (OpenSaveWorkspaceDialog(m_hwnd, *m_wsMgr, wsName, sizeof(wsName))) {
-      const bool wasReplace = (m_wsMgr->Find(wsName) != nullptr);
+      char savingMsg[MAX_WORKSPACE_NAME + 64];
+      snprintf(savingMsg, sizeof(savingMsg), "Saving '%s'\xe2\x80\xa6", wsName);
+      ShowStickyToast(savingMsg);
       SaveWorkspace(wsName);
-      char msg[MAX_WORKSPACE_NAME + 64];
-      snprintf(msg, sizeof(msg),
-               wasReplace ? "Replaced '%s'" : "Saved '%s'", wsName);
-      ShowToast(msg);
     }
     return;
   }
@@ -1253,6 +1427,10 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_LBUTTONDOWN: {
       if (self) {
+        // Feature A — refresh the NavBar shim cache before OnNavBarClick
+        // so its NavBar::Compute(rc) call sees this instance's workspace
+        // label region (otherwise clicks on the label would miss).
+        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
 
@@ -1282,6 +1460,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
             if (paneId >= 0) {
               self->m_captureMode.active = true;
               self->m_captureMode.targetPaneId = paneId;
+              // Sprint 1 Entry 13 — see CAPTURE_BY_CLICK comment.
+              self->m_captureMode.prevLmbDown = true;
               self->m_launcherHover = Launcher::HIT_NONE;
               InvalidateRect(hwnd, nullptr, FALSE);
               self->StartCaptureTimer();
@@ -1361,6 +1541,12 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_MOUSEMOVE: {
       if (self) {
+        // Feature A — refresh the NavBar shim cache so OnNavBarMouseMove's
+        // legacy NavBar::Compute(rc) returns a Layout that includes the
+        // workspace-name region for this instance's loaded workspace.
+        // Multi-instance safe: only the focused container processes each
+        // WM_MOUSEMOVE, so the cache always reflects the right state.
+        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
         self->OnMouseMove(x, y);
@@ -1371,6 +1557,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_LBUTTONUP: {
       if (self) {
+        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
         self->OnLButtonUp(x, y);
@@ -1379,7 +1566,22 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
     }
 
     case WM_NCHITTEST:
+#ifdef _WIN32
+      // Sprint 1 Entry 2 — native Win32 DialogProc treats the return value
+      // as BOOL. WM_NCHITTEST is not in MSDN's BOOL-exception list, so the
+      // result must be published via SetWindowLongPtr(DWLP_MSGRESULT, …)
+      // and the proc must return TRUE. The previous "return HTCLIENT;" was
+      // read as TRUE-handled, then the dialog manager sampled DWLP_MSGRESULT
+      // which defaults to 0 (HTNOWHERE) — so every mouse button event got
+      // routed past our DlgProc. SWELL DialogProc honours the direct return.
+      // Sprint 1 Entry 6 — when floating, defer to default handler so Win32
+      // resolves resize-border / caption hit-test areas correctly.
+      if (self && self->IsFloating()) return FALSE;
+      SetWindowLongPtr(hwnd, DWLP_MSGRESULT, (LONG_PTR)HTCLIENT);
+      return TRUE;
+#else
       return HTCLIENT;
+#endif
 
     case WM_SETCURSOR: {
       if (self && (HWND)wParam == hwnd) {
@@ -1417,11 +1619,23 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
     }
 
     case WM_RBUTTONUP: {
+#ifdef _WIN32
+      // Sprint 1 Entry 17 — on Win32 the default dialog handler synthesizes
+      // WM_CONTEXTMENU from WM_RBUTTONUP. Calling OnContextMenu here AND in
+      // the WM_CONTEXTMENU case below produced a double-fire — the second
+      // pass interpreted as "right-click in container during capture mode"
+      // and cancelled the freshly-entered Capture-by-Click. Let WM_CONTEXTMENU
+      // be the single canonical trigger on Win32. SWELL macOS/Linux do not
+      // synthesize WM_CONTEXTMENU from WM_RBUTTONUP, so the original path
+      // is preserved there.
+      (void)self;
+#else
       if (self) {
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
         self->OnContextMenu(x, y);
       }
+#endif
       return 0;
     }
 
@@ -1462,13 +1676,27 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       }
       else if (self && wParam == TIMER_ID_LAUNCHER_TIP) {
         KillTimer(hwnd, TIMER_ID_LAUNCHER_TIP);
-        // Show tooltip if hover is still on a card.
-        if (self->IsInLauncherMode() && self->m_launcherHover >= 0) {
-          self->m_launcherTooltipCard = self->m_launcherHover;
+        // Sprint 1 Entry 18 — also fire tooltip when hover is on a home-
+        // overlay card (overlay over an active workspace). The previous
+        // gate on IsInLauncherMode() returned false once any capture was
+        // active, suppressing overlay tooltips.
+        int hoverCard = -1;
+        if (self->IsInLauncherMode())  hoverCard = self->m_launcherHover;
+        else if (self->m_homeOverlay)  hoverCard = self->m_homeOverlayHover;
+        if (hoverCard >= 0) {
+          self->m_launcherTooltipCard = hoverCard;
           InvalidateRect(hwnd, nullptr, FALSE);
         }
       }
       else if (self && wParam == TIMER_ID_TOAST) {
+        // Sticky toasts (Feature B "Saving…") skip the fade tick entirely
+        // — ShowStickyToast killed the timer when it set the message, so
+        // we should never see this branch with m_toastSticky=true. Guard
+        // defensively in case a stale tick races between sticky→ShowToast.
+        if (self->m_toastSticky) {
+          KillTimer(hwnd, TIMER_ID_TOAST);
+          return 0;
+        }
         // Drive fade animation + reap when deadline passes.
         const long long now = std::chrono::duration_cast<std::chrono::milliseconds>(
           std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -1486,6 +1714,10 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           if (bar.top < cr.top) bar.top = cr.top;
           InvalidateRect(hwnd, &bar, FALSE);
         }
+      }
+      else if (self && wParam == TIMER_ID_WORKSPACE_FLUSH) {
+        // Feature B — drives the deferred ExtState write off the click frame.
+        self->OnWorkspaceFlushTick();
       }
       else if (self && wParam == TIMER_ID_HOVER) {
         POINT pt;
@@ -1553,21 +1785,31 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           POINT pt;
           GetCursorPos(&pt);
           short mouseState = GetAsyncKeyState(VK_LBUTTON);
-          if (mouseState & 0x8000) {
+          // Sprint 1 Entry 13 — rising-edge LMB detection. The previous
+          // "if (currently-down)" branch had two bugs: (a) the button
+          // click that activated capture mode triggered the first tick
+          // immediately, (b) sub-tick LMB transitions slipped past the
+          // 50ms poll. Rising-edge fires once on every true down-stroke.
+          bool lmbDown = (mouseState & 0x8000) != 0;
+          bool risingEdge = lmbDown && !self->m_captureMode.prevLmbDown;
+          self->m_captureMode.prevLmbDown = lmbDown;
+
+          if (risingEdge) {
             HWND underCursor = WindowFromPoint(pt);
             if (underCursor && underCursor != self->m_hwnd &&
                 underCursor != g_reaperMainHwnd &&
                 !self->m_winMgr.IsWindowCaptured(underCursor)) {
-              HWND topLevel = underCursor;
-              HWND parent = GetParent(topLevel);
-              while (parent && parent != g_reaperMainHwnd) {
-                topLevel = parent;
-                parent = GetParent(topLevel);
-              }
+              // Sprint 1 Entry 13 — walk up to the SHALLOWEST plugin-DLL
+              // owned HWND. Handles docked plugins where the legacy
+              // walk-to-top stopped at the dock frame's inner container.
+              HWND topLevel = WindowManager::ResolveCaptureSourceForClick(underCursor);
 
               if (topLevel && topLevel != self->m_hwnd && topLevel != g_reaperMainHwnd) {
                 char title[256];
-                GetWindowText(topLevel, title, sizeof(title));
+                // Sprint 1 Entry 13 — empty-title plugins (ReaBeat, Reamix,
+                // ReaImGui scripts) get a name via the module-DLL waterfall
+                // so the capture flow doesn't drop them at the title gate.
+                WindowManager::ResolveWindowDisplayName(topLevel, title, sizeof(title));
                 if (title[0]) {
                   HWND captureHwnd = topLevel;
                   HWND dockFrame = nullptr;

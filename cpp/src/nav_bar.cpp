@@ -11,7 +11,9 @@
 //    UI fonts (Tahoma/Segoe UI/SF Pro). No emoji — emoji rendering through
 //    SWELL DrawText is inconsistent across platforms.
 #include "nav_bar.h"
+#include "config.h"   // MAX_WORKSPACE_NAME (label-buffer sizing)
 #include <cstring>
+#include <cstdio>
 
 namespace NavBar {
 namespace {
@@ -20,6 +22,13 @@ constexpr int BAR_PADDING_X    = 10;   // outer left/right pad inside bar
 constexpr int BUTTON_GAP       = 2;    // gap between adjacent buttons in a group
 constexpr int GROUP_GAP        = 14;   // gap on each side of divider
 constexpr int DIVIDER_WIDTH    = 1;
+
+// Feature A — workspace-name label.
+constexpr int WS_NAME_FONT_PX     = 13;
+constexpr int WS_NAME_INNER_PAD   = 8;   // horizontal pad on each side of label
+constexpr int WS_NAME_MIN_W       = 40;  // below this we drop the label entirely
+// U+2022 BULLET (UTF-8: e2 80 a2) — trailing marker for unsaved changes.
+constexpr const char* WS_DIRTY_GLYPH = " \xe2\x80\xa2";
 
 // ---- Palette ----------------------------------------------------------
 
@@ -36,6 +45,9 @@ struct Palette {
   COLORREF tooltipBg;
   COLORREF tooltipText;
   COLORREF tooltipBorder;
+  // Feature A — workspace label colors.
+  COLORREF wsName;            // primary label color
+  COLORREF wsNameDirty;       // accent for the trailing "•" glyph
 };
 
 Palette GetPalette(bool dark)
@@ -54,6 +66,8 @@ Palette GetPalette(bool dark)
     p.tooltipBg        = RGB( 50,  54,  62);
     p.tooltipText      = RGB(238, 238, 238);
     p.tooltipBorder    = RGB( 82,  88,  98);
+    p.wsName           = RGB(210, 210, 210);
+    p.wsNameDirty      = RGB(255, 175,  70);
   } else {
     p.barBg            = RGB(245, 245, 245);
     p.barBottomEdge    = RGB(210, 210, 210);
@@ -67,8 +81,65 @@ Palette GetPalette(bool dark)
     p.tooltipBg        = RGB( 50,  54,  62);
     p.tooltipText      = RGB(245, 245, 245);
     p.tooltipBorder    = RGB( 30,  34,  42);
+    p.wsName           = RGB( 55,  55,  55);
+    p.wsNameDirty      = RGB(200, 100,   0);
   }
   return p;
+}
+
+// Build the display string ("<name>" or "<name> •") into outBuf. Returns
+// length written (excluding NUL).
+int FormatWorkspaceLabel(const char* name, bool dirty, char* outBuf, int outCap)
+{
+  if (!outBuf || outCap <= 0) return 0;
+  outBuf[0] = '\0';
+  if (!name || !name[0]) return 0;
+  int n = snprintf(outBuf, (size_t)outCap, "%s%s",
+                   name, dirty ? WS_DIRTY_GLYPH : "");
+  if (n < 0) { outBuf[0] = '\0'; return 0; }
+  if (n >= outCap) n = outCap - 1;
+  return n;
+}
+
+// Approximate rendered width of `text` in the workspace-label font.
+//
+// When a real HDC is provided (paint path), uses DT_CALCRECT for accurate
+// measurement. When no HDC is available (hit-test path from
+// container_nav.cpp's legacy NavBar::Compute(rect) shim), falls back to a
+// char-count heuristic — close enough for sizing the hit-test rectangle.
+// The label is re-measured during WM_PAINT anyway, so the rendered output
+// is always pixel-accurate; the heuristic only sets the hover region.
+//
+// Heuristic: assume average advance ~0.55 * WS_NAME_FONT_PX for proportional
+// Latin text + 1.6 px slack per char. Treats UTF-8 multi-byte sequences as
+// single chars by counting leading bytes (skips continuation bytes 10xxxxxx).
+int MeasureWorkspaceLabel(const char* text, HDC measureHdc)
+{
+  if (!text || !text[0]) return 0;
+
+  if (measureHdc) {
+    HFONT font = CreateFont(WS_NAME_FONT_PX, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                            CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                            DEFAULT_PITCH, "");
+    HFONT oldFont = font ? (HFONT)SelectObject(measureHdc, font) : nullptr;
+    RECT measure = { 0, 0, 0, 0 };
+    DrawTextUtf8(measureHdc, text, -1, &measure,
+                 DT_CALCRECT | DT_NOPREFIX | DT_SINGLELINE);
+    int w = measure.right - measure.left;
+    if (oldFont) SelectObject(measureHdc, oldFont);
+    if (font) DeleteObject(font);
+    return w;
+  }
+
+  // No HDC available — approximate from UTF-8 codepoint count.
+  int chars = 0;
+  for (const unsigned char* p = (const unsigned char*)text; *p; p++) {
+    if ((*p & 0xC0) != 0x80) chars++;   // skip UTF-8 continuation bytes
+  }
+  // Empirical: 13px label averages ~7.2 px/char including small inter-char
+  // spacing. Round up to favor including the full label in the hover rect.
+  return (chars * (WS_NAME_FONT_PX * 11 / 20)) + (chars * 2);
 }
 
 // ---- Glyph icons (system font, per-icon size balanced) ------------------
@@ -149,7 +220,7 @@ void DrawButton(HDC hdc, const RECT& r, int buttonId, bool hover,
 // Compute
 // ============================================================================
 
-Layout Compute(const RECT& containerRect)
+Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
 {
   Layout lay = {};
 
@@ -215,7 +286,97 @@ Layout Compute(const RECT& containerRect)
     }
   }
 
+  // Feature A — workspace-name label. Only laid out when state carries a
+  // non-empty name AND there is meaningful horizontal room between the two
+  // groups. When the available region is below WS_NAME_MIN_W we drop the
+  // label entirely (no truncated-to-ellipsis-only artifacts).
+  if (lay.visible && state.workspaceName && state.workspaceName[0]) {
+    int regionLeft  = (lay.divider2.right > lay.divider2.left ? lay.divider2.right
+                                                              : loadRight)
+                      + GROUP_GAP;
+    int regionRight = settingsLeft - GROUP_GAP;
+    int regionW     = regionRight - regionLeft;
+    if (regionW >= WS_NAME_MIN_W) {
+      char labelBuf[MAX_WORKSPACE_NAME + 8];
+      FormatWorkspaceLabel(state.workspaceName, state.workspaceDirty,
+                           labelBuf, (int)sizeof(labelBuf));
+      int textW = MeasureWorkspaceLabel(labelBuf, measureHdc);
+      int usableW = regionW - 2 * WS_NAME_INNER_PAD;
+      if (usableW < 1) usableW = 1;
+
+      bool truncated = false;
+      int rectW = textW;
+      if (rectW > usableW) {
+        rectW = usableW;
+        truncated = true;
+      }
+      // Center the rect within the available region. Render rect is the
+      // actual draw area (without the inner padding); hit-test rect spans
+      // the full vertical strip for forgiving hover.
+      int cx = (regionLeft + regionRight) / 2;
+      int rl = cx - rectW / 2;
+      int rr = rl + rectW;
+      lay.workspaceNameRect = { rl, lay.barRect.top, rr, lay.barRect.bottom };
+      lay.workspaceNameTruncated = truncated;
+    }
+  }
+
   return lay;
+}
+
+// ---- Active-state cache (Feature A shim plumbing) ----------------------
+//
+// Container files that drive paint/state changes (container.cpp,
+// container_paint.cpp, container_state.cpp) push the current workspace
+// label into this cache. The legacy single-arg Compute(rect) shim reads
+// it so callers that have not been switched to the State-aware overload
+// (container_nav.cpp + container_input.cpp, frozen for this PR) still
+// produce a Layout with the workspace-name region populated. That is
+// what enables hover detection of BTN_WORKSPACE_NAME without touching the
+// frozen mouse-handling files.
+namespace {
+struct ActiveLabel {
+  bool present;
+  bool dirty;
+  char name[MAX_WORKSPACE_NAME];
+};
+ActiveLabel g_activeLabel{};
+} // namespace
+
+void SetActiveWorkspaceLabel(const char* name, bool dirty)
+{
+  if (!name || !name[0]) {
+    g_activeLabel.present = false;
+    g_activeLabel.dirty   = false;
+    g_activeLabel.name[0] = '\0';
+    return;
+  }
+  g_activeLabel.present = true;
+  g_activeLabel.dirty   = dirty;
+  size_t n = strlen(name);
+  if (n >= sizeof(g_activeLabel.name)) n = sizeof(g_activeLabel.name) - 1;
+  memcpy(g_activeLabel.name, name, n);
+  g_activeLabel.name[n] = '\0';
+}
+
+void ResetActiveWorkspaceLabel()
+{
+  g_activeLabel.present = false;
+  g_activeLabel.dirty   = false;
+  g_activeLabel.name[0] = '\0';
+}
+
+// Backward-compat shim — used by callers that haven't been switched to the
+// State-aware overload yet. Picks up the cached workspace label so hover
+// hit-testing still returns BTN_WORKSPACE_NAME when the cursor is over the
+// label region.
+Layout Compute(const RECT& containerRect)
+{
+  State s{};
+  s.hoverButton  = BTN_NONE;
+  s.workspaceName  = g_activeLabel.present ? g_activeLabel.name : nullptr;
+  s.workspaceDirty = g_activeLabel.dirty;
+  return Compute(containerRect, s, nullptr);
 }
 
 // ============================================================================
@@ -264,25 +425,76 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
     }
     DrawButton(hdc, r, i, hover, active, armed, pal);
   }
+
+  // Feature A — workspace-name label. Drawn last (after dividers + buttons)
+  // so the centered text sits on the same baseline as the icons. The bullet
+  // glyph stays attached to the name and shares its truncation — if the
+  // rect is too narrow, DT_END_ELLIPSIS may eat the bullet first; that is
+  // acceptable degraded fallback (tooltip still shows the full untruncated
+  // string with the dirty marker).
+  if (lay.workspaceNameRect.right > lay.workspaceNameRect.left &&
+      state.workspaceName && state.workspaceName[0]) {
+    char labelBuf[MAX_WORKSPACE_NAME + 8];
+    FormatWorkspaceLabel(state.workspaceName, state.workspaceDirty,
+                         labelBuf, (int)sizeof(labelBuf));
+
+    HFONT font = CreateFont(WS_NAME_FONT_PX, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                            CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
+                            DEFAULT_PITCH, "");
+    HFONT oldFont = font ? (HFONT)SelectObject(hdc, font) : nullptr;
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, state.workspaceDirty ? pal.wsNameDirty : pal.wsName);
+
+    UINT flags = DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX;
+    if (lay.workspaceNameTruncated) flags |= DT_END_ELLIPSIS;
+    RECT tr = lay.workspaceNameRect;
+    DrawTextUtf8(hdc, labelBuf, -1, &tr, flags);
+
+    if (oldFont) SelectObject(hdc, oldFont);
+    if (font) DeleteObject(font);
+  }
 }
 
 // ============================================================================
 // PaintTooltip
 // ============================================================================
 
-void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, bool dark)
+void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
+                  bool dark)
 {
   if (!lay.visible) return;
-  if (buttonId < 0 || buttonId >= BUTTON_COUNT) return;
-  const RECT& btn = lay.buttons[buttonId];
-  if (btn.right <= btn.left) return;
+
+  // Resolve anchor rect + tooltip text. Standard buttons use lay.buttons[]
+  // and ButtonTooltip(). The workspace-name pseudo-button uses
+  // lay.workspaceNameRect and the live name from State.
+  RECT anchor;
+  const char* text = nullptr;
+  if (buttonId == BTN_WORKSPACE_NAME) {
+    anchor = lay.workspaceNameRect;
+    text = (state.workspaceName && state.workspaceName[0]) ? state.workspaceName
+                                                           : nullptr;
+  } else if (buttonId >= 0 && buttonId < BUTTON_COUNT) {
+    anchor = lay.buttons[buttonId];
+    text = ButtonTooltip(buttonId, false);
+  } else {
+    return;
+  }
+  if (anchor.right <= anchor.left) return;
+  if (!text || !text[0]) return;
 
   Palette pal = GetPalette(dark);
 
-  // Note: dragArmed not passed in — caller could lift this to State if the
-  // armed copy ever diverges per button. For now both share the same text.
-  const char* text = ButtonTooltip(buttonId, false);
-  if (!text || !text[0]) return;
+  // Tooltip for the workspace-name pseudo-button always shows the full
+  // untruncated name (with bullet if dirty) — that is the entire point of
+  // making it tooltip-able. Other tooltips use the static ButtonTooltip
+  // strings unchanged.
+  char wsTipBuf[MAX_WORKSPACE_NAME + 8] = {};
+  if (buttonId == BTN_WORKSPACE_NAME) {
+    FormatWorkspaceLabel(state.workspaceName, state.workspaceDirty,
+                         wsTipBuf, (int)sizeof(wsTipBuf));
+    text = wsTipBuf;
+  }
 
   // Size: measure text + padding.
   HFONT tipFont = CreateFont(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
@@ -295,8 +507,14 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, bool dark)
   DrawTextUtf8(hdc,text, -1, &measure, DT_CALCRECT | DT_NOPREFIX | DT_SINGLELINE);
   int tipW = (measure.right - measure.left) + 16;
   int tipH = 22;
+  // Clamp tipW to bar width so very long workspace names don't blow past
+  // the container edges; the tooltip inner draw uses DT_SINGLELINE without
+  // ellipsis, so a tip wider than the bar would visually clip — clamping
+  // gives the user the prefix at least.
+  int maxTipW = (lay.barRect.right - lay.barRect.left) - 8;
+  if (maxTipW > 0 && tipW > maxTipW) tipW = maxTipW;
 
-  int cx = (btn.left + btn.right) / 2;
+  int cx = (anchor.left + anchor.right) / 2;
   int tipX = cx - tipW / 2;
   int tipY = lay.barRect.bottom + 6;
 
@@ -348,6 +566,13 @@ int HitTest(const Layout& lay, int x, int y)
     const RECT& r = lay.buttons[i];
     if (r.right <= r.left) continue;
     if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return i;
+  }
+  // Feature A — workspace-name pseudo-button. Only returned when the label
+  // has a rect (i.e. there is a loaded workspace AND the bar had room).
+  const RECT& wr = lay.workspaceNameRect;
+  if (wr.right > wr.left && x >= wr.left && x < wr.right &&
+      y >= wr.top && y < wr.bottom) {
+    return BTN_WORKSPACE_NAME;
   }
   return BTN_NONE;
 }

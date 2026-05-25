@@ -9,8 +9,77 @@
 #include "workspace_manager.h"
 #include "project_state.h"
 #include "state_accessor.h"
+#include "nav_bar.h"      // Feature A — Set/ResetActiveWorkspaceLabel
 #include <cstring>
 #include <cstdio>
+
+// =========================================================================
+// Feature A — workspace-name nav bar label
+// =========================================================================
+
+void MaxPaneContainer::RefreshNavBarLabelCache()
+{
+  if (m_currentWorkspaceName[0]) {
+    NavBar::SetActiveWorkspaceLabel(m_currentWorkspaceName, m_workspaceDirty);
+  } else {
+    NavBar::ResetActiveWorkspaceLabel();
+  }
+}
+
+void MaxPaneContainer::PersistWorkspaceLabel()
+{
+  if (!g_SetExtState) return;
+  g_SetExtState(m_extSection, "current_workspace_name",
+                m_currentWorkspaceName[0] ? m_currentWorkspaceName : "", true);
+  g_SetExtState(m_extSection, "workspace_dirty",
+                m_workspaceDirty ? "1" : "0", true);
+}
+
+void MaxPaneContainer::SetCurrentWorkspace(const char* name)
+{
+  if (!name || !name[0]) { ClearCurrentWorkspace(); return; }
+  safe_strncpy(m_currentWorkspaceName, name, sizeof(m_currentWorkspaceName));
+  m_workspaceDirty = false;
+  PersistWorkspaceLabel();
+  RefreshNavBarLabelCache();
+  if (m_hwnd) {
+    // Repaint just the bar strip — InvalidateRect for the whole bar so the
+    // new label appears even when nothing else changed visually.
+    RECT cr; GetClientRect(m_hwnd, &cr);
+    RECT bar = cr; bar.bottom = bar.top + NavBar::NAV_BAR_HEIGHT + 36;
+    InvalidateRect(m_hwnd, &bar, FALSE);
+  }
+}
+
+void MaxPaneContainer::ClearCurrentWorkspace()
+{
+  if (!m_currentWorkspaceName[0] && !m_workspaceDirty) return;
+  m_currentWorkspaceName[0] = '\0';
+  m_workspaceDirty = false;
+  PersistWorkspaceLabel();
+  RefreshNavBarLabelCache();
+  if (m_hwnd) {
+    RECT cr; GetClientRect(m_hwnd, &cr);
+    RECT bar = cr; bar.bottom = bar.top + NavBar::NAV_BAR_HEIGHT + 36;
+    InvalidateRect(m_hwnd, &bar, FALSE);
+  }
+}
+
+void MaxPaneContainer::MarkWorkspaceDirty()
+{
+  // Dirty has no meaning without a loaded workspace — skip the write so we
+  // don't repaint or persist no-ops on every capture in launcher mode.
+  if (!m_currentWorkspaceName[0]) return;
+  if (m_workspaceDirty) return;
+  m_workspaceDirty = true;
+  PersistWorkspaceLabel();
+  RefreshNavBarLabelCache();
+  if (m_hwnd) {
+    RECT cr; GetClientRect(m_hwnd, &cr);
+    RECT bar = cr; bar.bottom = bar.top + NavBar::NAV_BAR_HEIGHT;
+    InvalidateRect(m_hwnd, &bar, FALSE);
+  }
+}
 
 // =========================================================================
 // Save / Load state (delegates to WorkspaceManager for serialization)
@@ -152,8 +221,33 @@ bool ProcessStaleActionsForSection(const char* section)
             section, staleArr[i]);
       }
     } else if (state == -1) {
-      DBG("[MaxPane] StaleCleanup[%s]: SKIP state=-1 action=%d (script/unknown)\n",
-          section, staleArr[i]);
+      // Sprint 1 Entry 8 — fire-and-show actions (Region Render Matrix
+      // 41888 + similar) and ReaImGui scripts report state == -1 because
+      // they have no on/off toggle state. The previous hard SKIP left
+      // them as floating ghosts after REAPER restart. Symmetric WM_CLOSE
+      // + SW_HIDE flow to the state == 0 branch below — REAPER's window
+      // close handler runs and cleans up; if the window isn't currently
+      // visible, defer to the next startup tick.
+      char searchTitleN1[256];
+      bool handledN1 = false;
+      if (GetSearchTitleForAction(staleArr[i], searchTitleN1, sizeof(searchTitleN1))) {
+        HWND hN1 = WindowManager::FindReaperWindow(searchTitleN1);
+        if (hN1 && IsWindow(hN1) && IsWindowVisible(hN1)) {
+          SendMessage(hN1, WM_CLOSE, 0, 0);
+          if (IsWindow(hN1) && IsWindowVisible(hN1)) ShowWindow(hN1, SW_HIDE);
+          DBG("[MaxPane] StaleCleanup[%s]: state=-1 action=%d WM_CLOSE/hide hwnd=%p\n",
+              section, staleArr[i], (void*)hN1);
+          handledN1 = true;
+        }
+      }
+      if (!handledN1) {
+        int n = snprintf(remaining + rLen, sizeof(remaining) - (size_t)rLen,
+                         "%s%d", rLen > 0 ? "," : "", staleArr[i]);
+        if (n > 0) rLen += n;
+        anyRemaining = true;
+        DBG("[MaxPane] StaleCleanup[%s]: state=-1 action=%d deferred (not visible)\n",
+            section, staleArr[i]);
+      }
     } else {
       // state == 0 — REAPER says closed; check visually
       char searchTitle[256];
@@ -225,6 +319,40 @@ void MergeCapturesIntoStaleListForSection(const char* section, const WindowManag
     const PaneState* ps = wm.GetPaneState(p);
     if (!ps) continue;
     for (int t = 0; t < ps->tabCount; t++) addUnique(ps->tabs[t].toggleAction);
+  }
+  // 3) Sprint 1 Entry 8 — every action ID referenced by every saved workspace
+  //    slot. Without this, captures released on workspace SWITCH (not still
+  //    in m_panes) never landed in the stale list and survived REAPER restart
+  //    as floating ghosts. Workspace data lives at EXT_SECTION (shared per
+  //    ADR-012), so multi-instance setups benefit from a single pass.
+  if (EXT_SECTION && g_GetExtState) {
+    const char* wsCountStr = g_GetExtState(EXT_SECTION, "ws_count");
+    int wsCount = wsCountStr ? safe_atoi_clamped(wsCountStr, 0, MAX_WORKSPACES) : 0;
+    char key[64];
+    for (int ws = 0; ws < wsCount; ws++) {
+      for (int p = 0; p < MAX_PANES; p++) {
+        for (int t = 0; t < MAX_TABS_PER_PANE; t++) {
+          snprintf(key, sizeof(key), "ws_%d_pane_%d_tab_%d", ws, p, t);
+          const char* v = g_GetExtState(EXT_SECTION, key);
+          if (!v || !v[0]) continue;
+          int actionId = 0;
+          if (strncmp(v, "arb:", 4) == 0) {
+            // "arb:<cmdstr>:<name>" — cmdstr is "_RSxxx" or numeric or "0".
+            const char* p2 = strchr(v + 4, ':');
+            if (p2 && p2 > v + 4) {
+              char cmd[128] = {};
+              size_t cmdLen = (size_t)(p2 - (v + 4));
+              if (cmdLen >= sizeof(cmd)) cmdLen = sizeof(cmd) - 1;
+              memcpy(cmd, v + 4, cmdLen);
+              actionId = ResolveActionCommand(cmd);
+            }
+          } else {
+            actionId = LookupToggleAction(v);
+          }
+          addUnique(actionId);
+        }
+      }
+    }
   }
   // 3) Write merged list.
   char buf[4096] = {};
@@ -441,9 +569,35 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
 // Workspace management (delegates to WorkspaceManager)
 // =========================================================================
 
+// Feature B — async workspace save with progress toast.
+// Phase 1 (this function, on GUI thread): snapshot the live tree + tab state
+// into m_wsMgr's pending buffer, commit to m_workspaces[] in memory (so the
+// launcher card appears at next repaint), record metadata for the eventual
+// completion toast, arm the one-shot deferred-flush timer.
+// Phase 2 (OnWorkspaceFlushTick, off the click frame): pops one queue entry,
+// writes ExtState (the hundreds-of-Set freeze that used to hang the click),
+// re-arms if the queue still has depth, then transitions the toast from
+// sticky "Saving '<X>'…" to timed "Saved '<X>'" / "Replaced '<X>'".
 void MaxPaneContainer::SaveWorkspace(const char* name)
 {
-  m_wsMgr->Save(name, m_tree, m_winMgr);
+  if (!name || !name[0]) return;
+  // Feature B — async save: determine "Saved" vs "Replaced" wording NOW
+  // while pre-save state is still visible; EnqueueSave commits to the slot;
+  // OnWorkspaceFlushTick fires the completion toast off the click frame.
+  m_pendingWorkspaceWasReplace = (m_wsMgr->Find(name) != nullptr);
+  safe_strncpy(m_pendingWorkspaceName, name, sizeof(m_pendingWorkspaceName));
+
+  m_wsMgr->EnqueueSave(name, m_tree, m_winMgr);
+  ArmWorkspaceFlushTimer();
+
+  // Feature A — saving establishes (or refreshes) the active workspace and
+  // clears the dirty marker. Update the in-mem label immediately so the nav-
+  // bar tracks the user's intent; the deferred flush persists the data and
+  // the toast confirms completion.
+  SetCurrentWorkspace(name);
+
+  DBG("[MaxPane] SaveWorkspace: enqueued '%s' (wasReplace=%d)\n",
+      name, m_pendingWorkspaceWasReplace ? 1 : 0);
 }
 
 void MaxPaneContainer::LoadWorkspace(const char* name)
@@ -638,12 +792,26 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
   ApplyPaneState(ws->panes, MAX_PANES, false);
   m_winMgr.RepositionAll(m_tree);
 
+  // Feature A — establish the active workspace label on success (after all
+  // mutations that would otherwise call MarkWorkspaceDirty during release/
+  // recapture have completed). Setting the name also clears m_workspaceDirty
+  // and persists to ExtState so a subsequent Toggle/Create cycle restores
+  // the label.
+  SetCurrentWorkspace(name);
+
   InvalidateRect(m_hwnd, nullptr, FALSE);
   SaveState();
 }
 
 void MaxPaneContainer::DeleteWorkspace(const char* name)
 {
+  // Feature A — if the workspace being deleted is the active one, the nav
+  // bar label loses its meaning; clear it so the bar drops back to "no
+  // workspace loaded" state.
+  if (name && name[0] && m_currentWorkspaceName[0] &&
+      strcmp(name, m_currentWorkspaceName) == 0) {
+    ClearCurrentWorkspace();
+  }
   m_wsMgr->Delete(name);
 }
 

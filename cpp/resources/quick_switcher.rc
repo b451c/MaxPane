@@ -16,7 +16,9 @@ CAPTION "Quick Switcher"
 BEGIN
     EDITTEXT        IDC_QS_SEARCH, 10, 10, 380, 14
     LISTBOX         IDC_QS_LIST, 10, 32, 380, 240, LBS_NOTIFY | WS_BORDER | WS_VSCROLL
-    LTEXT           "Type to filter — ↑↓ navigate, Enter activates, Esc closes", IDC_QS_HINT, 10, 278, 380, 12
+    // Sprint 1 Entry 7 — em-dash + UTF-8 arrows render as ACP mojibake on
+    // Win32 rc.exe. ASCII swap; v2.1 polish item: #pragma code_page(65001).
+    LTEXT           "Type to filter -- Up/Down navigate, Enter activates, Esc closes", IDC_QS_HINT, 10, 278, 380, 12
 
     DEFPUSHBUTTON   "OK", 1, 275, 295, 55, 18
     PUSHBUTTON      "Cancel", 2, 335, 295, 55, 18

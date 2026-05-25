@@ -12,6 +12,7 @@ WorkspaceManager::WorkspaceManager()
   , m_listSection(EXT_SECTION)
 {
   memset(m_workspaces, 0, sizeof(m_workspaces));
+  memset(m_pendingSave, 0, sizeof(m_pendingSave));
 }
 
 const WorkspaceEntry& WorkspaceManager::Get(int index) const
@@ -418,58 +419,177 @@ bool WorkspaceManager::HasProjectState(ReaProject* proj) const
 // Named workspace CRUD
 // =========================================================================
 
+// Synchronous save — used by atexit (must complete before host exits) and
+// by tests. Equivalent to EnqueueSave followed by immediate queue drain,
+// so we don't depend on a later timer tick.
 void WorkspaceManager::Save(const char* name, const SplitTree& tree, const WindowManager& winMgr)
+{
+  EnqueueSave(name, tree, winMgr);
+  // Drain inline. PENDING_SAVE_DEPTH+1 is a safety bound — a well-behaved
+  // FlushNextPendingSave always returns true while the queue is non-empty.
+  for (int safety = 0; safety < PENDING_SAVE_DEPTH + 1 && HasPendingSave(); safety++) {
+    FlushNextPendingSave();
+  }
+}
+
+// Feature B — Phase 1. Captures snapshot + updates m_workspaces[] in memory
+// + enqueues a deferred ExtState write. The launcher card appears at the
+// next repaint (Phase 1 in-mem commit); the ExtState write happens on the
+// container's flush tick (Phase 2).
+void WorkspaceManager::EnqueueSave(const char* name, const SplitTree& tree,
+                                   const WindowManager& winMgr)
 {
   if (!name || !name[0]) return;
 
+  // Decide queue slot. Order matters for "final save wins":
+  //  - 0 pending → fill slot 0
+  //  - 1 pending → fill slot 1
+  //  - 2 pending → overwrite slot 1 (intermediate save collapses; latest
+  //    save replaces the previously-latest)
+  PendingSave* dst = nullptr;
+  if (m_pendingSaveCount == 0) {
+    dst = &m_pendingSave[0];
+    m_pendingSaveCount = 1;
+  } else if (m_pendingSaveCount == 1) {
+    dst = &m_pendingSave[1];
+    m_pendingSaveCount = 2;
+  } else {
+    // Already 2 deep — collapse: overwrite slot 1 with the new save.
+    dst = &m_pendingSave[1];
+  }
+
+  memset(dst, 0, sizeof(*dst));
+  dst->valid = true;
+  safe_strncpy(dst->name, name, sizeof(dst->name));
+  tree.SaveSnapshot(dst->nodes, dst->nodeCount);
+  for (int p = 0; p < MAX_PANES; p++) {
+    const PaneState* ps = winMgr.GetPaneState(p);
+    if (!ps) continue;
+    dst->panes[p].tabCount = ps->tabCount;
+    dst->panes[p].activeTab = ps->activeTab;
+    for (int t = 0; t < ps->tabCount && t < MAX_TABS_PER_PANE; t++) {
+      const TabEntry& tab = ps->tabs[t];
+      dst->panes[p].tabs[t].isArbitrary = tab.isArbitrary;
+      dst->panes[p].tabs[t].toggleAction = tab.toggleAction;
+      dst->panes[p].tabs[t].colorIndex = tab.colorIndex;
+      dst->panes[p].tabs[t].pinned = tab.pinned;
+      if (tab.isArbitrary && tab.actionCmd[0]) {
+        safe_strncpy(dst->panes[p].tabs[t].actionCommand, tab.actionCmd,
+                     sizeof(dst->panes[p].tabs[t].actionCommand));
+      } else if (tab.toggleAction > 0) {
+        GetActionCommandString(tab.toggleAction, dst->panes[p].tabs[t].actionCommand,
+                               sizeof(dst->panes[p].tabs[t].actionCommand));
+      }
+      if (tab.name[0]) {
+        safe_strncpy(dst->panes[p].tabs[t].name, tab.name, sizeof(dst->panes[p].tabs[t].name));
+      }
+    }
+  }
+
+  // Phase 1 in-memory commit — the launcher's next repaint must show the
+  // new/updated card immediately, even though the ExtState bytes haven't
+  // hit disk yet. If FlushNextPendingSave never runs (extreme: REAPER
+  // crashes before next tick) the in-mem state is lost but no harm done
+  // since nothing got persisted either.
+  CommitSnapshotToSlot(*dst);
+
+  DBG("[MaxPane] WsMgr::EnqueueSave: '%s' pendingCount=%d\n", name, m_pendingSaveCount);
+}
+
+bool WorkspaceManager::FlushNextPendingSave()
+{
+  if (m_pendingSaveCount == 0) return false;
+
+  // Pop slot 0.
+  PendingSave& head = m_pendingSave[0];
+  if (!head.valid) {
+    // Defensive — count and valid bit disagree. Reset and bail.
+    m_pendingSaveCount = 0;
+    memset(m_pendingSave, 0, sizeof(m_pendingSave));
+    return false;
+  }
+
+  // Re-commit before write in case some other path (e.g. Delete) mutated
+  // the slot between Enqueue and Flush; cheap belt-and-braces, since
+  // CommitSnapshotToSlot is just a memcpy + strcmp.
+  CommitSnapshotToSlot(head);
+
+  // Heavy write — hundreds of g_SetExtState calls for full tree + every
+  // workspace via SaveList. This is the part Feature B moves off the
+  // click frame.
+  SaveList();
+
+  DBG("[MaxPane] WsMgr::FlushNextPendingSave: '%s' written, remaining=%d\n",
+      head.name, m_pendingSaveCount - 1);
+
+  // Shift slot 1 → 0 (if any) and clear the tail.
+  if (m_pendingSaveCount >= 2) {
+    m_pendingSave[0] = m_pendingSave[1];
+    memset(&m_pendingSave[1], 0, sizeof(m_pendingSave[1]));
+    m_pendingSaveCount = 1;
+  } else {
+    memset(&m_pendingSave[0], 0, sizeof(m_pendingSave[0]));
+    m_pendingSaveCount = 0;
+  }
+  return true;
+}
+
+void WorkspaceManager::EnqueueLoadList()
+{
+  m_pendingLoadList = true;
+}
+
+bool WorkspaceManager::FlushPendingLoadList()
+{
+  if (!m_pendingLoadList) return false;
+  m_pendingLoadList = false;
+  LoadList();
+  return true;
+}
+
+void WorkspaceManager::FlushAllPending()
+{
+  // Drain in deterministic order: list refresh first (so any read-back logic
+  // sees the freshest state), then drain the save queue. Bounded by
+  // PENDING_SAVE_DEPTH so the loop can't run away.
+  FlushPendingLoadList();
+  for (int safety = 0; safety < PENDING_SAVE_DEPTH + 1 && HasPendingSave(); safety++) {
+    FlushNextPendingSave();
+  }
+}
+
+// Mutates m_workspaces[] in-memory to match `snap`. Equivalent to the
+// in-mem half of the legacy Save(): find-or-claim slot by name, memset,
+// copy in the snapshot fields, mark used + treeVersion=2.
+void WorkspaceManager::CommitSnapshotToSlot(const PendingSave& snap)
+{
+  if (!snap.valid || !snap.name[0]) return;
+
   int slot = -1;
   for (int i = 0; i < m_count; i++) {
-    if (m_workspaces[i].used && strcmp(m_workspaces[i].name, name) == 0) {
+    if (m_workspaces[i].used && strcmp(m_workspaces[i].name, snap.name) == 0) {
       slot = i;
       break;
     }
   }
   if (slot < 0) {
-    if (m_count >= MAX_WORKSPACES) return;
+    if (m_count >= MAX_WORKSPACES) return;   // hard limit reached — drop save
     slot = m_count;
     m_count++;
   }
 
   WorkspaceEntry& ws = m_workspaces[slot];
   memset(&ws, 0, sizeof(WorkspaceEntry));
-  safe_strncpy(ws.name, name, MAX_WORKSPACE_NAME);
+  safe_strncpy(ws.name, snap.name, MAX_WORKSPACE_NAME);
   ws.used = true;
   ws.treeVersion = 2;
-
-  // Save tree snapshot
-  tree.SaveSnapshot(ws.nodes, ws.nodeCount);
-
-  // Save pane tab data
-  for (int p = 0; p < MAX_PANES; p++) {
-    const PaneState* ps = winMgr.GetPaneState(p);
-    if (!ps) continue;
-    ws.panes[p].tabCount = ps->tabCount;
-    ws.panes[p].activeTab = ps->activeTab;
-    for (int t = 0; t < ps->tabCount && t < MAX_TABS_PER_PANE; t++) {
-      const TabEntry& tab = ps->tabs[t];
-      ws.panes[p].tabs[t].isArbitrary = tab.isArbitrary;
-      ws.panes[p].tabs[t].toggleAction = tab.toggleAction;
-      ws.panes[p].tabs[t].colorIndex = tab.colorIndex;
-      ws.panes[p].tabs[t].pinned = tab.pinned;
-      if (tab.isArbitrary && tab.actionCmd[0]) {
-        safe_strncpy(ws.panes[p].tabs[t].actionCommand, tab.actionCmd,
-                     sizeof(ws.panes[p].tabs[t].actionCommand));
-      } else if (tab.toggleAction > 0) {
-        GetActionCommandString(tab.toggleAction, ws.panes[p].tabs[t].actionCommand,
-                               sizeof(ws.panes[p].tabs[t].actionCommand));
-      }
-      if (tab.name[0]) {
-        safe_strncpy(ws.panes[p].tabs[t].name, tab.name, sizeof(ws.panes[p].tabs[t].name));
-      }
-    }
+  ws.nodeCount = snap.nodeCount;
+  for (int i = 0; i < snap.nodeCount && i < MAX_TREE_NODES; i++) {
+    ws.nodes[i] = snap.nodes[i];
   }
-
-  SaveList();
+  for (int p = 0; p < MAX_PANES; p++) {
+    ws.panes[p] = snap.panes[p];
+  }
 }
 
 void WorkspaceManager::Delete(const char* name)

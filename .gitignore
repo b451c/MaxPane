@@ -56,4 +56,5 @@ Icons/toolbar_icons/toolbar_icons/
 # stays on the local disk; we just don't ship it anywhere remote.
 CLAUDE.md
 docs/v2/
+docs/sprint1/
 .claude/

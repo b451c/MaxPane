@@ -32,19 +32,61 @@ static BOOL CALLBACK EnumOpenWindowsProc(HWND hwnd, LPARAM lParam)
   if (g_openWindowCount >= 256) return FALSE;
 
   if (!IsWindowVisible(hwnd)) return TRUE;
-
-  char buf[256];
-  GetWindowText(hwnd, buf, sizeof(buf));
-  if (!buf[0]) return TRUE;
-
   if (hwnd == data->containerHwnd) return TRUE;
   if (hwnd == g_reaperMainHwnd) return TRUE;
   if (data->winMgr->IsWindowCaptured(hwnd)) return TRUE;
+  if (data->containerHwnd && IsChild(hwnd, data->containerHwnd)) return TRUE;
+
+#ifdef _WIN32
+  // Sprint 1 Entry 9 — process filter. EnumWindows is system-wide; without
+  // a PID check, Firefox / Program Manager / any visible OS window with a
+  // non-empty title landed in the menu and clicking attempted a
+  // cross-process SetParent (undefined behaviour).
+  DWORD pid = 0;
+  GetWindowThreadProcessId(hwnd, &pid);
+  if (pid != GetCurrentProcessId()) return TRUE;
+#endif
+
+  char buf[256];
+  GetWindowText(hwnd, buf, sizeof(buf));
+
+#ifdef _WIN32
+  // Sprint 1 Entry 9 — empty-title plugins (ReaBeat, Reamix, Direct2D)
+  // get a name via the module-DLL waterfall (Entry 12). Plus a tightened
+  // acceptance criterion to reject REAPER internal helpers added to the
+  // menu by the EnumChildWindows pass below (track view children, custom
+  // toolbars at REAPER main's child level).
+  const LONG style = GetWindowLong(hwnd, GWL_STYLE);
+  const bool hasCaption = (style & WS_CAPTION) != 0;
+  const bool isPopup    = (style & WS_POPUP)   != 0;
+  char clsName[64] = {};
+  GetClassNameA(hwnd, clsName, sizeof(clsName));
+
+  if (!buf[0]) {
+    if (!hasCaption) return TRUE;
+    if (!WindowManager::TryGetAppNameFromModule(hwnd, buf, sizeof(buf)) &&
+        !WindowManager::TryExtractAppNameFromChildren(hwnd, buf, sizeof(buf))) {
+      snprintf(buf, sizeof(buf), "#%s (untitled)", clsName[0] ? clsName : "?");
+    }
+  }
   if (strlen(buf) < 3) return TRUE;
 
-  // Skip windows that are ancestors of our container (e.g. the Docker
-  // that MaxPane is docked inside) — capturing them would be circular.
-  if (data->containerHwnd && IsChild(hwnd, data->containerHwnd)) return TRUE;
+  // Acceptance: WS_POPUP (real floating) OR known REAPER toggle action OR
+  // plugin-DLL-owned. REAPER internal UI children (track view, timeline,
+  // custom toolbars at the dock-frame level) fail all three and drop.
+  bool accept = isPopup;
+  if (!accept && LookupToggleAction(buf) > 0) accept = true;
+  if (!accept) {
+    char modCheck[128] = {};
+    if (WindowManager::TryGetAppNameFromModule(hwnd, modCheck, sizeof(modCheck))) {
+      accept = true;
+    }
+  }
+  if (!accept) return TRUE;
+#else
+  if (!buf[0]) return TRUE;
+  if (strlen(buf) < 3) return TRUE;
+#endif
 
   g_openWindows[g_openWindowCount].hwnd = hwnd;
   safe_strncpy(g_openWindows[g_openWindowCount].title, buf, sizeof(g_openWindows[g_openWindowCount].title));
@@ -59,6 +101,16 @@ static void BuildOpenWindowsSubmenu(HMENU submenu, int baseId,
   g_openWindowCount = 0;
   EnumOpenWindowsData data = { containerHwnd, &winMgr };
   EnumWindows(EnumOpenWindowsProc, (LPARAM)&data);
+#ifdef _WIN32
+  // Sprint 1 Entry 9 — second pass over REAPER main's children. EnumWindows
+  // only walks top-level; docked plugins live as children of the REAPER
+  // dock frame and would otherwise be invisible to the menu. The Entry 9
+  // acceptance criterion (WS_POPUP / known action / plugin DLL) keeps
+  // internal REAPER UI children filtered out.
+  if (g_reaperMainHwnd) {
+    EnumChildWindows(g_reaperMainHwnd, EnumOpenWindowsProc, (LPARAM)&data);
+  }
+#endif
 
   if (g_openWindowCount == 0) {
     MENUITEMINFO mi = {};

@@ -35,6 +35,83 @@ void OpenUrlPlatform(const char* url);
 // Sprint 1 via SetWindowPos HWND_TOPMOST; Linux via gtk_window_set_keep_above.
 // Safe to call on subviews (no-op when view isn't a contentView).
 void SetWindowAlwaysOnTop(HWND hwnd, bool onTop);
+#elif defined(_WIN32)
+// Sprint 1 Entry 6 — native Win32 implementations. The helpers were
+// previously {} stubs on every non-Apple platform; F1a Detach-to-Floating
+// and Settings dark-mode override therefore no-op'd on Windows.
+#include <shellapi.h>
+
+inline void ForceViewLayoutAndDisplay(HWND hwnd)
+{
+  if (!hwnd) return;
+  InvalidateRect(hwnd, nullptr, TRUE);
+  UpdateWindow(hwnd);
+}
+
+inline bool IsSystemDarkMode()
+{
+  // HKCU\...\Themes\Personalize\AppsUseLightTheme: 0 = dark, 1 = light.
+  HKEY key;
+  if (RegOpenKeyExW(HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &key) != ERROR_SUCCESS) return false;
+  DWORD value = 1, size = sizeof(value), type = REG_DWORD;
+  LONG s = RegQueryValueExW(key, L"AppsUseLightTheme", nullptr,
+                            &type, (BYTE*)&value, &size);
+  RegCloseKey(key);
+  return (s == ERROR_SUCCESS && value == 0);
+}
+
+inline void ForceHideWindow(HWND hwnd)
+{
+  if (hwnd) ShowWindow(hwnd, SW_HIDE);
+}
+
+inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
+{
+  if (!hwnd) return;
+  LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+  style &= ~(WS_CHILD | WS_POPUP);
+  style |= WS_OVERLAPPEDWINDOW | WS_VISIBLE;
+  SetWindowLongPtr(hwnd, GWL_STYLE, style);
+  if (title && title[0]) SetWindowTextA(hwnd, title);
+  SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+inline void ClampRectToVisibleScreen(RECT* rect)
+{
+  if (!rect) return;
+  HMONITOR mon = MonitorFromRect(rect, MONITOR_DEFAULTTONEAREST);
+  if (!mon) return;
+  MONITORINFO mi = { sizeof(mi) };
+  if (!GetMonitorInfoW(mon, &mi)) return;
+  const RECT wa = mi.rcWork;
+  int w = rect->right - rect->left, h = rect->bottom - rect->top;
+  const int waW = wa.right - wa.left, waH = wa.bottom - wa.top;
+  if (w > waW) w = waW;
+  if (h > waH) h = waH;
+  if (rect->left < wa.left) rect->left = wa.left;
+  if (rect->top  < wa.top)  rect->top  = wa.top;
+  if (rect->left + w > wa.right)  rect->left = wa.right  - w;
+  if (rect->top  + h > wa.bottom) rect->top  = wa.bottom - h;
+  rect->right  = rect->left + w;
+  rect->bottom = rect->top  + h;
+}
+
+inline void OpenUrlPlatform(const char* url)
+{
+  if (url && url[0]) {
+    ShellExecuteA(nullptr, "open", url, nullptr, nullptr, SW_SHOWNORMAL);
+  }
+}
+
+inline void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)
+{
+  if (!hwnd) return;
+  SetWindowPos(hwnd, onTop ? HWND_TOPMOST : HWND_NOTOPMOST,
+               0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
 #else
 inline void ForceViewLayoutAndDisplay(HWND) {}
 inline bool IsSystemDarkMode() { return false; }

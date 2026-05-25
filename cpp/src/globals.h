@@ -19,6 +19,18 @@ extern bool (*g_GetUserInputs)(const char*, int, const char*, char*, int);
 extern int (*g_GetToggleCommandState)(int);
 extern int (*g_NamedCommandLookup)(const char*);
 extern const char* (*g_ReverseNamedCommandLookup)(int);
+// Sprint 1 Entry 15 — kbd_getTextFromCmd returns the human-readable action
+// label for a command ID (used by DiscoverActionForWindow to title-token-
+// score candidate actions against the captured window's title). Section
+// parameter typed as void* to avoid pulling KbdSectionInfo into globals.h;
+// pass nullptr (main section) at call sites.
+extern const char* (*g_kbd_getTextFromCmd)(int cmd, void* section);
+
+// Plugin DLL/dylib HINSTANCE captured in ReaperPluginEntry (Sprint 1 Entry 5).
+// On Windows DialogBoxParam needs the plugin's own HINSTANCE to find dialog
+// resources — passing nullptr resolves to the host EXE (REAPER) which doesn't
+// have our IDD_*. SWELL macOS/Linux ignores it; safe to use cross-platform.
+extern HINSTANCE g_hInstance;
 
 // Per-project state API
 class ReaProject;  // forward declaration (defined in reaper_plugin.h)
@@ -62,7 +74,11 @@ inline float safe_atof_clamped(const char* s, float minVal, float maxVal)
   return (float)v;
 }
 
-// Resolve action command string to numeric ID (handles both "_RSxxx" and "12345")
+// Resolve action command string to numeric ID (handles both "_RSxxx" and "12345").
+// Sprint 1 Entry 15 — backward-compat: pre-fix saves wrote named cmds without
+// the leading "_" (REAPER's ReverseNamedCommandLookup returns the name without
+// it, but NamedCommandLookup requires it). When the numeric path fails for a
+// non-empty cmd, retry with one prepended so old workspaces still resolve.
 inline int ResolveActionCommand(const char* cmd)
 {
   if (!cmd || !cmd[0]) return 0;
@@ -71,8 +87,15 @@ inline int ResolveActionCommand(const char* cmd)
   }
   char* endptr = nullptr;
   long v = strtol(cmd, &endptr, 10);
-  if (endptr == cmd || v <= 0 || v > INT_MAX) return 0;
-  return (int)v;
+  if (endptr != cmd && v > 0 && v <= INT_MAX) return (int)v;
+
+  if (g_NamedCommandLookup) {
+    char prefixed[256];
+    snprintf(prefixed, sizeof(prefixed), "_%s", cmd);
+    int id = g_NamedCommandLookup(prefixed);
+    if (id > 0) return id;
+  }
+  return 0;
 }
 
 // Get stable command string for an action ID (returns named ID for custom actions, numeric string for built-in)
@@ -83,7 +106,11 @@ inline const char* GetActionCommandString(int actionId, char* buf, int bufSize)
   if (g_ReverseNamedCommandLookup) {
     const char* named = g_ReverseNamedCommandLookup(actionId);
     if (named && named[0]) {
-      snprintf(buf, bufSize, "%s", named);
+      // Sprint 1 Entry 15 — round-trip safety: prepend "_" so the saved
+      // string passes back through NamedCommandLookup on load (the SDK
+      // contract: ReverseNamedCommandLookup returns the name without it).
+      if (named[0] == '_') snprintf(buf, bufSize, "%s", named);
+      else                 snprintf(buf, bufSize, "_%s", named);
       return buf;
     }
   }
