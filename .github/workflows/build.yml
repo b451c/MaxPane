@@ -93,10 +93,8 @@ jobs:
       contents: write
 
     steps:
-      # macOS dylibs + Windows .dll are uploaded to the public Release.
-      # Linux .so binaries stay as workflow artifacts on the Actions page
-      # for internal smoke testing until #9 (Linux FX Browser close) is
-      # cleared; they will join the public Release in v2.0.2.
+      # All 5 platform binaries (macOS arm64 + x86_64, Win64, Linux x86_64 + aarch64)
+      # ship in the public Release as of v2.0.2.
       - name: Download macOS artifacts
         uses: actions/download-artifact@v4
         with:
@@ -109,12 +107,19 @@ jobs:
           path: artifacts
           pattern: reaper_maxpane-x64.dll
 
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: reaper_maxpane-*.so
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/**/*.dylib
             artifacts/**/*.dll
+            artifacts/**/*.so
           generate_release_notes: false
           body: |
             ## MaxPane ${{ github.ref_name }}
@@ -128,14 +133,14 @@ jobs:
             | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Stable |
             | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable |
             | Windows x64 | `reaper_maxpane-x64.dll` | ✅ Stable |
-
-            > Linux build is available as a workflow artifact (Actions page) for internal smoke testing. It will be added to the public Release once smoke testing clears the FX Browser close blocker — see [#9](https://github.com/b451c/MaxPane/issues/9).
+            | Linux x86_64 | `reaper_maxpane-x86_64.so` | ✅ Stable (v2.0.2+) |
+            | Linux aarch64 | `reaper_maxpane-aarch64.so` | ✅ Stable (v2.0.2+) |
 
             ### Installation
 
-            Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER.
+            Copy the binary for your platform to your REAPER UserPlugins folder and restart REAPER. Or install via [ReaPack](https://reapack.com) — point it at `https://github.com/b451c/MaxPane/raw/main/index.xml`.
 
-            > macOS (arm64 + x86_64) and Windows x64 are fully functional. Linux is pending smoke-test clearance — see issue above. Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+            Please report any issues at [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
             See the full [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md) for version history.
 
