@@ -1,5 +1,6 @@
 #include "window_manager.h"
 #include "swell_cocoa_helpers.h"
+#include "fx_capture.h"
 #include "globals.h"
 #include "debug.h"
 #include <cstring>
@@ -467,15 +468,37 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   safe_strncpy(tab.searchTitle, displayName, sizeof(tab.searchTitle));
   // Auto-detect toggle action from window title if caller didn't provide one
   tab.toggleAction = (toggleAction > 0) ? toggleAction : LookupToggleAction(displayName);
+
+  // v2.0.4 #1 (ADR-037) — FX plugin windows have no global toggle action;
+  // identity is a (track GUID, FX GUID) pair carried in tab.actionCmd.
+  // Try FX detection BEFORE DiscoverActionForWindow because FX UIs can
+  // appear in REAPER's action table as generic "Show all FX" entries and
+  // produce a noisy/wrong score match.
+  if (tab.toggleAction <= 0 && !(actionCmd && actionCmd[0])) {
+    char fxIdentity[FxCapture::kIdentityMaxLen] = {};
+    if (FxCapture::DetectFxIdentityForHwnd(targetHwnd, fxIdentity, sizeof(fxIdentity))) {
+      safe_strncpy(tab.actionCmd, fxIdentity, sizeof(tab.actionCmd));
+      // Stable display label from REAPER (survives subsequent renames).
+      char fxName[256] = {};
+      if (FxCapture::GetDisplayName(fxIdentity, fxName, sizeof(fxName)) && fxName[0]) {
+        safe_strncpy(tab.name, fxName, sizeof(tab.name));
+        safe_strncpy(tab.searchTitle, fxName, sizeof(tab.searchTitle));
+      }
+      DBG("[MaxPane] CaptureArbitraryWindow: FX identity captured '%s' name='%s'\n",
+          fxIdentity, tab.name);
+    }
+  }
+
   // Sprint 1 Entry 15 — for empty-title plugins (ReaBeat, Reamix, Lua
   // scripts) LookupToggleAction returns 0. Scan REAPER's action table
   // for the matching show/hide action via module name + title-token
   // scoring; result drives correct workspace-restore + close-WM_CLOSE.
-  if (tab.toggleAction <= 0) {
+  // Skip when FX identity already populated tab.actionCmd above.
+  if (tab.toggleAction <= 0 && !tab.actionCmd[0]) {
     tab.toggleAction = DiscoverActionForWindow(targetHwnd, displayName);
   }
   tab.isArbitrary = true;
-  if (actionCmd && actionCmd[0]) {
+  if (actionCmd && actionCmd[0] && !tab.actionCmd[0]) {
     safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
   }
   // Auto-fill actionCmd so the workspace save round-trips through
@@ -1129,6 +1152,40 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
     // Remove toolbar subclass before reparenting
     UnsubclassToolbar(tab.hwnd);
 
+    // v2.0.4 #1 (ADR-037) — FX identity path. REAPER's TrackFX_Show(_, _, 2)
+    // closes the FX UI cleanly and updates its own tracker. Skips the
+    // toggle/WM_CLOSE dispatch entirely. For workspace switch (toggleOff=
+    // false) we still hide because the user-visible expectation is "this
+    // layout's FX windows go away when I switch layouts" — the plugin
+    // instance keeps running, only the floating UI hides.
+    if (FxCapture::IsFxIdentity(tab.actionCmd)) {
+      DBG("[MaxPane] DoRelease: FX identity '%s' — TrackFX_Show(hide)\n",
+          tab.actionCmd);
+      FxCapture::Hide(tab.actionCmd);
+
+      if (IsWindow(tab.hwnd)) {
+        // FX UI may still be alive as a top-level NSWindow if REAPER's
+        // implementation chose to hide rather than destroy. Restore it to
+        // top-level so the WS_CHILD relationship with MaxPane container is
+        // gone — next TrackFX_Show(3) will give us a fresh HWND anyway.
+        DetachToTopLevel(tab.hwnd);
+        VerifySetParent(tab.hwnd, nullptr, "DoRelease/fx-detach");
+
+        if (tab.originalRect.right > tab.originalRect.left &&
+            tab.originalRect.bottom > tab.originalRect.top) {
+          int w = tab.originalRect.right - tab.originalRect.left;
+          int h = tab.originalRect.bottom - tab.originalRect.top;
+          SetWindowPos(tab.hwnd, nullptr,
+                       tab.originalRect.left, tab.originalRect.top, w, h,
+                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        }
+        // FX windows are REAPER's own — they have their own chrome managed
+        // by REAPER when re-shown. Skip ApplyFloatingWindowChrome to avoid
+        // double-decoration.
+      }
+      goto fx_done;
+    }
+
     if (toggleOff && tab.toggleAction > 0 && g_Main_OnCommand) {
       int preState = g_GetToggleCommandState
                        ? g_GetToggleCommandState(tab.toggleAction) : -1;
@@ -1309,6 +1366,7 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
         }
       }
     }
+fx_done:
     ShowWindow(tab.hwnd, SW_HIDE);
     // B14: SWELL's SW_HIDE on a top-level NSWindow that "lives" in REAPER's
     // HWND tree but visually occupies its own NSWindow (Media Explorer, FX

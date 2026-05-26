@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 2.0.3 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 2.0.4 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 2.0.3 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 2.0.4 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -33,6 +33,7 @@ add_library(reaper_maxpane SHARED
   src/split_tree.cpp
   src/window_manager.cpp
   src/capture_queue.cpp
+  src/fx_capture.cpp
   src/favorites_manager.cpp
   src/workspace_manager.cpp
   src/context_menu.cpp

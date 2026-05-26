@@ -41,6 +41,49 @@ extern int (*g_SetProjExtState)(ReaProject* proj, const char* extname, const cha
                                  const char* value);
 extern void (*g_MarkProjectDirty)(ReaProject* proj);
 
+// v2.0.4 #1 — AU/VST plugin window save/restore (ADR-037).
+// Forward declarations to keep this header free of reaper_plugin.h.
+// MediaTrack/MediaItem/MediaItem_Take are class in reaper_plugin.h.
+// GUID is a typedef in SWELL (already pulled via platform.h) — no forward decl.
+class MediaTrack;
+class MediaItem;
+class MediaItem_Take;
+extern int (*g_CountTracks)(ReaProject* proj);
+extern int (*g_CountMediaItems)(ReaProject* proj);
+extern MediaTrack* (*g_GetMasterTrack)(ReaProject* proj);
+extern MediaItem* (*g_GetMediaItem)(ReaProject* proj, int itemidx);
+extern int (*g_GetMediaItemNumTakes)(MediaItem* item);
+extern MediaItem_Take* (*g_GetMediaItemTake)(MediaItem* item, int tk);
+extern bool (*g_GetSetMediaItemTakeInfo_String)(MediaItem_Take* tk, const char* parmname,
+                                                 char* stringNeedBig, bool setNewValue);
+extern bool (*g_GetSetMediaTrackInfo_String)(MediaTrack* tr, const char* parmname,
+                                              char* stringNeedBig, bool setNewValue);
+extern MediaTrack* (*g_GetTrack)(ReaProject* proj, int trackidx);
+extern void (*g_guidToString)(const GUID* g, char* destNeed64);
+extern void (*g_stringToGuid)(const char* str, GUID* g);
+extern int (*g_TakeFX_GetCount)(MediaItem_Take* take);
+extern HWND (*g_TakeFX_GetFloatingWindow)(MediaItem_Take* take, int index);
+extern GUID* (*g_TakeFX_GetFXGUID)(MediaItem_Take* take, int fx);
+extern bool (*g_TakeFX_GetFXName)(MediaItem_Take* take, int fx, char* bufOut, int bufOut_sz);
+extern void (*g_TakeFX_Show)(MediaItem_Take* take, int index, int showFlag);
+extern int (*g_TrackFX_GetCount)(MediaTrack* track);
+extern HWND (*g_TrackFX_GetFloatingWindow)(MediaTrack* track, int index);
+extern GUID* (*g_TrackFX_GetFXGUID)(MediaTrack* track, int fx);
+extern bool (*g_TrackFX_GetFXName)(MediaTrack* track, int fx, char* bufOut, int bufOut_sz);
+extern void (*g_TrackFX_Show)(MediaTrack* track, int index, int showFlag);
+
+// v2.0.4 #2 — hotkey binding (ADR-038). KbdSectionInfo is typed as void*
+// here (same pattern as g_kbd_getTextFromCmd above) to keep globals.h free
+// of SDK type pulls — call sites cast through main.cpp's REAPERAPI surface.
+extern bool (*g_DoActionShortcutDialog)(HWND hwnd, void* section,
+                                         int cmdID, int shortcutidx);
+extern int (*g_CountActionShortcuts)(void* section, int cmdID);
+extern bool (*g_GetActionShortcutDesc)(void* section, int cmdID,
+                                        int shortcutidx, char* descOut, int descOut_sz);
+extern bool (*g_DeleteActionShortcut)(void* section, int cmdID,
+                                       int shortcutidx);
+extern void* (*g_SectionFromUniqueID)(int uniqueID);
+
 // Safe string copy: always null-terminates, handles null src
 inline void safe_strncpy(char* dst, const char* src, size_t dst_size)
 {
@@ -132,5 +175,22 @@ inline void SetAutoOpenEnabled(bool enabled)
 {
   if (g_SetExtState) {
     g_SetExtState("MaxPane_cpp", "auto_open", enabled ? "1" : "0", true);
+  }
+}
+
+// v2.0.4 #3 — async update check on startup (ADR-039).
+// Default ON; only literal "0" turns it off.
+inline bool IsAutoUpdateEnabled()
+{
+  if (!g_GetExtState) return true;
+  const char* val = g_GetExtState("MaxPane_cpp", "auto_update_check");
+  if (val && val[0] == '0') return false;
+  return true;
+}
+
+inline void SetAutoUpdateEnabled(bool enabled)
+{
+  if (g_SetExtState) {
+    g_SetExtState("MaxPane_cpp", "auto_update_check", enabled ? "1" : "0", true);
   }
 }

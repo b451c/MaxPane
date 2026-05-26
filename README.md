@@ -59,6 +59,28 @@ remembers your layouts.
 
 Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
+## What's new in 2.0.4
+
+- **AU/VST/JSFX plugin window save & restore.** Capture a floating
+  plugin UI into a MaxPane pane, save the workspace, restart REAPER —
+  the plugin reattaches to its pane on workspace load (with the
+  matching project open). Identity uses the same `(track GUID, FX GUID)`
+  pair REAPER itself stores in RPP `FXID {…}` blocks, so it survives
+  FX slot reorder and plugin rename. Covers track FX, master FX, and
+  take FX.
+- **Inline hotkey binding.** Right-click a workspace card → "Bind
+  hotkey" now opens REAPER's keystroke-capture modal scoped to that
+  specific slot — no more hunting through the full Actions dialog.
+- **Non-blocking update check on startup.** REAPER startup no longer
+  freezes for the HTTP round-trip; new "Automatically on REAPER
+  startup" checkbox in Settings → UPDATES (default ON).
+- **Settings dialog compact redesign.** ~26% shorter (380 → 280 px),
+  tighter spacing, UPDATES section split out for clarity.
+
+See [CHANGELOG.md](CHANGELOG.md#204---2026-05-26) for the v2.0.4
+section including known limitations (project-bound restore,
+plugin-side window scaling, etc.).
+
 ---
 
 ## Features
@@ -88,6 +110,12 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
   (toolbars, third-party ReaImGui scripts like ReaBeat / ReaMD /
   reamix.me) via the "Open Windows" submenu, click-to-capture mode, or
   drag-to-dock.
+- **AU / VST / JSFX plugin UI capture (v2.0.4+)** — capture a floating
+  plugin window via click-to-capture or drag-to-dock; identity is
+  saved as a `(track GUID, FX GUID)` pair so it round-trips through
+  workspace save/load and project reopen as long as the matching
+  project is loaded. See Known limitations below for the project-
+  bound and plugin-scaling caveats.
 - **Favorites** — pin frequently-used windows for instant access from any
   container's menu.
 
@@ -115,6 +143,10 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
   buffer; session-scoped.
 - **Tab + pane keyboard nav** — Next/Prev Tab, Next/Prev Pane, Solo
   Toggle, all bindable in REAPER's Actions dialog.
+- **Inline hotkey binding (v2.0.4+)** — workspace launcher right-click
+  → "Bind hotkey" opens REAPER's native shortcut-edit dialog scoped
+  to that specific slot (no need to filter through the full action
+  list).
 - **Accelerator hook** — MaxPane action bindings fire even when MaxPane
   (or a captured pane) has focus — v1.x required REAPER's main window
   to have focus first.
@@ -222,6 +254,40 @@ close-mechanism deep-dive, and the v2.0 feature surface — see
   Ubuntu 24.04; FX Browser close crash from
   [#9](https://github.com/b451c/MaxPane/issues/9) no longer reproduces
   on REAPER 7.69 — covered by an upstream WDL/SWELL fix)
+
+---
+
+## Known limitations
+
+These are intentional design boundaries rather than bugs. The full
+detail is in [CHANGELOG.md → 2.0.4 → Known limitations](CHANGELOG.md#known-limitations).
+
+- **Plugin restore needs the matching project open.** Track GUIDs +
+  FX GUIDs are project-bound (REAPER itself stores them inside
+  `.rpp` files). Workspace load reopens AU/VST UIs only when their
+  owning tracks are present in a loaded project. Recommended workflow:
+  open the project first, then load the workspace. For pure project-
+  bound layouts, REAPER's RPP `<MAXPANE_STATE>` chunk auto-restores
+  the layout on project reopen (save the `.rpp` after capture).
+- **Container FX not supported in v2.0.4.** Capturing the UI of an FX
+  inside a REAPER 7.06+ container chain works at the time, but the
+  identity isn't encoded in the workspace yet — re-add after restart.
+  Top-level track FX and recFX (input FX) are fully supported.
+- **FX moved between tracks won't auto-restore.** Strict track-GUID
+  match; a toast surfaces "FX missing: …" so you know what skipped.
+- **Pre-v2.0.4 workspaces need a one-time re-capture for plugin
+  tabs.** Legacy `arb:0:<plugin name>` entries can't resolve to a
+  live FX instance. Re-capture once, re-save. Non-FX tabs (Mixer,
+  toolbars, scripts) restore as before.
+- **Plugin window scaling is plugin-side.** Most VST/AU GUIs render
+  at a fixed resolution and don't dynamically resize to fit the
+  MaxPane pane. The plugin sits at its native size — surrounded by
+  whitespace if the pane is bigger, cropped to the pane viewport if
+  smaller. MaxPane reparents the OS window but cannot force the
+  plugin framework to redraw at a different scale. Resize the pane
+  to roughly match the plugin's preferred size, or use the plugin's
+  own zoom control if it exposes one. Same limitation in REAPER's
+  native FX float windows.
 
 ---
 

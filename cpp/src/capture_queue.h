@@ -16,6 +16,11 @@ struct PendingCapture {
   int maxRetries = 30;
   char actionCommand[128] = {};  // stable command string for re-resolve after restart
   bool actionDeferred = false;   // true = Main_OnCommand not yet called (deferred from LoadState)
+  // v2.0.4 #1 (ADR-037) — FX plugin identity. When non-empty Tick skips
+  // FindReaperWindow and instead resolves via FxCapture::ResolveLocation +
+  // ShowAndGetHwnd. Format: "fx@{track_guid}@{fx_guid}@<flags>" or
+  // "takefx@{take_guid}@{fx_guid}@<flags>".
+  char fxIdentity[128] = {};
 };
 
 class CaptureQueue {
@@ -34,8 +39,15 @@ public:
   bool HasPending() const;
   void CancelAll();
 
+  // v2.0.4 #1 (ADR-037) — side-channel for FX-restore failure toast. Tick
+  // populates m_lastFxFailureToast with a user-readable string when an FX
+  // identity fails to resolve after MAX_RETRIES_ARBITRARY. Container drains
+  // it via PopFxFailureToast() after each Tick call. Buffer cleared on pop.
+  const char* PopFxFailureToast();
+
 private:
   PendingCapture m_queue[MAX_PENDING];
   int m_count;
+  char m_lastFxFailureToast[256] = {};
   void Remove(int idx);
 };

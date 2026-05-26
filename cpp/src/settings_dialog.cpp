@@ -68,6 +68,7 @@ void LoadValues(HWND dlg)
 {
   CheckDlgButton(dlg, IDC_SET_AUTOOPEN, IsAutoOpenEnabled() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_SHOWNAVBAR, ReadShowNavBar() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_AUTO_UPDATE, IsAutoUpdateEnabled() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
   SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
 
@@ -80,6 +81,7 @@ void LoadValues(HWND dlg)
 void CommitValues(HWND dlg)
 {
   SetAutoOpenEnabled(IsDlgButtonChecked(dlg, IDC_SET_AUTOOPEN) == BST_CHECKED);
+  SetAutoUpdateEnabled(IsDlgButtonChecked(dlg, IDC_SET_AUTO_UPDATE) == BST_CHECKED);
   if (g_SetExtState) {
     g_SetExtState("MaxPane_cpp", "dark_mode", DarkModeExtStateValue(g_pendingDarkMode), true);
     InvalidateMaxPaneDarkModeCache();

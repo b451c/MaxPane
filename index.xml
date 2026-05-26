@@ -44,6 +44,33 @@
 ]]></description>
       </metadata>
 
+      <version name="2.0.4" author="b451c" time="2026-05-26T15:00:00Z">
+        <changelog><![CDATA[Four-feature follow-up to v2.0.3. AU/VST/JSFX plugin windows now save and restore via workspaces. Hotkey binding moved inline (no more hunting through 200k REAPER actions). Update check on REAPER startup is non-blocking. Settings dialog ~26% smaller.
+
+Added:
+- AU/VST/JSFX plugin window save and restore. Capture a floating plugin UI into a MaxPane pane, save the workspace, restart REAPER — the plugin reattaches to its pane on workspace load. Identity uses the same (track GUID, FX GUID) pair REAPER itself stores in RPP FXID blocks; survives FX slot reorder and plugin rename. Covers master-track FX and take FX too.
+- In-MaxPane hotkey binding via REAPER's native shortcut dialog. Right-click a workspace card → "Bind hotkey" now opens a keystroke-capture modal scoped to that specific slot, not the full Actions dialog with 200k entries to filter.
+- Async update check on REAPER startup. Detached worker thread hits the ReaPack manifest off the main thread; modal pops up only if a newer version is found. New "Automatically on REAPER startup" checkbox in Settings → UPDATES (default ON).
+
+Changed:
+- Settings dialog compact redesign. ~380 → 280 px tall (~26% shorter), tighter section spacing, UPDATES section split from ABOUT.
+
+Known limitations (read the full CHANGELOG section for details):
+- Plugin restore needs the matching project open (track + FX GUIDs are project-bound, same as REAPER's own RPP format).
+- Container FX (nested FX, REAPER 7.06+) not supported in v2.0.4 — top-level track FX + recFX only.
+- FX moved between tracks won't auto-restore (strict track-GUID match; re-capture in the new location).
+- Old (v2.0.3 and earlier) workspaces with VST/AU tabs need a one-time re-capture; non-FX tabs (Mixer, FX Browser, toolbars, scripts) restore as before.
+- Plugin window scaling is plugin-side — most VST/AU GUIs render at a fixed size and won't dynamically resize to fit the MaxPane pane. Resize the pane to match, or use the plugin's own zoom control if it exposes one. Same limitation in REAPER's native FX float windows.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.4/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.4/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.0.4/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.4/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.4/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.0.3" author="b451c" time="2026-05-26T12:00:00Z">
         <changelog><![CDATA[Polish hot-fix on top of v2.0.2. Sharpens the nav-bar icons on Windows, surfaces version / license / support info in the Settings dialog, and lets you check for new versions without leaving REAPER.
 

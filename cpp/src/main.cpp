@@ -26,6 +26,40 @@
 // names used by DiscoverActionForWindow.
 #define REAPERAPI_WANT_kbd_getTextFromCmd
 
+// v2.0.4 #1 — AU/VST plugin window save/restore via native track+FX GUID
+// pair (ADR-037). All available since REAPER 6.x.
+#define REAPERAPI_WANT_CountTracks
+#define REAPERAPI_WANT_CountMediaItems
+#define REAPERAPI_WANT_GetMasterTrack
+#define REAPERAPI_WANT_GetMediaItem
+#define REAPERAPI_WANT_GetMediaItemNumTakes
+#define REAPERAPI_WANT_GetMediaItemTake
+#define REAPERAPI_WANT_GetSetMediaItemTakeInfo_String
+#define REAPERAPI_WANT_GetSetMediaTrackInfo_String
+#define REAPERAPI_WANT_GetTrack
+#define REAPERAPI_WANT_guidToString
+#define REAPERAPI_WANT_stringToGuid
+#define REAPERAPI_WANT_TakeFX_GetCount
+#define REAPERAPI_WANT_TakeFX_GetFloatingWindow
+#define REAPERAPI_WANT_TakeFX_GetFXGUID
+#define REAPERAPI_WANT_TakeFX_GetFXName
+#define REAPERAPI_WANT_TakeFX_Show
+#define REAPERAPI_WANT_TrackFX_GetCount
+#define REAPERAPI_WANT_TrackFX_GetFloatingWindow
+#define REAPERAPI_WANT_TrackFX_GetFXGUID
+#define REAPERAPI_WANT_TrackFX_GetFXName
+#define REAPERAPI_WANT_TrackFX_Show
+
+// v2.0.4 #2 — hotkey binding via native REAPER dialog (ADR-038).
+// DoActionShortcutDialog opens REAPER's keystroke-capture modal scoped to a
+// SINGLE command ID, replacing the 200k-action hunt that the legacy "open
+// Actions dialog" callsite imposed on users (container.cpp:855 etc.).
+#define REAPERAPI_WANT_DoActionShortcutDialog
+#define REAPERAPI_WANT_CountActionShortcuts
+#define REAPERAPI_WANT_GetActionShortcutDesc
+#define REAPERAPI_WANT_DeleteActionShortcut
+#define REAPERAPI_WANT_SectionFromUniqueID
+
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
 #include "globals.h"
@@ -34,6 +68,7 @@
 #include "workspace_manager.h"
 #include "project_state.h"
 #include "quick_switcher.h"
+#include "hotkey_helper.h"
 #include "debug.h"
 #include <cstdio>
 
@@ -77,6 +112,45 @@ static int FavSlotFromCommand(int command)
     if (command == g_cmdFavSlot[i]) return i;
   }
   return -1;
+}
+
+// v2.0.4 #2 — hotkey binding helpers (ADR-038). Exposed via hotkey_helper.h.
+// Live in main.cpp so the slot tables (file-static above) stay encapsulated.
+
+void MaxPane_OpenHotkeyDialogForCmd(HWND parent, int cmdID)
+{
+  if (cmdID <= 0) return;
+  if (!g_SectionFromUniqueID || !g_DoActionShortcutDialog) {
+    // SDK pointers missing (very old REAPER). Fall back to the legacy
+    // "open full Actions dialog" path so the right-click entry is at
+    // least functional, even if the user has to hunt.
+    if (g_Main_OnCommand) g_Main_OnCommand(40605, 0);
+    return;
+  }
+  void* mainSection = g_SectionFromUniqueID(0);  // Main = 0
+  if (!mainSection) {
+    if (g_Main_OnCommand) g_Main_OnCommand(40605, 0);
+    return;
+  }
+  // Per SDK contract: shortcutidx in [0, CountActionShortcuts) edits that
+  // existing shortcut; any idx >= count adds a new one. Edit-first-existing
+  // matches the user expectation of "Bind hotkey" — repeat invocation
+  // updates the same slot instead of stacking duplicates.
+  int existing = g_CountActionShortcuts ? g_CountActionShortcuts(mainSection, cmdID) : 0;
+  int idx = (existing > 0) ? 0 : existing;
+  g_DoActionShortcutDialog(parent, mainSection, cmdID, idx);
+}
+
+void MaxPane_OpenHotkeyDialogForWsSlot(HWND parent, int slotIdx)
+{
+  if (slotIdx < 0 || slotIdx >= MAX_WORKSPACES) return;
+  MaxPane_OpenHotkeyDialogForCmd(parent, g_cmdWsSlot[slotIdx]);
+}
+
+void MaxPane_OpenHotkeyDialogForFavSlot(HWND parent, int slotIdx)
+{
+  if (slotIdx < 0 || slotIdx >= MAX_FAVORITES) return;
+  MaxPane_OpenHotkeyDialogForCmd(parent, g_cmdFavSlot[slotIdx]);
 }
 
 // Resolve "where should this slot action act" — focused instance with a live
@@ -440,6 +514,37 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_GetProjExtState = GetProjExtState;
   g_SetProjExtState = SetProjExtState;
   g_MarkProjectDirty = MarkProjectDirty;
+
+  // v2.0.4 #1 — FX capture SDK pointers (ADR-037)
+  g_CountTracks = CountTracks;
+  g_CountMediaItems = CountMediaItems;
+  g_GetMasterTrack = GetMasterTrack;
+  g_GetMediaItem = GetMediaItem;
+  g_GetMediaItemNumTakes = GetMediaItemNumTakes;
+  g_GetMediaItemTake = GetMediaItemTake;
+  g_GetSetMediaItemTakeInfo_String = GetSetMediaItemTakeInfo_String;
+  g_GetSetMediaTrackInfo_String = GetSetMediaTrackInfo_String;
+  g_GetTrack = GetTrack;
+  g_guidToString = guidToString;
+  g_stringToGuid = stringToGuid;
+  g_TakeFX_GetCount = TakeFX_GetCount;
+  g_TakeFX_GetFloatingWindow = TakeFX_GetFloatingWindow;
+  g_TakeFX_GetFXGUID = TakeFX_GetFXGUID;
+  g_TakeFX_GetFXName = TakeFX_GetFXName;
+  g_TakeFX_Show = TakeFX_Show;
+  g_TrackFX_GetCount = TrackFX_GetCount;
+  g_TrackFX_GetFloatingWindow = TrackFX_GetFloatingWindow;
+  g_TrackFX_GetFXGUID = TrackFX_GetFXGUID;
+  g_TrackFX_GetFXName = TrackFX_GetFXName;
+  g_TrackFX_Show = TrackFX_Show;
+
+  // v2.0.4 #2 — hotkey binding (ADR-038). Casts through void* match
+  // globals.h opaque-pointer pattern; call sites never dereference section.
+  g_DoActionShortcutDialog = (bool (*)(HWND, void*, int, int))DoActionShortcutDialog;
+  g_CountActionShortcuts = (int (*)(void*, int))CountActionShortcuts;
+  g_GetActionShortcutDesc = (bool (*)(void*, int, int, char*, int))GetActionShortcutDesc;
+  g_DeleteActionShortcut = (bool (*)(void*, int, int))DeleteActionShortcut;
+  g_SectionFromUniqueID = (void* (*)(int))SectionFromUniqueID;
 
   RegisterOpenActions(rec);
   if (!g_cmdOpenContainer[0]) return 0;

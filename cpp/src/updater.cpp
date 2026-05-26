@@ -2,11 +2,14 @@
 
 #include "updater.h"
 #include "config.h"
-#include "swell_cocoa_helpers.h"  // OpenUrlPlatform on every platform
+#include "globals.h"               // safe_strncpy
+#include "swell_cocoa_helpers.h"   // OpenUrlPlatform on every platform
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 
 #ifdef __APPLE__
 // FetchUrlSync declared in swell_cocoa_helpers.h, implemented in .mm.
@@ -191,6 +194,98 @@ void CheckForUpdatesNow(HWND parent, bool showIfUpToDate)
         "MaxPane is up to date.\n\nInstalled: %s",
         MAXPANE_VERSION_STRING);
     MessageBox(parent, body, "MaxPane -- Up to date", MB_OK);
+  }
+}
+
+// =========================================================================
+// v2.0.4 #3 — async path
+// =========================================================================
+//
+// State machine: NotStarted → InProgress → {NoUpdate | UpdateAvailable |
+// NetworkError | ParseError}. Worker thread writes the result tag buffer
+// BEFORE the atomic state transition; main thread reads the buffer AFTER
+// loading the atomic. Release/acquire ordering on the atomic publishes
+// the buffer writes happens-before across threads.
+
+static std::atomic<AsyncResult> g_asyncState{AsyncResult::NotStarted};
+static std::atomic<bool> g_modalShown{false};
+static char g_latestVersion[64] = {};
+
+void StartAsyncCheck()
+{
+  // Single-fire per session — compare_exchange flips NotStarted to
+  // InProgress atomically. Subsequent callers see InProgress and bail.
+  AsyncResult expected = AsyncResult::NotStarted;
+  if (!g_asyncState.compare_exchange_strong(
+          expected, AsyncResult::InProgress,
+          std::memory_order_acq_rel, std::memory_order_acquire)) {
+    return;
+  }
+
+  std::thread([]() {
+    const std::string xml = HttpGetSync(kIndexUrl);
+    if (xml.empty()) {
+      g_asyncState.store(AsyncResult::NetworkError, std::memory_order_release);
+      return;
+    }
+
+    std::string latestTag;
+    if (!ExtractLatestVersion(xml, &latestTag)) {
+      g_asyncState.store(AsyncResult::ParseError, std::memory_order_release);
+      return;
+    }
+
+    int lMaj = 0, lMin = 0, lPat = 0;
+    int cMaj = 0, cMin = 0, cPat = 0;
+    if (!ParseVersion(latestTag.c_str(), &lMaj, &lMin, &lPat) ||
+        !ParseVersion(MAXPANE_VERSION_STRING, &cMaj, &cMin, &cPat)) {
+      g_asyncState.store(AsyncResult::ParseError, std::memory_order_release);
+      return;
+    }
+
+    if (IsStrictlyNewer(lMaj, lMin, lPat, cMaj, cMin, cPat)) {
+      // Write the buffer BEFORE the release store so the main thread's
+      // matching acquire load sees the version tag intact.
+      safe_strncpy(g_latestVersion, latestTag.c_str(), sizeof(g_latestVersion));
+      g_asyncState.store(AsyncResult::UpdateAvailable, std::memory_order_release);
+    } else {
+      g_asyncState.store(AsyncResult::NoUpdate, std::memory_order_release);
+    }
+  }).detach();
+}
+
+AsyncResult PollAsyncResult()
+{
+  return g_asyncState.load(std::memory_order_acquire);
+}
+
+const char* GetLatestVersion()
+{
+  return g_latestVersion;
+}
+
+void HandleUpdateAvailable(HWND parent)
+{
+  // Single-fire: user dismissed once → don't pester for the rest of
+  // this REAPER session. They can re-trigger manually from Settings.
+  bool expected = false;
+  if (!g_modalShown.compare_exchange_strong(
+          expected, true, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return;
+  }
+
+  char body[512];
+  std::snprintf(body, sizeof(body),
+      "A newer version of MaxPane is available.\n\n"
+      "    Current: %s\n"
+      "    Latest:  %s\n\n"
+      "Open the Releases page now?",
+      MAXPANE_VERSION_STRING, g_latestVersion);
+  const int res = MessageBox(parent, body,
+      "MaxPane -- Update available", MB_YESNO);
+  if (res == IDYES) {
+    OpenUrlPlatform("https://github.com/b451c/MaxPane/releases/latest");
   }
 }
 

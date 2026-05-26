@@ -1,5 +1,6 @@
 #include "capture_queue.h"
 #include "config.h"
+#include "fx_capture.h"
 #include "globals.h"
 #include "debug.h"
 #include <cstring>
@@ -60,6 +61,32 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
 {
   if (m_count >= MAX_PENDING) return;
   if (!name || !name[0]) return;
+
+  // v2.0.4 #1 (ADR-037) — FX identity short-circuits the FindReaperWindow
+  // title-search path. Identity carries the (track, FX) GUID pair; restore
+  // resolves to a live (track, slot) via REAPER SDK and calls TrackFX_Show
+  // to obtain the HWND directly. No name-search retries needed.
+  if (FxCapture::IsFxIdentity(actionCmd)) {
+    PendingCapture& pc = m_queue[m_count];
+    memset(&pc, 0, sizeof(PendingCapture));
+    pc.state = PendingCapture::WAITING;
+    pc.paneId = paneId;
+    pc.knownWindowIndex = -1;
+    safe_strncpy(pc.searchTitle, name, sizeof(pc.searchTitle));
+    safe_strncpy(pc.displayName, name, sizeof(pc.displayName));
+    safe_strncpy(pc.fxIdentity, actionCmd, sizeof(pc.fxIdentity));
+    safe_strncpy(pc.actionCommand, actionCmd, sizeof(pc.actionCommand));
+    pc.toggleAction = 0;
+    pc.isArbitrary = true;
+    pc.tickCount = 0;
+    pc.retryCount = 0;
+    pc.maxRetries = MAX_RETRIES_ARBITRARY;
+    pc.actionDeferred = deferAction;
+    m_count++;
+    DBG("[MaxPane] CaptureQueue: enqueued FX identity '%s' name='%s' for pane %d (count=%d)\n",
+        actionCmd, name, paneId, m_count);
+    return;
+  }
 
   // B18: dead arbitrary tab — no toggle action AND no script command string
   // (legacy v1.5.x save format, or script that no longer exists). Without a
@@ -143,6 +170,55 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     if (pc.tickCount % RETRY_INTERVAL != 0) continue;
 
     pc.retryCount++;
+
+    // v2.0.4 #1 (ADR-037) — FX identity path: resolve (track, FX) by GUID,
+    // open via TrackFX_Show, capture the returned HWND. No FindReaperWindow.
+    // Retries cover the multi-project-tab race where the owning project
+    // isn't loaded yet at the moment we begin retrying.
+    if (pc.fxIdentity[0]) {
+      HWND fxHwnd = nullptr;
+      bool gotHwnd = FxCapture::ShowAndGetHwnd(pc.fxIdentity, fxHwnd);
+      if (gotHwnd && fxHwnd) {
+        // Refresh display name from REAPER for stability across renames.
+        char freshName[256] = {};
+        if (FxCapture::GetDisplayName(pc.fxIdentity, freshName, sizeof(freshName)) &&
+            freshName[0]) {
+          safe_strncpy(pc.displayName, freshName, sizeof(pc.displayName));
+        }
+        DBG("[MaxPane] CaptureQueue: FX resolve OK '%s' hwnd=%p — capturing\n",
+            pc.fxIdentity, (void*)fxHwnd);
+        bool captured = winMgr.CaptureArbitraryWindow(pc.paneId, fxHwnd,
+                                                     pc.displayName, containerHwnd,
+                                                     0, pc.fxIdentity);
+        if (captured) {
+          anyCaptured = true;
+        } else {
+          DBG("[MaxPane] CaptureQueue: FX capture failed (pane full or already captured)\n");
+        }
+        Remove(i);
+        continue;
+      }
+      if (pc.retryCount >= pc.maxRetries) {
+        DBG("[MaxPane] CaptureQueue: FX FAILED after %d retries identity='%s'\n",
+            pc.retryCount, pc.fxIdentity);
+        // Distinguish "owner missing" from "FX missing" for toast copy.
+        FxCapture::ResolvedLocation diagLoc{};
+        bool ownerFound = false;
+        FxCapture::ResolveLocation(pc.fxIdentity, diagLoc, &ownerFound);
+        const char* fallbackName = pc.displayName[0] ? pc.displayName : "(unknown)";
+        if (ownerFound) {
+          snprintf(m_lastFxFailureToast, sizeof(m_lastFxFailureToast),
+                   "FX missing: %s — track no longer has this plugin.",
+                   fallbackName);
+        } else {
+          snprintf(m_lastFxFailureToast, sizeof(m_lastFxFailureToast),
+                   "FX missing: %s — owning track was deleted from the project.",
+                   fallbackName);
+        }
+        Remove(i);
+      }
+      continue;
+    }
 
     // Fire deferred action on first retry (REAPER is now past startup)
     if (pc.actionDeferred) {
@@ -261,6 +337,18 @@ void CaptureQueue::CancelAll()
 {
   m_count = 0;
   memset(m_queue, 0, sizeof(m_queue));
+}
+
+const char* CaptureQueue::PopFxFailureToast()
+{
+  if (!m_lastFxFailureToast[0]) return nullptr;
+  // Return a stable pointer into the member buffer; caller copies or
+  // displays before next Tick mutates the slot. We clear after one read so
+  // the same failure doesn't toast on every OnTimer cycle.
+  static char s_returnBuf[256];
+  safe_strncpy(s_returnBuf, m_lastFxFailureToast, sizeof(s_returnBuf));
+  m_lastFxFailureToast[0] = '\0';
+  return s_returnBuf;
 }
 
 void CaptureQueue::Remove(int idx)

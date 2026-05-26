@@ -27,7 +27,7 @@
 #define IDC_SET_BMC          2045
 #define IDC_SET_PAYPAL       2046
 #define IDC_SET_CHECK_UPDATE 2047
-// IDC_SET_AUTO_UPDATE reserved for v2.0.4 (async update check needs
-// thread-safe main-loop dispatch; v2.0.3 ships manual-only).
+// v2.0.4 #3 — async auto-on-startup update check (ADR-039).
+#define IDC_SET_AUTO_UPDATE  2048
 
 // Bottom buttons — platform defaults (1, 2).

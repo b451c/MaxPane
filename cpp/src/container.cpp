@@ -1,4 +1,5 @@
 #include "container.h"
+#include "hotkey_helper.h"
 #include "config.h"
 #include "globals.h"
 #include "debug.h"
@@ -13,6 +14,7 @@
 #include "instance_manager.h"
 #include "save_workspace_dialog.h"
 #include "settings_dialog.h"
+#include "updater.h"
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -158,6 +160,16 @@ bool MaxPaneContainer::Create()
 
   if (g_SetExtState) {
     g_SetExtState(m_extSection, "was_visible", "1", true);
+  }
+
+  // v2.0.4 #3 (ADR-039) — fire-and-forget async update check on first
+  // container open. The detached worker thread runs HttpGetSync off the
+  // main thread; OnTimer below picks up the result + shows the modal
+  // from the main thread (Cocoa NSAlert is main-thread-only). Single-
+  // fire guard inside Updater::StartAsyncCheck — additional instance
+  // Create() calls are no-ops, so this is safe at every entry point.
+  if (IsAutoUpdateEnabled()) {
+    Updater::StartAsyncCheck();
   }
 
   return true;
@@ -562,6 +574,13 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
 void MaxPaneContainer::OnTimer()
 {
+  // v2.0.4 #3 (ADR-039) — drain the async update-check result. Atomic
+  // read; HandleUpdateAvailable has its own single-fire guard so calling
+  // every tick is cheap + safe. Only fires the modal once per session.
+  if (Updater::PollAsyncResult() == Updater::AsyncResult::UpdateAvailable) {
+    Updater::HandleUpdateAvailable(m_hwnd);
+  }
+
   // Check if deferred RPP state has become available.
   // REAPER parses the RPP <MAXPANE_STATE> chunk asynchronously —
   // it may arrive after Create()/LoadState() already ran.
@@ -849,10 +868,10 @@ void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
     }
 
     case MenuIds::LAUNCHER_CARD_BIND_HOTKEY:
-      // No REAPER API to pre-filter/pre-select the Actions dialog. User
-      // searches "MaxPane_WsSlot_<N+1>" manually. Slot number is shown in
-      // the menu header above for reference.
-      if (g_Main_OnCommand) g_Main_OnCommand(40605, 0);
+      // v2.0.4 #2 (ADR-038) — REAPER's native shortcut-edit dialog opens
+      // scoped to THIS workspace slot's command ID, replacing the legacy
+      // "hunt MaxPane_WsSlot_<N+1> through 200k actions" UX.
+      MaxPane_OpenHotkeyDialogForWsSlot(m_hwnd, cardIdx);
       break;
   }
 }
@@ -1850,7 +1869,14 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         }
         // Handle async capture queue
         else if (self->m_captureQueue->HasPending()) {
-          if (self->m_captureQueue->Tick(self->m_hwnd, self->m_winMgr)) {
+          bool anyCaptured = self->m_captureQueue->Tick(self->m_hwnd, self->m_winMgr);
+          // v2.0.4 #1 — drain FX-restore failure toast (fires on miss
+          // regardless of whether any capture succeeded this tick).
+          const char* fxToast = self->m_captureQueue->PopFxFailureToast();
+          if (fxToast && fxToast[0]) {
+            self->ShowToast(fxToast);
+          }
+          if (anyCaptured) {
             self->RefreshLayout();
           }
           if (!self->m_captureQueue->HasPending()) {
