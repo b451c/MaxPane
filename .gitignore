@@ -32,6 +32,7 @@ cpp/resources/*.rc_mac_menu
 
 # Forum post drafts
 forum_post*.txt
+forum_reply*.txt
 forum_replies.txt
 
 # Bugfix handoff (temporary, between sessions)
