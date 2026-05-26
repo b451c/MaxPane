@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 2.0.1 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 2.0.2 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 2.0.1 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 2.0.2 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -43,6 +43,8 @@ add_library(reaper_maxpane SHARED
   src/settings_dialog.cpp
   src/quick_switcher.cpp
   src/nav_bar.cpp
+  src/nav_icons.cpp
+  resources/nav_icons.gen.cpp
   src/drag_dock.cpp
 )
 

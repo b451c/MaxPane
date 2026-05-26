@@ -303,6 +303,14 @@ void OpenQuickSwitcher(HWND parent)
 #ifndef LBS_NOTIFY
 #define LBS_NOTIFY 0x0001L
 #endif
+// B-LINUX-MODALS — see settings_dialog.cpp for the full diagnosis. Switch
+// to the explicit-scale _BEGIN form via SET_IDD_*_SCALE; the
+// SWELL_DLG_WS_DEFAULT_SCALING shim works around the WDL upstream macro
+// referencing a symbol that is only defined under SWELL_TARGET_OSX.
+#ifndef SWELL_DLG_WS_DEFAULT_SCALING
+#define SWELL_DLG_WS_DEFAULT_SCALING 0
+#endif
+#define SET_IDD_QUICK_SWITCHER_SCALE 1.9
 #include "swell/swell-dlggen.h"
 #include "quick_switcher.rc_mac_dlg"
 #endif

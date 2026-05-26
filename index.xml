@@ -36,13 +36,41 @@
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Requirements\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab REAPER 7.0+\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab macOS arm64 + x86_64\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Windows x64 (v2.0.1+)\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Linux build will land after the FX Browser close blocker (issue #9) clears.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Windows x64 (v2.0.1+)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Linux x86_64 + aarch64 (v2.0.2+)\sa180\par}
 {\pard \qc \f0 \sa180 \li0 \fi0 \emdash\emdash\emdash\emdash\emdash\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 MIT License | https://github.com/b451c/MaxPane\par}
 }
 ]]></description>
       </metadata>
+
+      <version name="2.0.2" author="b451c" time="2026-05-26T00:00:00Z">
+        <changelog><![CDATA[Adds Linux x86_64 and aarch64 binaries to the public Release. Fixes three Linux-surfaced issues and unifies the nav-bar icon set across all platforms.
+
+Added:
+- Linux x86_64 and Linux aarch64 binaries in public Release (closes Linux gap left by v2.0.1; FX Browser close crash from #9 no longer reproduces on REAPER 7.69)
+- Unified Phosphor icon set across macOS / Win / Linux - replaces per-platform Unicode glyphs
+
+Linux (parity sprint):
+- Nav-bar icons no longer render as tofu boxes - bitmap path via Phosphor Icons (MIT)
+- Settings / Save Workspace / Quick Switcher dialogs render content (REAPER's bundled SWELL doesn't substitute the 0.0 default the _BEGIN2 macro emits; switched to explicit-scale _BEGIN with a local SWELL_DLG_WS_DEFAULT_SCALING shim)
+
+Cross-platform:
+- ReaImGui / Lua scripts whose window title differs from "Script: <filename>.lua" now save with the right action and restore from workspace. Toggle pool stays at the >=2-hit threshold; new script-pool track allows 1 hit plus a single-active-script fallback for titles sharing zero tokens with the action name
+
+Windows (Entry 15 follow-up):
+- FindWindowEnumProc finds Direct2D plugins with empty WindowText (ReaBeat, Reamix). v2.0.1 closed the save side but missed the search side - workspace-load now falls back to TryGetAppNameFromModule when the title is empty
+
+macOS / Windows users upgrading from v2.0.1 will see a one-off nav-bar icon refresh (Phosphor pictograms replace Unicode glyphs). Functionality unchanged.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.2/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.2/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.0.2/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.2/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.2/reaper_maxpane-aarch64.so</source>
+      </version>
 
       <version name="2.0.1" author="b451c" time="2026-05-25T00:00:00Z">
         <changelog><![CDATA[Adds Windows x64 to the public Release. Fixes a class of workspace-restore bugs for captured C++ plugins (ReaBeat, Reamix) and ReaImGui Lua scripts on every platform.

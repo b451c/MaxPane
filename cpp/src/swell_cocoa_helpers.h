@@ -35,6 +35,17 @@ void OpenUrlPlatform(const char* url);
 // Sprint 1 via SetWindowPos HWND_TOPMOST; Linux via gtk_window_set_keep_above.
 // Safe to call on subviews (no-op when view isn't a contentView).
 void SetWindowAlwaysOnTop(HWND hwnd, bool onTop);
+
+// v2.0.2 cross-platform icon unify — blit a BGRA pre-composed bitmap into a
+// SWELL HDC at the given destination rect, scaling if needed. macOS Cocoa
+// SWELL lacks the Linux StretchBltFromMem + SelectObject(HBITMAP) niceties;
+// this helper goes Cocoa-native via the CGContextRef inside HDC__.
+// `bgra` must point to `sw * sh * 4` bytes laid out per PackBGRA in
+// nav_icons.cpp (B, G, R, A in ascending memory order). Alpha is treated as
+// opaque-padding (kCGImageAlphaNoneSkipFirst) — the runtime already composed
+// the icon against its backdrop.
+void BlitBGRABitmapMacOS(HDC hdc, const void* bgra, int sw, int sh,
+                        int dx, int dy, int dw, int dh);
 #elif defined(_WIN32)
 // Sprint 1 Entry 6 — native Win32 implementations. The helpers were
 // previously {} stubs on every non-Apple platform; F1a Detach-to-Floating

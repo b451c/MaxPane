@@ -187,7 +187,20 @@ static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
   FindWindowData* data = (FindWindowData*)lParam;
   char buf[512];
   GetWindowText(hwnd, buf, sizeof(buf));
+  // Sprint 1 Entry 15 follow-up — Win32 Direct2D plugins (ReaBeat, Reamix,
+  // …) can have an empty WindowText after Main_OnCommand fires their
+  // toggle. Without the module fallback FindReaperWindow misses them on
+  // workspace load → 30 retries fail → plugin remains a floating orphan.
+  // SWELL macOS/Linux keep the v2.0 hard-skip — no comparable module
+  // identification path and their plugins have SetWindowText titles.
+#ifdef _WIN32
+  if (!buf[0]) {
+    if (!WindowManager::TryGetAppNameFromModule(hwnd, buf, sizeof(buf)))
+      return TRUE;
+  }
+#else
   if (!buf[0]) return TRUE;
+#endif
 
   // Skip tiny controls/buttons — real REAPER windows are at least 50×50
   { RECT wr; GetClientRect(hwnd, &wr);
@@ -875,15 +888,25 @@ int WindowManager::DiscoverActionForWindow(HWND hwnd, const char* windowTitle)
   char tokens[8][32] = {{0}};
   int tokenCount = hasTitle ? TokenizeTitle(windowTitle, tokens, 8) : 0;
 
+  // B-SCRIPT-RESTORE — split candidate pool: toggle actions on the strict
+  // ≥2-hit track, ReaImGui scripts on a 1-hit track (the RS+state==-1
+  // filter already narrows them to "currently running"). Single-active-
+  // script fallback covers the "script title shares zero tokens with the
+  // Script: filename.lua action name" case (e.g. "MIDI Lyrics" / lyrics.lua).
   int bestId = 0, bestHits = -1;
+  int bestScriptId = 0, bestScriptHits = -1;
   int moduleFallbackId = 0;
+  int singleActiveScriptId = 0;
+  int activeScriptCount = 0;
 
   for (int id = 1; id < 200000; id++) {
     int state = g_GetToggleCommandState(id);
+    bool isScript = false;
     if (state != 1) {
       if (state != -1) continue;
       const char* named = g_ReverseNamedCommandLookup(id);
       if (!named || named[0] != 'R' || named[1] != 'S') continue;  // RS = script
+      isScript = true;
     }
     const char* actionName = g_kbd_getTextFromCmd(id, nullptr);
     if (!actionName || !actionName[0]) continue;
@@ -892,19 +915,34 @@ int WindowManager::DiscoverActionForWindow(HWND hwnd, const char* windowTitle)
     for (int t = 0; t < tokenCount; t++) {
       if (ContainsCaseInsensitive(actionName, tokens[t])) hits++;
     }
-    if (hits > bestHits) { bestHits = hits; bestId = id; }
+    if (isScript) {
+      activeScriptCount++;
+      singleActiveScriptId = id;
+      if (hits > bestScriptHits) { bestScriptHits = hits; bestScriptId = id; }
+    } else {
+      if (hits > bestHits) { bestHits = hits; bestId = id; }
+    }
     if (!moduleFallbackId && modBase[0] &&
         ContainsCaseInsensitive(actionName, modBase)) {
       moduleFallbackId = id;
     }
   }
 
-  // Confidence threshold — generic tokens like "imgui" appear in every
-  // ReaImGui action; require ≥2 hits when title yields ≥2 tokens.
-  int threshold = (tokenCount >= 2) ? 2 : (tokenCount == 1 ? 1 : 0);
+  // Confidence thresholds. Toggle track: generic tokens like "imgui" appear
+  // in every ReaImGui action; require ≥2 hits when title yields ≥2 tokens.
+  // Script track: the RS prefix + state==-1 already narrows the pool, so
+  // a single token hit is enough.
+  const int toggleThreshold = (tokenCount >= 2) ? 2 : (tokenCount == 1 ? 1 : 0);
+  const int scriptThreshold = (tokenCount >= 1) ? 1 : 0;
   int result = 0;
-  if (bestHits >= threshold && bestId > 0) result = bestId;
-  else if (moduleFallbackId > 0)            result = moduleFallbackId;
+  if (bestHits >= toggleThreshold && bestId > 0)
+    result = bestId;
+  else if (bestScriptHits >= scriptThreshold && bestScriptId > 0)
+    result = bestScriptId;
+  else if (activeScriptCount == 1 && singleActiveScriptId > 0)
+    result = singleActiveScriptId;
+  else if (moduleFallbackId > 0)
+    result = moduleFallbackId;
 
   if (hasTitle) StoreDiscoverCache(cacheModule, windowTitle, result);
   return result;

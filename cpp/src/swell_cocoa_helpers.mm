@@ -155,3 +155,41 @@ void ClampRectToVisibleScreen(RECT* rect)
   rect->right  = rect->left + (int)rw;
   rect->bottom = rect->top  + (int)rh;
 }
+
+#define SWELL_INTERNAL_HDC_ACCESS  // signal intent to include swell internals
+#include "swell-internal.h"
+
+void BlitBGRABitmapMacOS(HDC hdc, const void* bgra, int sw, int sh,
+                         int dx, int dy, int dw, int dh)
+{
+  HDC__* h = (HDC__*)hdc;
+  if (!h || !h->ctx || !bgra || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+
+  CGDataProviderRef provider = CGDataProviderCreateWithData(
+      NULL, bgra, (size_t)sw * sh * 4, NULL);
+  if (!provider) return;
+
+  CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+  CGImageRef img = CGImageCreate(
+      sw, sh, 8, 32, sw * 4, cs,
+      // BGRA bytes in memory + Little-endian byte order → CGImage reads
+      // them as the native pixel layout we want; alpha is "skip first" so
+      // the runtime-composed opaque output renders correctly.
+      kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little,
+      provider, NULL, false, kCGRenderingIntentDefault);
+  CGDataProviderRelease(provider);
+  CGColorSpaceRelease(cs);
+  if (!img) return;
+
+  // SWELL Cocoa HDC contexts have a top-down CTM established at creation
+  // (see swell-gdi.mm SWELL_CreateMemContext); CGContextDrawImage uses
+  // bottom-up native Cocoa coords. Locally flip and restore so the icon
+  // appears at (dx, dy) with the right orientation.
+  CGContextSaveGState(h->ctx);
+  CGContextTranslateCTM(h->ctx, dx, dy + dh);
+  CGContextScaleCTM(h->ctx, 1.0, -1.0);
+  CGContextDrawImage(h->ctx, CGRectMake(0, 0, dw, dh), img);
+  CGContextRestoreGState(h->ctx);
+
+  CGImageRelease(img);
+}

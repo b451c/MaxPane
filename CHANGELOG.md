@@ -4,6 +4,76 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.2] - 2026-05-26
+
+**Adds Linux x86_64 + aarch64 binaries to the public Release. Fixes
+the three issues Linux smoke surfaced (tofu nav-bar icons, empty
+modal dialogs, ReaImGui / Lua scripts not restoring from workspace).
+Unifies the nav-bar icon set across all three platforms — macOS and
+Windows users will see a one-off icon refresh.**
+
+### Added
+
+- **Linux x86_64 and Linux aarch64 binaries** in the public Release.
+  Closes the Linux gap left by v2.0.1; the FX Browser close crash
+  (issue [#9](https://github.com/b451c/MaxPane/issues/9)) reproduces
+  no longer on REAPER 7.69 (covered by an upstream WDL fix). Linux
+  parity sprint validated capture / restore / workspaces / context
+  menus on Ubuntu 24.04 aarch64.
+- **Unified Phosphor icon set** in the navigation bar across macOS /
+  Windows / Linux. Replaces the per-platform Unicode glyphs (which
+  rendered as tofu on Linux Noto Sans). Crisp at 20 px, uniform
+  hover/active tinting, no per-glyph font-size tuning.
+
+### Fixed
+
+#### Linux native (parity sprint)
+- **Nav-bar icons no longer render as tofu (□).** SWELL on Linux
+  resolves an empty `CreateFont` family to fontconfig's default
+  (Noto Sans Regular on Ubuntu 24.04), which lacks the Unicode
+  miscellaneous-symbol codepoints the toolbar used. Bitmap path
+  via Phosphor Icons (MIT) embedded as alpha masks.
+- **Settings / Save Workspace / Quick Switcher dialogs open with
+  content.** REAPER's bundled SWELL doesn't substitute the
+  `SWELL_DEF_DLGSCALE2` default the `_BEGIN2` macro emits, so
+  every child control sized to zero. All three dialog TUs now use
+  the explicit-scale `_BEGIN` form with a local
+  `SWELL_DLG_WS_DEFAULT_SCALING` shim (the upstream macro
+  references a symbol that's only defined under
+  `SWELL_TARGET_OSX`).
+
+#### Cross-platform
+- **ReaImGui / Lua scripts whose runtime window title differs from
+  the `Script: <filename>.lua` action name now save with the
+  correct action and restore from workspace.** The token-scoring
+  threshold for the toggle pool stays at ≥ 2 hits, but a separate
+  script-pool track allows 1 hit, and a single-active-script
+  fallback covers the "title shares zero tokens" case (e.g.
+  `lyrics.lua` window titled "MIDI Lyrics"). Workspaces saved
+  with `arb:0:<name>` from older builds still need a one-time
+  re-capture to populate the action.
+
+#### Windows (Entry 15 follow-up)
+- **`FindWindowEnumProc` finds Direct2D plugins with empty
+  `WindowText`.** v2.0.1 closed the save side of Entry 15 but
+  missed the search side — when `GetWindowText` returned empty
+  on Win32, the enum proc hard-skipped, so workspace-load couldn't
+  locate the just-opened ReaBeat / Reamix window for capture.
+  Now falls back to `TryGetAppNameFromModule` when the title is
+  empty (Win32 only; SWELL macOS / Linux keep the v2.0 hard-skip).
+
+### Known issues
+
+- Linux: HiDPI scaling of the nav-bar icons not yet wired to
+  REAPER's advisory scaling factor. The 2× icon source is
+  selected when the target rect exceeds 38 px logical, which
+  looks correct at 1× DPI; HiDPI testing pending.
+- macOS / Windows users upgrading from v2.0.1 will see a one-off
+  icon refresh in the nav bar (Phosphor pictograms replace the
+  Unicode glyphs). Visual only — all functionality unchanged.
+
+---
+
 ## [2.0.1] - 2026-05-25
 
 **Adds Windows x64 to the public build matrix and fixes a class of

@@ -140,6 +140,16 @@ void OpenSettingsDialog(HWND parent)
 }
 
 #ifndef _WIN32
+// B-LINUX-MODALS — REAPER's bundled SWELL doesn't substitute SWELL_DEF_DLGSCALE2
+// for the 0.0 default the _BEGIN2 macro variant emits, so dialogs render with
+// zero-sized children on Linux. Switch to the explicit-scale _BEGIN form via
+// SET_IDD_*_SCALE before the include. The shim below is required because the
+// WDL upstream macro references SWELL_DLG_WS_DEFAULT_SCALING unconditionally
+// but only defines it under SWELL_TARGET_OSX.
+#ifndef SWELL_DLG_WS_DEFAULT_SCALING
+#define SWELL_DLG_WS_DEFAULT_SCALING 0
+#endif
+#define SET_IDD_SETTINGS_SCALE 1.9
 #include "swell/swell-dlggen.h"
 #include "settings_dialog.rc_mac_dlg"
 #endif

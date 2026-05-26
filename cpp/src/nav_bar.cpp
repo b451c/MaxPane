@@ -4,14 +4,15 @@
 //  - Two visual groups separated by 1 px dividers. Left group: [Home] then
 //    capture-related [Drag][Switch][Save][Load]. Right group, right-aligned:
 //    [Settings][Support].
-//  - Each button is a fixed BUTTON_SIZE square. Glyph drawn centered.
-//    Hover: subtle background fill. Active (BTN_DRAG when armed, BTN_HOME
-//    when overlay open): accent fill.
-//  - Glyphs are single-character Unicode that ships in default macOS / Win
-//    UI fonts (Tahoma/Segoe UI/SF Pro). No emoji — emoji rendering through
-//    SWELL DrawText is inconsistent across platforms.
+//  - Each button is a fixed BUTTON_SIZE square. Icon drawn centered with
+//    a 3 px inset. Hover: subtle background fill. Active (BTN_DRAG when
+//    armed, BTN_HOME when overlay open): accent fill.
+//  - Icons are Phosphor Icons (MIT) embedded as alpha masks at 1x/2x and
+//    composited per-pixel against the requested bg + tint color. See
+//    nav_icons.{h,cpp}. Unified across macOS / Win / Linux in v2.0.2.
 #include "nav_bar.h"
 #include "config.h"   // MAX_WORKSPACE_NAME (label-buffer sizing)
+#include "nav_icons.h"
 #include <cstring>
 #include <cstdio>
 
@@ -142,76 +143,37 @@ int MeasureWorkspaceLabel(const char* text, HDC measureHdc)
   return (chars * (WS_NAME_FONT_PX * 11 / 20)) + (chars * 2);
 }
 
-// ---- Glyph icons (system font, per-icon size balanced) ------------------
-//
-// Procedural GDI drawing produced angular/blocky icons (smoke 2026-05-23).
-// Reverted to Unicode glyphs which get anti-aliased smoothing from the
-// system font rasterizer. Each glyph has a custom font size to balance
-// intrinsic visual-weight variance (e.g. ⌂ renders small in most fonts,
-// ⊕ renders bold). Per-icon tuning gives a near-uniform appearance.
-
-struct GlyphSpec {
-  const char* utf8;
-  int fontPx;
-  int yOffset;
-};
-
-GlyphSpec GlyphFor(int buttonId)
-{
-  switch (buttonId) {
-    case BTN_HOME:     return { "\xe2\x8c\x82", 21,  0 };   // ⌂ small natively → bump
-    case BTN_DRAG:     return { "\xe2\x8a\x95", 16,  0 };   // ⊕ already bold
-    case BTN_SWITCH:   return { "\xe2\x8c\x95", 21,  0 };   // ⌕ small natively
-    case BTN_SAVE:     return { "\xe2\xac\x87", 15,  0 };   // ⬇ bold
-    case BTN_LOAD:     return { "\xe2\x89\xa1", 19, -1 };   // ≡ short
-    case BTN_SETTINGS: return { "\xe2\x9a\x99", 17,  0 };   // ⚙ medium
-    case BTN_SUPPORT:  return { "\xe2\x99\xa5", 15, -1 };   // ♥ medium
-    default:           return { "?", 14, 0 };
-  }
-}
-
-void DrawIconGlyph(HDC hdc, int buttonId, const RECT& r, COLORREF color)
-{
-  const GlyphSpec g = GlyphFor(buttonId);
-  HFONT font = CreateFont(g.fontPx, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
-                          CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
-                          DEFAULT_PITCH, "");
-  HFONT oldFont = font ? (HFONT)SelectObject(hdc, font) : nullptr;
-  SetBkMode(hdc, TRANSPARENT);
-  SetTextColor(hdc, color);
-  RECT tr = r;
-  tr.top += g.yOffset;
-  tr.bottom += g.yOffset;
-  DrawTextUtf8(hdc,g.utf8, -1, &tr,
-           DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
-  if (oldFont) SelectObject(hdc, oldFont);
-  if (font) DeleteObject(font);
-}
-
 // ---- Button helpers ---------------------------------------------------
 
 void DrawButton(HDC hdc, const RECT& r, int buttonId, bool hover,
                 bool active, bool armed, const Palette& pal)
 {
-  // Background fill if hover/active.
-  if (active) {
-    HBRUSH bg = CreateSolidBrush(armed ? pal.btnActiveBgArmed : pal.btnActiveBg);
-    FillRect(hdc, &r, bg);
-    DeleteObject(bg);
-  } else if (hover) {
-    HBRUSH bg = CreateSolidBrush(pal.btnHoverBg);
+  // bgColor mirrors the bar background unless the button is hover/active.
+  // NavIcons::DrawIcon blends the pre-multiplied icon alpha against this
+  // color in software, so the rendered alpha needs a real backdrop —
+  // not a brushed-from-thin-air pal.barBg surprise.
+  COLORREF bgColor = pal.barBg;
+  if (active)      bgColor = (armed ? pal.btnActiveBgArmed : pal.btnActiveBg);
+  else if (hover)  bgColor = pal.btnHoverBg;
+
+  if (active || hover) {
+    HBRUSH bg = CreateSolidBrush(bgColor);
     FillRect(hdc, &r, bg);
     DeleteObject(bg);
   }
 
-  // Glyph icon — system font + per-icon size balancing. Anti-aliased
-  // smoothing from the font rasterizer reads cleaner than 2 px GDI
-  // strokes at this scale.
   COLORREF iconColor = active ? pal.glyphActive
                       : hover ? pal.glyphHover
                       : pal.glyph;
-  DrawIconGlyph(hdc, buttonId, r, iconColor);
+
+  // 3 px inset inside the 26 px button reads as visually lighter than a
+  // glyph drawn corner-to-corner; hit-test rect is unchanged.
+  constexpr int kIconInset = 3;
+  RECT iconRect = {
+    r.left + kIconInset, r.top + kIconInset,
+    r.right - kIconInset, r.bottom - kIconInset,
+  };
+  NavIcons::DrawIcon(hdc, buttonId, iconRect, bgColor, iconColor);
 }
 
 } // namespace (anon)
