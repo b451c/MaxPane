@@ -113,7 +113,8 @@ directly by MSVC `rc.exe` on Windows (ADR-023). To add a new dialog:
    - The extension loads in a real REAPER session and the change behaves
      as advertised.
 3. Push your branch. CI fires automatically on push — verify the
-   4-platform matrix is green before opening a PR.
+   5-platform matrix (macOS arm64 + macOS x86_64 + Win64 + Linux x86_64
+   + Linux aarch64) is green before opening a PR.
 4. Open a Pull Request against `main`. In the description, link to any
    open issues, describe what the change does and why, and list the
    manual smoke steps you ran.

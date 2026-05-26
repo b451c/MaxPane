@@ -150,7 +150,9 @@ same `MaxPaneContainer*` via `this->`.
 | `launcher.h/cpp` | ADR-014 empty-container launcher hero. Card grid with mini layout previews, tooltip on hover, click → load workspace. Also rendered by the Home overlay (ADR-026) over a populated layout. |
 | `quick_switcher.h/cpp` | F4 / ADR-024-era Quick Switcher. Modal SWELL dialog with fuzzy filter across open tabs + workspaces + favorites. Bound to `MaxPane_QuickSwitcher`. |
 | `save_workspace_dialog.h/cpp` | Sprint 3.3 custom Save dialog. Name input + clickable listbox of existing workspaces + dynamic status label ("Will replace…" / "Will save as new…"). |
-| `settings_dialog.h/cpp` | ADR-019/022 Settings dialog. Single page, SWELL macro-only widgets, cycle-button for tristate dark-mode (Auto / Force dark / Force light). |
+| `settings_dialog.h/cpp` | ADR-019/022 Settings dialog. Single page, SWELL macro-only widgets, cycle-button for tristate dark-mode (Auto / Force dark / Force light). v2.0.3 added an About section (version, MIT license, support links) + manual "Check for updates" button. |
+| `nav_icons.h/cpp` + `cpp/resources/icons/` | v2.0.2 unified Phosphor PNG icon set for the nav bar. Replaced the previous Unicode-glyph path on all three platforms (the glyph fonts on Linux Noto Sans were missing the codepoints — tofu boxes). 7 SVG sources, generator Python script (PyGI/Rsvg + macOS rsvg-convert/Pillow fallback), 24 KB raw alpha tables emitted to `cpp/resources/nav_icons.gen.cpp`. Per-platform blit paths: Linux `StretchBltFromMem`, Win32 `StretchDIBits` (HALFTONE in v2.0.3 for smooth downscale), macOS `BlitBGRABitmapMacOS` in `swell_cocoa_helpers.mm` (CGImage + CGContextDrawImage with high interpolation). |
+| `updater.h/cpp` | v2.0.3 manual "Check for updates". Synchronous HTTPS GET against the project's ReaPack manifest on github.com, parses the first `<version name="vX.Y.Z">` tag, compares against `MAXPANE_VERSION_STRING` from `config.h`, shows a `MessageBox(MB_YESNO)` if newer. Per-platform HTTPS: macOS `FetchUrlSyncMacOS` (NSURLSession + dispatch_semaphore), Win32 WinHttp chunked read, Linux `popen("curl …")`. Auto-on-startup deferred to a follow-up release — needs thread-safe main-loop dispatch for Cocoa's NSAlert main-thread-only rule. |
 
 ### Build artifacts
 
@@ -903,17 +905,17 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 
 ## 15. Cross-platform status
 
-| Platform | Architecture | Status | Known gaps |
-|----------|-------------|--------|------------|
-| macOS arm64 | Apple Silicon native | Stable | None known |
-| macOS x86_64 | Intel native (cross-compile + Rosetta on arm64 hosts) | Stable | None known |
-| Linux x86_64 | GTK via SWELL | Alpha | B11 — FX Browser close crashes REAPER. Pending: re-test against WDL upstream commit `0072725` (Feb 2026, "avoid GDK_WINDOW_XID on stale window") before writing a workaround. |
-| Windows x64 | Native Win32 | Alpha | B10 — DlgProc messages not arriving (mouse events drop). Hypothesis: `DLGTEMPLATE` `WS_CHILD \| DS_CONTROL` style in `platform.h:CreateMaxPaneDialog` may not route messages to DlgProc the way SWELL does. Pending Windows VM smoke test. |
+| Platform | Architecture | Status | Notes |
+|----------|-------------|--------|-------|
+| macOS arm64 | Apple Silicon native | Stable | — |
+| macOS x86_64 | Intel native (cross-compile + Rosetta on arm64 hosts) | Stable | — |
+| Windows x64 | Native Win32 | Stable as of v2.0.1 | B10 closed — `WM_NCHITTEST` now publishes via `DWLP_MSGRESULT`; `DoCapture` style transform reordered; `GWL_EXSTYLE` strips plugin 3D frame; `DialogBoxParam` uses plugin HINSTANCE. |
+| Linux x86_64 | GTK via SWELL | Stable as of v2.0.2 | B11 closed — FX Browser close crash no longer reproduces on REAPER 7.69 (upstream WDL `0072725b`). Validated on Ubuntu 24.04 aarch64. |
+| Linux aarch64 | GTK via SWELL | Stable as of v2.0.2 | Same as Linux x86_64. |
 
-Per ADR-017, v2.0 release tag is gated on B10 + B11 being functional —
-no "alpha" labels on any platform. Sprint 1 (post-public push) is the
-correction phase, triggered once the owner has a downloadable v2.0 artifact
-to run on Win + Linux VMs.
+Per ADR-017, the v2.0 release tag required B10 + B11 functional on all
+platforms — no "alpha" labels. Closed by v2.0.1 (Windows) + v2.0.2 (Linux)
+respectively. The CI matrix builds all five platforms on every PR push.
 
 Architectural rules to keep cross-platform parity:
 
