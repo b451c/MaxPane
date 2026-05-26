@@ -11,7 +11,7 @@ containers, drag-to-dock from outside, 32 saved workspaces, hotkeys for
 everything, Quick Switcher (Cmd+P-style), floating mode, and a launcher that
 remembers your layouts.
 
-![MaxPane v2.0](docs/images/MaxPane-v2_launcher.png)
+![MaxPane v2.0](docs/images/Hero.png)
 
 > Capture any REAPER window — Media Explorer, FX Browser, Mixer, Actions,
 > toolbars, or third-party ReaImGui scripts — into a tiling container with

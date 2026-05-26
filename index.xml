@@ -4,6 +4,7 @@
     <reapack name="reaper_maxpane" type="extension" desc="MaxPane: Nested Docker Layouts for REAPER">
       <metadata>
         <link rel="website">https://github.com/b451c/MaxPane</link>
+        <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/Hero.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_launcher.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_settings.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-layout.png</link>
