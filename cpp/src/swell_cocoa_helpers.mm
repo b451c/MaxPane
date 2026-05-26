@@ -184,12 +184,59 @@ void BlitBGRABitmapMacOS(HDC hdc, const void* bgra, int sw, int sh,
   // SWELL Cocoa HDC contexts have a top-down CTM established at creation
   // (see swell-gdi.mm SWELL_CreateMemContext); CGContextDrawImage uses
   // bottom-up native Cocoa coords. Locally flip and restore so the icon
-  // appears at (dx, dy) with the right orientation.
+  // appears at (dx, dy) with the right orientation. Bumping interpolation
+  // to High gives parity with the Win32 HALFTONE path — same "smooth"
+  // downscale on all three platforms.
   CGContextSaveGState(h->ctx);
+  CGContextSetInterpolationQuality(h->ctx, kCGInterpolationHigh);
   CGContextTranslateCTM(h->ctx, dx, dy + dh);
   CGContextScaleCTM(h->ctx, 1.0, -1.0);
   CGContextDrawImage(h->ctx, CGRectMake(0, 0, dw, dh), img);
   CGContextRestoreGState(h->ctx);
 
   CGImageRelease(img);
+}
+
+#include <string>
+
+// v2.0.3 update check — synchronous HTTPS GET via NSURLSession.
+// Spins a local run loop on the calling thread (which is the main UI
+// thread when invoked from Settings → "Check for updates"), and waits
+// until the completionHandler fills in `out` or `timeoutSec` elapses.
+// Suitable for user-explicit checks that briefly block the UI.
+//
+// Note: NSURLSession completionHandler runs on a delegate queue — we
+// signal a semaphore so the calling thread can return synchronously.
+std::string FetchUrlSyncMacOS(const char* url, int timeoutSec)
+{
+  if (!url || !*url) return std::string();
+
+  __block std::string result;
+  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+
+  NSString* nsurl = [NSString stringWithUTF8String:url];
+  NSURL* parsed = [NSURL URLWithString:nsurl];
+  if (!parsed) { dispatch_release(sem); return std::string(); }
+
+  NSURLSessionConfiguration* cfg = [NSURLSessionConfiguration ephemeralSessionConfiguration];
+  cfg.timeoutIntervalForRequest = (NSTimeInterval)timeoutSec;
+  cfg.timeoutIntervalForResource = (NSTimeInterval)timeoutSec;
+
+  NSURLSession* session = [NSURLSession sessionWithConfiguration:cfg];
+  NSURLSessionDataTask* task = [session dataTaskWithURL:parsed
+                                  completionHandler:^(NSData* data,
+                                                       NSURLResponse* /*resp*/,
+                                                       NSError* err) {
+    if (!err && data && data.length > 0) {
+      result.assign((const char*)data.bytes, data.length);
+    }
+    dispatch_semaphore_signal(sem);
+  }];
+  [task resume];
+
+  dispatch_time_t deadline = dispatch_time(DISPATCH_TIME_NOW,
+      (int64_t)timeoutSec * NSEC_PER_SEC + (int64_t)NSEC_PER_SEC);
+  dispatch_semaphore_wait(sem, deadline);
+  dispatch_release(sem);
+  return result;
 }

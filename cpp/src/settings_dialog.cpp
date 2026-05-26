@@ -13,7 +13,10 @@
 #include "../resources/settings_dialog.h"
 #include "globals.h"
 #include "config.h"
+#include "swell_cocoa_helpers.h"  // OpenUrlPlatform
+#include "updater.h"               // Updater::CheckForUpdatesNow
 
+#include <cstdio>
 #include <cstring>
 
 namespace {
@@ -67,6 +70,11 @@ void LoadValues(HWND dlg)
   CheckDlgButton(dlg, IDC_SET_SHOWNAVBAR, ReadShowNavBar() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
   SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
+
+  // About section — fill version label from compile-time constant.
+  char ver[128];
+  std::snprintf(ver, sizeof(ver), "MaxPane %s", MAXPANE_VERSION_STRING);
+  SetDlgItemText(dlg, IDC_SET_VERSION_LBL, ver);
 }
 
 void CommitValues(HWND dlg)
@@ -98,6 +106,31 @@ INT_PTR CALLBACK SettingsDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*
 
       if (id == IDC_SET_OPEN_ACTIONS) {
         if (g_Main_OnCommand) g_Main_OnCommand(40605, 0);
+        return 0;
+      }
+
+      // About section — external links via the platform browser shim.
+      if (id == IDC_SET_GITHUB) {
+        OpenUrlPlatform("https://github.com/b451c/MaxPane");
+        return 0;
+      }
+      if (id == IDC_SET_KOFI) {
+        OpenUrlPlatform("https://ko-fi.com/quickmd");
+        return 0;
+      }
+      if (id == IDC_SET_BMC) {
+        OpenUrlPlatform("https://buymeacoffee.com/bsroczynskh");
+        return 0;
+      }
+      if (id == IDC_SET_PAYPAL) {
+        OpenUrlPlatform("https://paypal.me/b451c");
+        return 0;
+      }
+      if (id == IDC_SET_CHECK_UPDATE) {
+        // Synchronous HTTPS check — briefly blocks the UI (~1-3s).
+        // showIfUpToDate=true so the user gets explicit feedback either
+        // way when they hit this button.
+        Updater::CheckForUpdatesNow(dlg, /*showIfUpToDate=*/true);
         return 0;
       }
 

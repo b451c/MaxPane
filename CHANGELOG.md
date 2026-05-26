@@ -4,6 +4,43 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.3] - 2026-05-26
+
+**Polish hot-fix on top of v2.0.2. Sharpens the nav-bar icons on
+Windows, surfaces version / license / support info in the Settings
+dialog, and lets you check for new versions without leaving REAPER.**
+
+### Added
+
+- **About section in the Settings dialog.** Now shows the version
+  number, MIT license, project URL, and the three support links
+  (Ko-fi, Buy Me a Coffee, PayPal) inside the plugin UI — previously
+  the support links were buried in the nav-bar Support popup and
+  there was no version display anywhere.
+- **"Check for updates" button** in the new About section. Hits the
+  project's ReaPack manifest on github.com and shows a modal if a
+  newer version is out (with a one-click jump to the Releases page).
+  Manual-only for now — synchronous HTTPS GET briefly blocks the UI
+  for ~1-3 s while the request completes. Automatic check-on-startup
+  is planned for a follow-up release.
+
+### Fixed
+
+#### Windows
+- **Nav-bar icons no longer render pixelated.** Win32 GDI's
+  `StretchDIBits` default mode (`COLORONCOLOR`) drops pixels on
+  downscale; now switches to `HALFTONE` + `SetBrushOrgEx` before the
+  blit and restores the previous mode after. Bilinear-equivalent
+  smoothing; same look as macOS Quartz and Linux LICE.
+
+#### macOS
+- **Nav-bar icons get high-quality interpolation.** `BlitBGRABitmapMacOS`
+  now sets `kCGInterpolationHigh` before `CGContextDrawImage` —
+  matches the Win32 HALFTONE smoothing for visual parity across all
+  three platforms.
+
+---
+
 ## [2.0.2] - 2026-05-26
 
 **Adds Linux x86_64 + aarch64 binaries to the public Release. Fixes

@@ -18,8 +18,16 @@
 #define IDC_SET_HOTKEYS_LBL  2030
 #define IDC_SET_OPEN_ACTIONS 2031
 
-// Advanced section
+// About section (v2.0.3)
 #define IDC_SET_VERSION_LBL  2040
+#define IDC_SET_LICENSE_LBL  2041
 #define IDC_SET_RESET        2042
+#define IDC_SET_GITHUB       2043
+#define IDC_SET_KOFI         2044
+#define IDC_SET_BMC          2045
+#define IDC_SET_PAYPAL       2046
+#define IDC_SET_CHECK_UPDATE 2047
+// IDC_SET_AUTO_UPDATE reserved for v2.0.4 (async update check needs
+// thread-safe main-loop dispatch; v2.0.3 ships manual-only).
 
 // Bottom buttons — platform defaults (1, 2).

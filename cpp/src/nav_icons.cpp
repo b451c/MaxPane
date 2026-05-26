@@ -85,6 +85,14 @@ void DrawIcon(HDC hdc, int buttonId, const RECT& r,
   StretchBltFromMem(hdc, r.left, r.top, dstW, dstH,
                     buf.data(), sw, sh, sw);
 #elif defined(_WIN32)
+  // HALFTONE + SetBrushOrgEx — without these Win32 defaults to COLORONCOLOR
+  // (per-pixel discard) when StretchDIBits downscales the 26 px source to
+  // the 20 px icon rect, producing the aliased "pixelated" look the owner
+  // observed on v2.0.2. HALFTONE is bilinear-equivalent; the SetBrushOrgEx
+  // call is required after a HALFTONE switch per MSDN to keep brush
+  // alignment stable across blits.
+  const int prevMode = SetStretchBltMode(hdc, HALFTONE);
+  SetBrushOrgEx(hdc, 0, 0, NULL);
   BITMAPINFO bi = {};
   bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
   bi.bmiHeader.biWidth = sw;
@@ -94,6 +102,7 @@ void DrawIcon(HDC hdc, int buttonId, const RECT& r,
   bi.bmiHeader.biCompression = BI_RGB;
   StretchDIBits(hdc, r.left, r.top, dstW, dstH, 0, 0, sw, sh,
                 buf.data(), &bi, DIB_RGB_COLORS, SRCCOPY);
+  SetStretchBltMode(hdc, prevMode);
 #elif defined(__APPLE__)
   BlitBGRABitmapMacOS(hdc, buf.data(), sw, sh, r.left, r.top, dstW, dstH);
 #else

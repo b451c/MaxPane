@@ -12,7 +12,7 @@
 #endif
 #include "settings_dialog.h"
 
-IDD_SETTINGS DIALOGEX 0, 0, 360, 295
+IDD_SETTINGS DIALOGEX 0, 0, 360, 380
 STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
 CAPTION "MaxPane Settings"
 BEGIN
@@ -46,17 +46,25 @@ BEGIN
     PUSHBUTTON      "Open REAPER Actions...", IDC_SET_OPEN_ACTIONS,
                     25, 195, 130, 20
 
-    // ---- Advanced ----
-    LTEXT           "ADVANCED", -1, 15, 233, 100, 10
+    // ---- About (v2.0.3) ----
+    LTEXT           "ABOUT", -1, 15, 233, 100, 10
     // Sprint 1 Entry 7 — em-dash → "--": rc.exe defaults to ACP for
-    // string literals; UTF-8 em-dash byte sequence renders as Latin-1
-    // mojibake (â€¡). Defer real fix (#pragma code_page(65001)) to v2.1.
-    LTEXT           "MaxPane v2.0 (development) -- 32 workspace slots, 32 favorite slots, up to 8 instances.",
-                    IDC_SET_VERSION_LBL, 25, 248, 320, 18
+    // string literals. settings_dialog.cpp fills the actual version
+    // string at WM_INITDIALOG time from MAXPANE_VERSION_STRING.
+    LTEXT           "MaxPane (version filled at runtime)",
+                    IDC_SET_VERSION_LBL, 25, 248, 320, 12
+    LTEXT           "MIT License -- github.com/b451c/MaxPane",
+                    IDC_SET_LICENSE_LBL, 25, 262, 320, 12
+    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, 279, 60, 18
+    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, 279, 60, 18
+    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, 279, 60, 18
+    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, 279, 60, 18
+    PUSHBUTTON      "Check for updates", IDC_SET_CHECK_UPDATE,
+                    25, 304, 130, 20
 
     // ---- Bottom button row (full breathing space above) ----
     PUSHBUTTON      "Reset", IDC_SET_RESET,
-                    15, 273, 60, 18
-    DEFPUSHBUTTON   "OK", 1, 235, 273, 55, 18
-    PUSHBUTTON      "Cancel", 2, 295, 273, 55, 18
+                    15, 351, 60, 18
+    DEFPUSHBUTTON   "OK", 1, 235, 351, 55, 18
+    PUSHBUTTON      "Cancel", 2, 295, 351, 55, 18
 END

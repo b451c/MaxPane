@@ -1,5 +1,11 @@
 #pragma once
 
+// Current MaxPane version as a user-facing string. Bump in lockstep with
+// cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
+// the Settings dialog "About" section reads this verbatim, and the
+// updater compares it against GitHub Releases tag_name on startup.
+#define MAXPANE_VERSION_STRING "v2.0.3"
+
 // Layout constants
 static const int MAX_PANES = 16;
 static const int MAX_TREE_NODES = 31;  // full binary tree depth 4: 16 leaves + 15 branches

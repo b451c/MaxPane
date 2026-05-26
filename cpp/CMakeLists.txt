@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 2.0.2 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 2.0.3 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 2.0.2 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 2.0.3 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -46,6 +46,7 @@ add_library(reaper_maxpane SHARED
   src/nav_icons.cpp
   resources/nav_icons.gen.cpp
   src/drag_dock.cpp
+  src/updater.cpp
 )
 
 # SWELL dialog template generation (Sprint 3.3 / ADR-020).
@@ -144,7 +145,8 @@ elseif(WIN32)
   )
   # Sprint 1 Entry 12 — Psapi for EnumProcessModules / GetModuleInformation
   # used by the plugin module-DLL display-name resolver.
-  target_link_libraries(reaper_maxpane PRIVATE Psapi)
+  # v2.0.3 — winhttp for the synchronous update check (updater.cpp).
+  target_link_libraries(reaper_maxpane PRIVATE Psapi Winhttp)
 elseif(UNIX)
   set_target_properties(reaper_maxpane PROPERTIES
     SUFFIX ".so"
