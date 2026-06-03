@@ -471,6 +471,27 @@ void MaxPaneContainer::LoadState()
   ApplyPaneState(panes, MAX_PANES, true);
 }
 
+// F-39 — swap an already-open container's contents to the current project's
+// saved state. projStateOpenTimer Creates a CLOSED container (which loads state
+// via Create→LoadState); but when MaxPane is already open and a project with
+// saved captures loads, we must drop the current captures and reload, or the
+// new project's windows come back floating outside MaxPane. Mirrors the
+// OnTimer deferred-RPP reload but routes through LoadState so it covers both
+// the chunk and ProjExtState restore paths.
+void MaxPaneContainer::ReloadProjectState()
+{
+  if (!m_hwnd) return;
+  DBG("[MaxPane] ReloadProjectState: swapping contents to newly-loaded project\n");
+  m_captureQueue->CancelAll();
+  m_winMgr.ReleaseAll(false);   // detach + hide current captures (no toggle)
+  LoadState();                  // tree + ApplyPaneState for the current project
+  RECT rc;
+  GetClientRect(m_hwnd, &rc);
+  m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+  m_winMgr.RepositionAll(m_tree);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
 void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, bool deferActions)
 {
   bool needsCaptureTimer = false;
@@ -479,6 +500,7 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
     if (!m_tree.IsPaneIdUsed(i)) continue;
     if (panes[i].tabCount == 0) continue;
 
+    bool paneQueued = false;  // F-40 — any capture in this pane routed async
     for (int t = 0; t < panes[i].tabCount && t < MAX_TABS_PER_PANE; t++) {
       const char* winName = panes[i].tabs[t].name;
       if (!winName[0]) continue;
@@ -508,6 +530,7 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
         } else {
           m_captureQueue->EnqueueArbitrary(i, searchName, arbAction, arbCmd, deferActions);
           needsCaptureTimer = true;
+          paneQueued = true;
         }
       } else {
         for (int j = 0; j < NUM_KNOWN_WINDOWS; j++) {
@@ -519,6 +542,7 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
             if (!h && g_Main_OnCommand) {
               m_captureQueue->EnqueueKnown(i, j, deferActions);
               needsCaptureTimer = true;
+              paneQueued = true;
             } else if (h) {
               m_winMgr.CaptureByIndex(i, j, m_hwnd);
             }
@@ -528,40 +552,130 @@ void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, b
       }
     }
 
-    // Restore tab colors + pinned state from snapshot (C2 — ADR-027).
-    // Pinned must be re-applied via SetTabPinned (not raw flag write) so
-    // the tab gets sorted to its proper position — but capture order may
-    // not match the saved snapshot 1:1, so pin-by-name across the loaded
-    // tabs and let the sort handle layout.
-    int loadedTabs = m_winMgr.GetTabCount(i);
-    for (int t = 0; t < loadedTabs && t < panes[i].tabCount; t++) {
-      int ci = panes[i].tabs[t].colorIndex;
-      if (ci > 0 && ci < TAB_COLOR_COUNT) {
-        m_winMgr.SetTabColor(i, t, ci);
+    if (paneQueued) {
+      // F-40 — at least one tab here is being captured asynchronously, so the
+      // live order is still filling and will land in capture-completion order,
+      // not the saved order. Stash the saved order and defer color/pinned/
+      // active to FinalizeRestoreOrder() (applying them now would target the
+      // wrong, still-filling positions).
+      RestoreOrderPane& ro = m_restoreOrder[i];
+      ro.tabCount = panes[i].tabCount;
+      ro.activeTab = panes[i].activeTab;
+      for (int t = 0; t < panes[i].tabCount && t < MAX_TABS_PER_PANE; t++) {
+        safe_strncpy(ro.tabs[t].name, panes[i].tabs[t].name, sizeof(ro.tabs[t].name));
+        safe_strncpy(ro.tabs[t].actionCmd, panes[i].tabs[t].actionCommand,
+                     sizeof(ro.tabs[t].actionCmd));
+        ro.tabs[t].colorIndex = panes[i].tabs[t].colorIndex;
+        ro.tabs[t].pinned = panes[i].tabs[t].pinned;
       }
-    }
-    for (int snapT = 0; snapT < panes[i].tabCount; snapT++) {
-      if (!panes[i].tabs[snapT].pinned) continue;
-      const char* snapName = panes[i].tabs[snapT].name;
-      if (!snapName[0]) continue;
-      // Find matching loaded tab by name and pin it.
-      for (int liveT = 0; liveT < m_winMgr.GetTabCount(i); liveT++) {
-        const TabEntry* live = m_winMgr.GetTab(i, liveT);
-        if (live && strcmp(live->name, snapName) == 0) {
-          m_winMgr.SetTabPinned(i, liveT, true);
-          break;
+      m_paneAwaitingReorder[i] = true;
+    } else {
+      // All tabs captured synchronously, in snapshot order — apply now.
+      // Restore tab colors + pinned state from snapshot (C2 — ADR-027).
+      // Pinned must be re-applied via SetTabPinned (not raw flag write) so
+      // the tab gets sorted to its proper position.
+      int loadedTabs = m_winMgr.GetTabCount(i);
+      for (int t = 0; t < loadedTabs && t < panes[i].tabCount; t++) {
+        int ci = panes[i].tabs[t].colorIndex;
+        if (ci > 0 && ci < TAB_COLOR_COUNT) {
+          m_winMgr.SetTabColor(i, t, ci);
         }
       }
-    }
+      for (int snapT = 0; snapT < panes[i].tabCount; snapT++) {
+        if (!panes[i].tabs[snapT].pinned) continue;
+        const char* snapName = panes[i].tabs[snapT].name;
+        if (!snapName[0]) continue;
+        // Find matching loaded tab by name and pin it.
+        for (int liveT = 0; liveT < m_winMgr.GetTabCount(i); liveT++) {
+          const TabEntry* live = m_winMgr.GetTab(i, liveT);
+          if (live && strcmp(live->name, snapName) == 0) {
+            m_winMgr.SetTabPinned(i, liveT, true);
+            break;
+          }
+        }
+      }
 
-    // Set active tab
-    if (panes[i].activeTab >= 0 && panes[i].activeTab < m_winMgr.GetTabCount(i)) {
-      m_winMgr.SetActiveTab(i, panes[i].activeTab);
+      // Set active tab
+      if (panes[i].activeTab >= 0 && panes[i].activeTab < m_winMgr.GetTabCount(i)) {
+        m_winMgr.SetActiveTab(i, panes[i].activeTab);
+      }
     }
   }
 
   if (needsCaptureTimer) {
     StartCaptureTimer();
+  }
+}
+
+// F-40 — match a live tab to a saved restore slot. Prefer the stable action
+// command / FX identity (unique per FX / known window); fall back to display
+// name. Mirrors the round-trip keys used by Write/ReadPaneTabsStatic.
+static bool TabMatchesSaved(const TabEntry& live, const RestoreOrderSlot& saved)
+{
+  if (saved.actionCmd[0] && live.actionCmd[0])
+    return strcmp(saved.actionCmd, live.actionCmd) == 0;
+  return strcmp(saved.name, live.name) == 0;
+}
+
+void MaxPaneContainer::FinalizeRestoreOrder()
+{
+  for (int p = 0; p < MAX_PANES; p++) {
+    if (!m_paneAwaitingReorder[p]) continue;
+    m_paneAwaitingReorder[p] = false;
+
+    const RestoreOrderPane& want = m_restoreOrder[p];
+    if (m_winMgr.GetTabCount(p) <= 0) continue;
+
+    // 1. Apply pinned flags by identity. SetTabPinned re-partitions, but step 2
+    //    reorders to the exact saved sequence afterward, so the transient
+    //    partition order here is irrelevant.
+    for (int s = 0; s < want.tabCount && s < MAX_TABS_PER_PANE; s++) {
+      if (!want.tabs[s].pinned) continue;
+      for (int j = 0; j < m_winMgr.GetTabCount(p); j++) {
+        const TabEntry* t = m_winMgr.GetTab(p, j);
+        if (t && TabMatchesSaved(*t, want.tabs[s])) {
+          m_winMgr.SetTabPinned(p, j, true);
+          break;
+        }
+      }
+    }
+
+    // 2. Reorder live tabs to the saved sequence: selection-place each saved
+    //    slot from its current position, recording its final live index. Saved
+    //    tabs that never materialized (e.g. an FX that failed to resolve) map
+    //    to -1; unmatched live tabs keep their relative order at the end. Once
+    //    a slot is placed at `target`, later placements only touch indices
+    //    > target, so the recorded index stays valid.
+    int slotToLive[MAX_TABS_PER_PANE];
+    for (int s = 0; s < MAX_TABS_PER_PANE; s++) slotToLive[s] = -1;
+    int target = 0;
+    for (int s = 0; s < want.tabCount && s < MAX_TABS_PER_PANE &&
+                    target < m_winMgr.GetTabCount(p); s++) {
+      int found = -1;
+      for (int j = target; j < m_winMgr.GetTabCount(p); j++) {
+        const TabEntry* t = m_winMgr.GetTab(p, j);
+        if (t && TabMatchesSaved(*t, want.tabs[s])) { found = j; break; }
+      }
+      if (found < 0) continue;
+      if (found != target) m_winMgr.ReorderTab(p, found, target);
+      slotToLive[s] = target;
+      target++;
+    }
+
+    // 3. Re-derive color + active from each saved slot via its final live index
+    //    (identity-stable — correct even when some saved tabs never appeared,
+    //    which would shift a position-based mapping onto the wrong tabs).
+    for (int s = 0; s < want.tabCount && s < MAX_TABS_PER_PANE; s++) {
+      if (slotToLive[s] < 0) continue;
+      int ci = want.tabs[s].colorIndex;
+      if (ci > 0 && ci < TAB_COLOR_COUNT) m_winMgr.SetTabColor(p, slotToLive[s], ci);
+    }
+    if (want.activeTab >= 0 && want.activeTab < MAX_TABS_PER_PANE &&
+        slotToLive[want.activeTab] >= 0) {
+      m_winMgr.SetActiveTab(p, slotToLive[want.activeTab]);
+    }
+
+    InvalidateRect(m_hwnd, nullptr, FALSE);  // repaint tab bar in corrected order
   }
 }
 

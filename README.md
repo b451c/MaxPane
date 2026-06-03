@@ -59,6 +59,34 @@ remembers your layouts.
 
 Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
+## What's new in 2.0.5
+
+Bugfix release.
+
+- **Captured plugin windows restore into MaxPane on project open** instead
+  of coming back floating. Opening a saved project whose MaxPane had docked
+  FX now opens MaxPane and re-docks them — whether MaxPane was closed or
+  showing the launcher when you open the project.
+- **In-pane tab order preserved on restore.** Panes holding several
+  captured windows or plugins — especially FX across multiple tracks —
+  could come back in a scrambled order after a workspace or project
+  reload, because asynchronously re-captured windows landed in
+  capture-completion order rather than the saved order (and that order
+  was then saved back). Restore now re-sorts each pane to its saved
+  order, and re-derives tab colors + the active tab, once re-capture
+  finishes.
+- **Windows: capture-by-click of the MIDI editor** (and other
+  REAPER-native dynamic-title windows) now works, matching
+  macOS/Linux — previously the click was dropped and you had to use the
+  "Open Windows" submenu.
+
+This release needs user confirmation — if you reported one of these on
+the forum, please test and report whether it is fixed.
+
+See [CHANGELOG.md](CHANGELOG.md#205---2026-06-03) for details.
+
+---
+
 ## What's new in 2.0.4
 
 - **AU/VST/JSFX plugin window save & restore.** Capture a floating

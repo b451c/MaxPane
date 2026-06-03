@@ -14,6 +14,7 @@ PendingProjectState g_pendingProjectState[MaxPaneContainer::MAX_INSTANCES] = {};
 // Forward declarations — defined in main.cpp
 extern MaxPaneContainer* GetContainer();
 extern void OnRppStateReady();
+extern void OnProjectLoadMaybeOpen();  // F-39 — force-open from ProjExtState
 
 // =========================================================================
 // BeginLoadProjectState — reset buffers before loading
@@ -36,6 +37,14 @@ void OnBeginLoadProjectState(bool isUndo, project_config_extension_t* /*reg*/)
     g_pendingProjectState[i].reading = false;
     g_pendingProjectState[i].lineCount = 0;
   }
+
+  // F-39 — a project may carry MaxPane state in per-project ProjExtState rather
+  // than a <MAXPANE_STATE> chunk (the chunk is only written when a container is
+  // open at save time). That path never reaches OnRppStateReady, so without
+  // this hook MaxPane would not auto-open and the captured windows would come
+  // back floating. Arm a deferred poll that force-opens any instance whose
+  // ProjExtState is present once the project finishes loading.
+  OnProjectLoadMaybeOpen();
 }
 
 // =========================================================================

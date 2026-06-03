@@ -4,6 +4,58 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.0.5] - 2026-06-03
+
+**Bugfix release. Captured plugin windows now restore into MaxPane when a saved project is opened (no longer come back floating). In-pane tab/plugin order is preserved across restore. Windows capture-by-click now works for the MIDI editor.**
+
+### Fixed
+
+- **Captured windows restore into MaxPane on project open (no longer float).**
+  Opening a saved project whose MaxPane had docked FX could bring the plugin
+  windows back floating outside MaxPane, with MaxPane closed or showing the
+  empty launcher. A project stores its MaxPane layout in per-project state,
+  and that path had no trigger to open MaxPane on load (only the in-`.rpp`
+  chunk did). MaxPane now opens and restores its captured windows whenever
+  the opened project carries MaxPane state — whether MaxPane was closed or
+  already showing the launcher when you open the project. (reported on the
+  forum by todoublez)
+
+- **In-pane tab order is preserved across save → restore.** When a pane
+  held several captured windows or plugins — most visibly FX across
+  multiple tracks — the tabs could come back in a different order after
+  a workspace or project reload. Cause: windows that must be reopened
+  are re-captured through an asynchronous queue and landed in
+  capture-completion order rather than the saved order, and the
+  scrambled order was then written back to disk (making it sticky).
+  Restore now stashes the saved order for any pane filled
+  asynchronously and re-sorts its tabs back to that order — keyed on the
+  stable `(track GUID, FX GUID)` / window identity — once the queue
+  drains, before saving. Tab colors and the active tab are re-derived
+  from the corrected order, so those land on the right tabs too.
+  (reported on the forum by Rodulf)
+
+- **Windows: capture-by-click now works for the MIDI editor and other
+  REAPER-native dynamic-title windows.** On Windows, clicking such a
+  window in capture-by-click mode was silently dropped — the window has
+  no toggle action and resolves to REAPER's own module, which the
+  click resolver rejected — so you had to use the "Open Windows"
+  submenu instead. Capture-by-click now accepts these recognised native
+  windows, matching macOS and Linux behaviour.
+
+### Known limitations
+
+- After a captured plugin is restored, switching between tabs in a pane can
+  briefly show a stale/grey plugin view until you click the tab again; the
+  plugin redraws correctly on the second visit. A more complete redraw fix
+  is a planned follow-up.
+
+### Verify
+
+This release needs user confirmation. If you reported one of the issues
+above, please test whether it is fixed and report back on the forum —
+and if a window still misbehaves, say which window and under what exact
+steps (see the thread for what details help).
+
 ## [2.0.4] - 2026-05-26
 
 **Four-feature follow-up to v2.0.3. AU/VST/JSFX plugin windows now save and restore via workspaces. Hotkey binding moved inline (no more hunting through 200k REAPER actions). Update check on REAPER startup is non-blocking. Settings dialog ~26% smaller.**

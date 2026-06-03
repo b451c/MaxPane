@@ -1,5 +1,6 @@
 # Build artifacts
 cpp/build/
+cpp/build-debug/
 
 # External dependencies (cloned separately)
 cpp/sdk/
@@ -59,3 +60,4 @@ CLAUDE.md
 docs/v2/
 docs/sprint1/
 .claude/
+Testing/

@@ -216,6 +216,78 @@ void OnRppStateReady()
   }
 }
 
+// F-39 — force-open from per-project ProjExtState (owner decision: a project
+// that carries MaxPane state opens MaxPane, overriding the ADR-013 launcher-
+// empty default and was_visible). Mirrors the chunk path's rppReadyTimer, but
+// for the ProjExtState mechanism, which has no chunk and thus never reached
+// OnProcessExtensionLine/OnRppStateReady. Registered from OnBeginLoadProjectState
+// (fires on every project load — startup last-session AND File > Open). Polls a
+// few ticks because GetProjExtState only becomes readable once REAPER finishes
+// loading the project's ext-state section, slightly after load-begin.
+static int g_projOpenPollCounter = 0;
+static bool g_projOpenTimerActive = false;
+static void projStateOpenTimerFunc()
+{
+  g_projOpenPollCounter++;
+
+  ReaProject* proj = g_EnumProjects ? g_EnumProjects(-1, nullptr, 0) : nullptr;
+  bool anyOpened = false;
+  if (proj && g_GetProjExtState) {
+    for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
+      char sect[32];
+      if (i == 0) snprintf(sect, sizeof(sect), "MaxPane_cpp");
+      else        snprintf(sect, sizeof(sect), "MaxPane_cpp_%d", i);
+
+      char buf[64] = {};
+      g_GetProjExtState(proj, sect, "tree_version", buf, sizeof(buf));
+      bool hasState = (buf[0] != '\0');
+      if (!hasState && i == 0) {
+        // HasProjectState also probes the uppercase RPP-case variant.
+        char up[64] = {};
+        g_GetProjExtState(proj, "MAXPANE_CPP", "TREE_VERSION", up, sizeof(up));
+        hasState = (up[0] != '\0');
+      }
+      if (!hasState) continue;
+
+      MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
+      if (c && !c->GetHwnd()) {
+        DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState, force-opening\n", i);
+        c->Create();  // Create() → LoadState() restores the captured windows
+        anyOpened = true;
+      } else if (c) {
+        // Container already open (e.g. showing the launcher) when a project
+        // with saved state loads: swap its contents to the new project so the
+        // captures re-dock instead of coming back floating outside MaxPane.
+        DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState, reloading open container\n", i);
+        c->ReloadProjectState();
+        anyOpened = true;
+      }
+    }
+  }
+
+  // One-shot: stop once we've opened the instance(s) that have state, or after
+  // a short poll window (state should surface within a few ticks of load). A
+  // stateless project just polls out harmlessly and never opens MaxPane.
+  if (anyOpened || g_projOpenPollCounter >= 20) {
+    g_plugin_register("-timer", (void*)(void(*)())projStateOpenTimerFunc);
+    g_projOpenPollCounter = 0;
+    g_projOpenTimerActive = false;
+  }
+}
+
+// Called from OnBeginLoadProjectState (project_state.cpp) on every project load.
+// REAPER fires that callback several times per load; register the poll timer
+// only once (re-arming the counter each call so the window restarts).
+void OnProjectLoadMaybeOpen()
+{
+  if (!g_plugin_register) return;
+  g_projOpenPollCounter = 0;
+  if (!g_projOpenTimerActive) {
+    g_projOpenTimerActive = true;
+    g_plugin_register("timer", (void*)(void(*)())projStateOpenTimerFunc);
+  }
+}
+
 // Deferred startup timer — fires on REAPER main loop.
 //
 // Per ADR-013 (workspace launcher model): MaxPane opens empty at startup. No

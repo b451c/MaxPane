@@ -4,7 +4,6 @@
     <reapack name="reaper_maxpane" type="extension" desc="MaxPane: Nested Docker Layouts for REAPER">
       <metadata>
         <link rel="website">https://github.com/b451c/MaxPane</link>
-        <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/Hero.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_launcher.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/MaxPane-v2_settings.png</link>
         <link rel="screenshot">https://raw.githubusercontent.com/b451c/MaxPane/main/docs/images/maxpane-layout.png</link>
@@ -45,6 +44,24 @@
 ]]></description>
       </metadata>
 
+      <version name="2.0.5" author="b451c" time="2026-06-03T00:00:00Z">
+        <changelog><![CDATA[Bugfix release. Captured plugin windows now restore into MaxPane when a saved project is opened (no longer come back floating). In-pane tab/plugin order is preserved across restore. Windows capture-by-click now works for the MIDI editor.
+
+Fixed:
+- Captured windows restore into MaxPane on project open (no longer float). Opening a saved project whose MaxPane had docked FX could bring them back floating outside MaxPane, with MaxPane closed or showing the launcher. MaxPane now opens and re-docks its captured windows whenever the opened project carries MaxPane state, whether MaxPane was closed or already on the launcher.
+- In-pane tab order is preserved across save/restore. When a pane held several captured windows or plugins (most visibly FX across multiple tracks), the tabs could come back in a different order after a reload, because windows that must be reopened are re-captured asynchronously and landed in completion order. Restore now re-sorts each asynchronously-filled pane back to its saved order (by stable FX/window identity) before saving; tab colors and the active tab are re-derived from the corrected order.
+- Windows: capture-by-click now works for the MIDI editor and other REAPER-native dynamic-title windows (previously the click was dropped and you had to use the "Open Windows" submenu).
+
+This release needs user confirmation - if you reported one of these issues, please test and report back on the forum.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.5/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.0.5/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.0.5/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.5/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.0.5/reaper_maxpane-aarch64.so</source>
+      </version>
       <version name="2.0.4" author="b451c" time="2026-05-26T15:00:00Z">
         <changelog><![CDATA[Four-feature follow-up to v2.0.3. AU/VST/JSFX plugin windows now save and restore via workspaces. Hotkey binding moved inline (no more hunting through 200k REAPER actions). Update check on REAPER startup is non-blocking. Settings dialog ~26% smaller.
 

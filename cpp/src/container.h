@@ -44,6 +44,24 @@ class CaptureQueue;
 class FavoritesManager;
 class WorkspaceManager;
 
+// F-40 — saved per-tab restore order. When a pane's restore routes captures
+// through the async CaptureQueue, tabs land in capture-completion order rather
+// than the saved order (the saved ordinal is dropped at enqueue time and both
+// capture functions append). ApplyPaneState stashes the saved order here for
+// such panes; FinalizeRestoreOrder() re-sorts them back once the queue drains.
+// Self-contained (no PaneSnapshot dependency) so it can live in the header.
+struct RestoreOrderSlot {
+  char name[256];
+  char actionCmd[128];   // stable command / FX identity — preferred match key
+  int  colorIndex;
+  bool pinned;
+};
+struct RestoreOrderPane {
+  int tabCount;
+  int activeTab;
+  RestoreOrderSlot tabs[MAX_TABS_PER_PANE];
+};
+
 // Process stale_toggle_actions ExtState entries for the given section.
 // Closes any windows REAPER restored at startup that the user had captured
 // before quit but Shutdown's toggle didn't reliably switch off (REAPER caches
@@ -147,6 +165,12 @@ public:
 
   HWND GetHwnd() const { return m_hwnd; }
 
+  // F-39 — swap an already-open container's contents to the current project's
+  // saved state. The force-open timer only Creates a CLOSED container; when
+  // MaxPane is already open (e.g. showing the launcher) and a project with
+  // saved captures loads, this drops the current captures and reloads.
+  void ReloadProjectState();
+
   SplitTree& GetTree() { return m_tree; }
   const SplitTree& GetTree() const { return m_tree; }
   WindowManager& GetWinMgr() { return m_winMgr; }
@@ -203,6 +227,10 @@ private:
   std::unique_ptr<CaptureQueue> m_captureQueue;
   std::unique_ptr<FavoritesManager> m_favMgr;
   std::unique_ptr<WorkspaceManager> m_wsMgr;
+  // F-40 — restore-order deferral (see RestoreOrderPane). One slot per pane;
+  // m_paneAwaitingReorder[p] gates whether m_restoreOrder[p] is live.
+  RestoreOrderPane m_restoreOrder[MAX_PANES];
+  bool m_paneAwaitingReorder[MAX_PANES] = {};
   int m_hoverSplitter;      // branch index of splitter under mouse, -1 when none
   int m_hoverPane;          // pane id of tab under mouse, -1 when none
   int m_hoverTab;           // tab index under mouse, -1 when none; -2 = menu button
@@ -377,6 +405,10 @@ private:
   }
 
   void ApplyPaneState(const PaneSnapshot* panes, int maxPanes, bool deferActions);
+  // F-40 — re-sort any pane flagged in m_paneAwaitingReorder back to its saved
+  // order and re-derive color/pinned/active. Called once the capture queue
+  // drains, before the post-drain SaveState.
+  void FinalizeRestoreOrder();
   void RefreshLayout();
   void StartCaptureTimer();
   void StopCaptureTimerIfIdle();

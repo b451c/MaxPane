@@ -846,6 +846,12 @@ HWND WindowManager::ResolveCaptureSourceForClick(HWND underCursor)
     char title[256] = {};
     GetWindowText(cur, title, sizeof(title));
     if (title[0] && LookupToggleAction(title) > 0) return cur;
+    // F-35 — REAPER-native dynamic-title windows (e.g. the MIDI editor,
+    // "MIDI take: ...") have no toggle action and resolve to the system
+    // "reaper" module, so both acceptance checks here reject them and the
+    // click is silently dropped. macOS/Linux capture-by-click accepts any
+    // top-level window; mirror that for these recognised native windows.
+    if (title[0] && GetDynamicTitlePrefix(title)) return cur;
 
     char modName[128] = {};
     if (TryGetAppNameFromModule(cur, modName, sizeof(modName))) {
@@ -1416,6 +1422,12 @@ void WindowManager::SetActiveTab(int paneId, int tabIndex)
   TabEntry& cur = ps.tabs[tabIndex];
   if (cur.captured && cur.hwnd && IsWindow(cur.hwnd)) {
     ShowWindow(cur.hwnd, SW_SHOWNA);
+    // F-39 repaint — a freshly-shown reparented FX/plugin view stays grey
+    // until SWELL is told to lay out + display it; ShowWindow alone does not
+    // cascade (MEMORY: SWELL SetParent/InvalidateRect don't trigger
+    // setNeedsLayout/Display). Without this the plugin draws only after the
+    // user switches tabs again.
+    ForceViewLayoutAndDisplay(cur.hwnd);
   }
 }
 

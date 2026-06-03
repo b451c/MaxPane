@@ -1881,6 +1881,9 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           }
           if (!self->m_captureQueue->HasPending()) {
             self->StopCaptureTimerIfIdle();
+            // F-40 — async captures landed in completion order; re-sort any
+            // deferred pane back to its saved order before persisting.
+            self->FinalizeRestoreOrder();
             self->SaveState();
           }
         }
