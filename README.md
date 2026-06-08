@@ -19,46 +19,6 @@ remembers your layouts.
 
 ---
 
-## What's new in 2.0
-
-- **Drag-to-dock** — grab any REAPER window from outside MaxPane and drop
-  it on a pane. Live preview shows the four split zones, the tab-bar
-  zone, and the body-center forgiving zone. Shift+drop replaces the
-  active tab.
-- **Up to 8 MaxPane containers** in one REAPER session — independent
-  layouts, captured windows, and project state. Open via
-  `MaxPane: Open Container`, `MaxPane: Open Container 2`, … through 8.
-- **Floating mode** — detach the whole container into a top-level
-  window with native chrome. Multi-monitor positions remembered.
-  Always-on-top toggle for keyboard-monitor setups.
-- **Quick Switcher** — bind one hotkey. Type a few characters. Fuzzy-
-  match across every open tab (across every instance), every saved
-  workspace, every favorite. Enter activates.
-- **32 workspace slots + 32 favorite slots** — bind hotkeys to any of
-  them via REAPER's Actions dialog. Or use the single "Workspace
-  pickup" action to reach all 32 from one binding.
-- **Persistent navigation bar** at the top of every container.
-  Home, Drag-to-dock, Quick Switch, Save workspace, Load▾, Settings,
-  Support — actions that used to be buried in the right-click menu
-  surfaced as a clean toolbar.
-- **Workspace launcher** — when a container is empty, you see a card
-  grid of saved workspaces with mini layout previews. One click loads.
-  Right-click for Rename / Duplicate / Delete / Bind Hotkey.
-- **C-series UX wins** — Reopen last closed tab (Cmd+Shift+T style),
-  pinned tabs (sticky, sort to left, exempt from bulk close), tab
-  Close-Others / Close-to-Right / Close-All, always-on-top floating.
-- **Settings dialog** — auto-open, show nav bar, dark-mode override,
-  default workspace, support links, all in one place.
-- **Toast bar + custom Save dialog** — non-fatal feedback ("Workspace
-  saved as 'Edit Mode'") via a 3-second toast strip; rename / duplicate
-  collisions surface clearly instead of failing silently.
-- **Reliability** — close-leak bugs that haunted v1.5.x are gone. The
-  close mechanism uses `WM_CLOSE` as primary, action-toggle as fallback,
-  startup ghost cleanup as safety net (see
-  [ARCHITECTURE.md](ARCHITECTURE.md) for the full story).
-
-Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
-
 ## What's new in 2.1
 
 - **Screenset integration** — MaxPane's layout now round-trips through REAPER
@@ -142,6 +102,46 @@ See [CHANGELOG.md](CHANGELOG.md#205---2026-06-03) for details.
 See [CHANGELOG.md](CHANGELOG.md#204---2026-05-26) for the v2.0.4
 section including known limitations (project-bound restore,
 plugin-side window scaling, etc.).
+
+## What's new in 2.0
+
+- **Drag-to-dock** — grab any REAPER window from outside MaxPane and drop
+  it on a pane. Live preview shows the four split zones, the tab-bar
+  zone, and the body-center forgiving zone. Shift+drop replaces the
+  active tab.
+- **Up to 8 MaxPane containers** in one REAPER session — independent
+  layouts, captured windows, and project state. Open via
+  `MaxPane: Open Container`, `MaxPane: Open Container 2`, … through 8.
+- **Floating mode** — detach the whole container into a top-level
+  window with native chrome. Multi-monitor positions remembered.
+  Always-on-top toggle for keyboard-monitor setups.
+- **Quick Switcher** — bind one hotkey. Type a few characters. Fuzzy-
+  match across every open tab (across every instance), every saved
+  workspace, every favorite. Enter activates.
+- **32 workspace slots + 32 favorite slots** — bind hotkeys to any of
+  them via REAPER's Actions dialog. Or use the single "Workspace
+  pickup" action to reach all 32 from one binding.
+- **Persistent navigation bar** at the top of every container.
+  Home, Drag-to-dock, Quick Switch, Save workspace, Load▾, Settings,
+  Support — actions that used to be buried in the right-click menu
+  surfaced as a clean toolbar.
+- **Workspace launcher** — when a container is empty, you see a card
+  grid of saved workspaces with mini layout previews. One click loads.
+  Right-click for Rename / Duplicate / Delete / Bind Hotkey.
+- **C-series UX wins** — Reopen last closed tab (Cmd+Shift+T style),
+  pinned tabs (sticky, sort to left, exempt from bulk close), tab
+  Close-Others / Close-to-Right / Close-All, always-on-top floating.
+- **Settings dialog** — auto-open, show nav bar, dark-mode override,
+  default workspace, support links, all in one place.
+- **Toast bar + custom Save dialog** — non-fatal feedback ("Workspace
+  saved as 'Edit Mode'") via a 3-second toast strip; rename / duplicate
+  collisions surface clearly instead of failing silently.
+- **Reliability** — close-leak bugs that haunted v1.5.x are gone. The
+  close mechanism uses `WM_CLOSE` as primary, action-toggle as fallback,
+  startup ghost cleanup as safety net (see
+  [ARCHITECTURE.md](ARCHITECTURE.md) for the full story).
+
+Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
