@@ -4,6 +4,23 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.1] - 2026-06-08
+
+**Quick fix** for a regression in v2.1.0.
+
+### Fixed
+
+- **Docked toolbars no longer disappear when their pane is made small.** The
+  v2.1.0 ReaImGui size-guard — which stops large ImGui windows (e.g. TK Patchbay)
+  from shrinking REAPER's main window — was too broad: it floor-hid *any*
+  captured "arbitrary" window below ~200px, including toolbars. A docked toolbar
+  is legitimately small. The guard (dock min-clamp + pane floor-hide) is now
+  scoped to actual ReaImGui / Lua-gfx hosts only — toolbars, FX windows, and
+  other native captures are never hidden and can be docked as small as you like.
+
+*Verified on macOS (arm64); Windows and Linux binaries built by CI, not yet
+runtime-tested for this release.*
+
 ## [2.1.0] - 2026-06-08
 
 **Feature + stability release.** MaxPane's layout now round-trips through REAPER

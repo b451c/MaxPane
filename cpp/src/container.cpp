@@ -1391,11 +1391,12 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       // where the capture is squeezed below its content min and resizes REAPER's
       // own main window (collapse). SWELL's NSWindow minSize sends this to the
       // contentView (swell-dlg.mm:2462), so it also clamps a floating MaxPane on
-      // both axes. Only when such a capture is present, so empty / native-only
-      // MaxPanes still dock arbitrarily small. The perpendicular axis (driven by
-      // REAPER's window, which ignores this) is covered by the pane floor-hide
-      // in WindowManager::RepositionAll.
-      if (self && self->m_winMgr.HasCapturedArbitrary()) {
+      // both axes. Only when a ReaImGui host is captured, so MaxPanes holding
+      // only toolbars / FX / native windows (legitimately small) still dock
+      // arbitrarily small. The perpendicular axis (driven by REAPER's window,
+      // which ignores this) is covered by the pane floor-hide in
+      // WindowManager::RepositionAll.
+      if (self && self->m_winMgr.HasCapturedReaImGui()) {
         MINMAXINFO* mmi = (MINMAXINFO*)lParam;
         if (mmi) {
           if (mmi->ptMinTrackSize.x < ARB_DOCK_MIN_W) mmi->ptMinTrackSize.x = ARB_DOCK_MIN_W;

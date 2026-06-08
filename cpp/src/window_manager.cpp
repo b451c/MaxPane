@@ -448,6 +448,10 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
   return false;
 }
 
+// Defined below (after ResolveWindowDisplayName); fwd-declared so the capture
+// path can flag ReaImGui hosts for the Bug I size-guard scope (v2.1.1).
+static bool IsReaImGuiHostWindow(HWND hwnd);
+
 bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction, const char* actionCmd)
 {
   DBG("[MaxPane] CaptureArbitraryWindow: pane=%d name='%s' hwnd=%p action=%d cmd='%s'\n",
@@ -513,6 +517,15 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   if (tab.toggleAction > 0 && !tab.actionCmd[0]) {
     GetActionCommandString(tab.toggleAction, tab.actionCmd, sizeof(tab.actionCmd));
   }
+
+  // Bug I scope (ADR-045 / v2.1.1) — only a ReaImGui / Lua-gfx host gets the
+  // dock min-clamp + pane floor-hide; toolbars / FX / native captures are
+  // legitimately small and must stay visible. Class match, plus the toggle-state
+  // == -1 ReaImGui signal as a fallback for action-less click captures.
+  tab.isReaImGui = IsReaImGuiHostWindow(targetHwnd) ||
+                   (tab.toggleAction > 0 && g_GetToggleCommandState &&
+                    g_GetToggleCommandState(tab.toggleAction) == -1);
+  DBG("[MaxPane] CaptureArbitraryWindow: '%s' isReaImGui=%d\n", tab.name, tab.isReaImGui);
 
   // Detect dynamic-title windows (e.g. MIDI Editor "MIDI take: ...")
   const char* dynPrefix = GetDynamicTitlePrefix(displayName);
@@ -777,6 +790,37 @@ void WindowManager::ResolveWindowDisplayName(HWND hwnd, char* buf, int bufSize)
 #else
   snprintf(buf, (size_t)bufSize, "#untitled");
 #endif
+}
+
+// Bug I (ADR-045 / v2.1.1) — is this captured window a ReaImGui / Lua-gfx host?
+// Those are the ONLY captures that cascade-resize REAPER's own main window when
+// sized below their content min, so only they get the dock min-clamp + pane
+// floor-hide. Toolbars, FX UIs and native GDI windows are legitimately small and
+// must never be floor-hidden. Match by window class on the host and its direct
+// children (the ImGui render surface is a direct child). Cross-platform: the
+// class strings are stable and GetClassNameA works on SWELL (the ADR-044 probe
+// read them on macOS).
+static bool IsReaImGuiClass(const char* cls)
+{
+  return cls && (strcmp(cls, "reaper_imgui_context") == 0 ||
+                 strcmp(cls, "Lua_LICE_gfx_standalone") == 0);
+}
+static BOOL CALLBACK ReaImGuiChildScanProc(HWND child, LPARAM lp)
+{
+  char cls[64] = {};
+  GetClassName(child, cls, sizeof(cls));
+  if (IsReaImGuiClass(cls)) { *(bool*)lp = true; return FALSE; }
+  return TRUE;
+}
+static bool IsReaImGuiHostWindow(HWND hwnd)
+{
+  if (!hwnd || !IsWindow(hwnd)) return false;
+  char cls[64] = {};
+  GetClassName(hwnd, cls, sizeof(cls));
+  if (IsReaImGuiClass(cls)) return true;
+  bool found = false;
+  EnumChildWindows(hwnd, ReaImGuiChildScanProc, (LPARAM)&found);
+  return found;
 }
 
 // =========================================================================
@@ -1860,10 +1904,12 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         // REAPER's window, which ignores our reported min) by HIDING the capture
         // before the pane squeezes it small. Both axes guarded so it works for
         // any dock edge + floating. The reShow logic below repaints it when the
-        // pane grows back. Arbitrary-only — native GDI captures don't cascade.
-        if (tab.isArbitrary && (w < ARB_PANE_MIN || h < ARB_PANE_MIN)) {
+        // pane grows back. ReaImGui-only (v2.1.1) — toolbars / FX / native GDI
+        // captures don't cascade and are legitimately small, so they are never
+        // floor-hidden (regression in v2.1.0 hid docked toolbars in small panes).
+        if (tab.isReaImGui && (w < ARB_PANE_MIN || h < ARB_PANE_MIN)) {
           ShowWindow(tab.hwnd, SW_HIDE);
-          DBG("[MaxPane] Bug I: hid '%s' below floor pane=(w%d h%d) min=%d\n",
+          DBG("[MaxPane] Bug I: hid ReaImGui '%s' below floor pane=(w%d h%d) min=%d\n",
               tab.name, w, h, ARB_PANE_MIN);
           continue;
         }
@@ -1924,6 +1970,17 @@ bool WindowManager::HasCapturedArbitrary() const
     const PaneState& ps = m_panes[i];
     for (int t = 0; t < ps.tabCount; t++) {
       if (ps.tabs[t].captured && ps.tabs[t].isArbitrary) return true;
+    }
+  }
+  return false;
+}
+
+bool WindowManager::HasCapturedReaImGui() const
+{
+  for (int i = 0; i < MAX_PANES; i++) {
+    const PaneState& ps = m_panes[i];
+    for (int t = 0; t < ps.tabCount; t++) {
+      if (ps.tabs[t].captured && ps.tabs[t].isReaImGui) return true;
     }
   }
   return false;

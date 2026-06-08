@@ -16,6 +16,11 @@ struct TabEntry {
   RECT originalRect;
   bool captured;
   bool isArbitrary;
+  bool isReaImGui;               // ReaImGui / Lua-gfx host — the only capture kind
+                                 // that cascade-resizes REAPER's main window below its
+                                 // content min (Bug I / ADR-045). Gates the dock min-clamp
+                                 // + pane floor-hide so toolbars / FX / native captures
+                                 // (legitimately small) are never hidden. Set at capture.
   bool dynamicTitle;             // title changes at runtime (e.g. MIDI Editor) — use searchTitle as prefix
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
@@ -79,6 +84,10 @@ public:
   // window. Gates the dock min-size clamp so empty / native-only MaxPanes can
   // still dock arbitrarily small.
   bool HasCapturedArbitrary() const;
+  // Bug I (ADR-045 / v2.1.1) — true if any captured tab is a ReaImGui / Lua-gfx
+  // host. Gates the dock min-clamp; narrower than HasCapturedArbitrary (which
+  // also matched toolbars / FX that don't cascade and shouldn't be size-guarded).
+  bool HasCapturedReaImGui() const;
 
   // Accessors
   const PaneState* GetPaneState(int paneId) const;
