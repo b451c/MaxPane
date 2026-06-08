@@ -10,6 +10,12 @@
 // Global REAPER API function pointers (defined in globals.cpp)
 extern void (*g_DockWindowAddEx)(HWND hwnd, const char* name, const char* identstr, bool allowShow);
 extern void (*g_DockWindowRemove)(HWND);
+// v2.1 — screenset integration (ADR-049). Callback typed as void* to keep this
+// header free of the SDK screensetNewCallbackFunc typedef (cast at assignment,
+// same pattern as the hotkey-dialog pointers below).
+extern void (*g_screenset_registerNew)(char* id, void* callbackFunc, void* param);
+extern void (*g_screenset_unregister)(char* id);
+extern int  (*g_DockIsChildOfDock)(HWND hwnd, bool* isFloatingDockerOut);
 extern void (*g_Main_OnCommand)(int, int);
 extern const char* (*g_GetExtState)(const char*, const char*);
 extern void (*g_SetExtState)(const char*, const char*, const char*, bool);

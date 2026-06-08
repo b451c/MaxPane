@@ -186,17 +186,23 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
 {
   Layout lay = {};
 
+  // v2.0.6 #6 — the strip rect is always derivable from the container width and
+  // must be set even when we hide the bar below MIN_VISIBLE_W. The caller keeps
+  // reserving NAV_BAR_HEIGHT whenever the bar is toggled on (NavBarReservedHeight
+  // keys off the on/off pref, not the width), so Paint needs a valid barRect to
+  // fill the reserved strip; otherwise a narrow container shows a grey unpainted
+  // band where the bar would be.
+  lay.barRect.left   = containerRect.left;
+  lay.barRect.top    = containerRect.top;
+  lay.barRect.right  = containerRect.right;
+  lay.barRect.bottom = containerRect.top + NAV_BAR_HEIGHT;
+
   const int W = containerRect.right - containerRect.left;
   if (W < MIN_VISIBLE_W) {
     lay.visible = false;
     return lay;
   }
   lay.visible = true;
-
-  lay.barRect.left   = containerRect.left;
-  lay.barRect.top    = containerRect.top;
-  lay.barRect.right  = containerRect.right;
-  lay.barRect.bottom = containerRect.top + NAV_BAR_HEIGHT;
 
   const int btnY = lay.barRect.top + (NAV_BAR_HEIGHT - BUTTON_SIZE) / 2;
   const int btnBottom = btnY + BUTTON_SIZE;
@@ -347,10 +353,13 @@ Layout Compute(const RECT& containerRect)
 
 void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
 {
-  if (!lay.visible) return;
   Palette pal = GetPalette(dark);
 
-  // Bar background
+  // Bar background — always fill the reserved strip first, even when the bar is
+  // too narrow to lay out its buttons (lay.visible == false). The caller reserves
+  // NAV_BAR_HEIGHT whenever the bar is toggled on regardless of width, so an
+  // early !visible return left a grey unpainted band on narrow containers
+  // (v2.0.6 #6). barRect is valid in both cases (set before Compute's width gate).
   HBRUSH bg = CreateSolidBrush(pal.barBg);
   FillRect(hdc, (RECT*)&lay.barRect, bg);
   DeleteObject(bg);
@@ -361,6 +370,10 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
   HBRUSH edgeBrush = CreateSolidBrush(pal.barBottomEdge);
   FillRect(hdc, &edge, edgeBrush);
   DeleteObject(edgeBrush);
+
+  // Too narrow to lay out buttons / dividers / workspace label — the filled
+  // strip is the whole bar in this state. Done.
+  if (!lay.visible) return;
 
   // Dividers
   auto paintDivider = [&](const RECT& d) {

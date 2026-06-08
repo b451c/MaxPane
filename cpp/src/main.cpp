@@ -8,6 +8,9 @@
 #define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRemove
 #define REAPERAPI_WANT_DockWindowRefresh
+#define REAPERAPI_WANT_DockIsChildOfDock
+#define REAPERAPI_WANT_screenset_registerNew
+#define REAPERAPI_WANT_screenset_unregister
 #define REAPERAPI_WANT_Main_OnCommand
 #define REAPERAPI_WANT_GetExtState
 #define REAPERAPI_WANT_SetExtState
@@ -67,6 +70,7 @@
 #include "instance_manager.h"
 #include "workspace_manager.h"
 #include "project_state.h"
+#include "screenset.h"
 #include "quick_switcher.h"
 #include "hotkey_helper.h"
 #include "debug.h"
@@ -175,10 +179,15 @@ static void onAtExit()
     DBG("[MaxPane] onAtExit: instance %d hwnd=%p\n", id, (void*)c.GetHwnd());
     if (c.GetHwnd()) {
       c.SaveState();
+      // F-B (forum v2.0.6) — atexit (Cmd+Q / close-session) bypasses Shutdown,
+      // which was the only place floating geometry got saved. Persist it here
+      // so a window detached to a 2nd monitor reopens where the user left it.
+      c.PersistFloatingGeometry();
       MergeCapturesIntoStaleListForSection(c.ExtSection(), c.GetWinMgr());
       c.GetWinMgr().ReleaseAll(false);
     }
   });
+  MaxPaneScreenset::UnregisterAll();  // v2.1 (ADR-049) — clean teardown
   g_atexitSaved = true;
   DBG("[MaxPane] onAtExit: done\n");
 }
@@ -225,7 +234,9 @@ void OnRppStateReady()
 // few ticks because GetProjExtState only becomes readable once REAPER finishes
 // loading the project's ext-state section, slightly after load-begin.
 static int g_projOpenPollCounter = 0;
-static bool g_projOpenTimerActive = false;
+// Non-static — screenset.cpp reads this to defer to an in-flight project
+// restore (ADR-049); declared extern in project_state.h.
+bool g_projOpenTimerActive = false;
 static void projStateOpenTimerFunc()
 {
   g_projOpenPollCounter++;
@@ -571,6 +582,11 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   g_DockWindowAddEx = DockWindowAddEx;
   g_DockWindowRemove = DockWindowRemove;
+  // v2.1 — screenset integration (ADR-049). Cast the callback param through
+  // void* to match globals.h's opaque-pointer pattern.
+  g_screenset_registerNew = (void (*)(char*, void*, void*))screenset_registerNew;
+  g_screenset_unregister = screenset_unregister;
+  g_DockIsChildOfDock = DockIsChildOfDock;
   g_Main_OnCommand = Main_OnCommand;
   g_GetExtState = GetExtState;
   g_SetExtState = SetExtState;
@@ -715,6 +731,10 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     nullptr  // userData
   };
   rec->Register("projectconfig", &s_projConfig);
+
+  // v2.1 — register one screenset id per instance so REAPER Window sets
+  // round-trip MaxPane's layout (ADR-049). Twin of the projectconfig hook.
+  MaxPaneScreenset::RegisterAll();
 
   // Register atexit — reliable shutdown on macOS (Cmd+Q bypasses hookcommand 40004)
   rec->Register("atexit", (void*)onAtExit);

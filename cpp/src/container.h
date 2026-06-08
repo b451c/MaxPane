@@ -15,6 +15,12 @@ struct CaptureMode {
   // capture mode would self-trigger the timer immediately. Init to true at
   // every mode entry so the first real click after entry counts as rising.
   bool prevLmbDown;
+  // ADR-048 — live hover preview. The poll resolves the window under the
+  // cursor each tick so the armed pane can show "Capture: <name>" (green) or
+  // a "can't capture" hint before the user commits the click — no more blind
+  // grab of whatever happens to be under the pointer.
+  char hoverName[256];
+  bool hoverCapturable;
 };
 
 // Drag state: dragging a tab between panes or reordering within a pane
@@ -120,6 +126,11 @@ public:
   bool IsFloating() const { return m_floating; }
   void DetachToFloating();
   void RedockToContainer();
+  // F-B (forum v2.0.6) — persist current floating geometry to ExtState now.
+  // No-op when docked. Public so the atexit handler (Cmd+Q / close-session)
+  // and the WM_DESTROY path (docker close button) can save the last on-screen
+  // position/size — both bypass Shutdown(), which was the only saver before.
+  void PersistFloatingGeometry();
 
   int InstanceId() const { return m_instanceId; }
   // Per-instance identifiers for ExtState section, REAPER dock ident, and
@@ -412,6 +423,12 @@ private:
   void RefreshLayout();
   void StartCaptureTimer();
   void StopCaptureTimerIfIdle();
+  // ADR-048 — single arm/disarm entry points so the capture-mode crosshair
+  // (SetCaptureCursorActive) is pushed/popped exactly once regardless of which
+  // of the three arm sites or several disarm sites fires. EnterCaptureMode
+  // also resets the hover-preview state.
+  void EnterCaptureMode(int paneId);
+  void ExitCaptureMode();
 
   void OnSize(int cx, int cy);
   void OnPaint(HDC hdc);

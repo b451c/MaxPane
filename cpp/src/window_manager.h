@@ -54,7 +54,12 @@ public:
 
   // Tab management
   void SetActiveTab(int paneId, int tabIndex);
-  void CloseTab(int paneId, int tabIndex);
+  // returnVisible=false (default) closes/hides the captured window (the
+  // ghost-safe close path). returnVisible=true detaches it back to REAPER as a
+  // free-floating, VISIBLE window (v2.0.6 "Release"). Only the user-facing
+  // Release menu actions pass true; every internal/close caller keeps the
+  // default so the B14/B16/Bug-G ghost-prevention path is byte-equivalent.
+  void CloseTab(int paneId, int tabIndex, bool returnVisible = false);
   void MoveTab(int srcPane, int srcTab, int dstPane);
   void ReorderTab(int paneId, int fromIndex, int toIndex);
   void SetTabColor(int paneId, int tabIndex, int colorIndex);
@@ -70,11 +75,22 @@ public:
   void ReleaseAllSelective(const int* staleActions, int staleCount);
   void RepositionAll(const SplitTree& tree);
   bool CheckAlive();  // returns true if any tabs were removed or recaptured
+  // Bug I — true if any pane holds a captured arbitrary (ReaImGui / Lua-gfx)
+  // window. Gates the dock min-size clamp so empty / native-only MaxPanes can
+  // still dock arbitrarily small.
+  bool HasCapturedArbitrary() const;
 
   // Accessors
   const PaneState* GetPaneState(int paneId) const;
   const TabEntry* GetActiveTabEntry(int paneId) const;
   const TabEntry* GetTab(int paneId, int tabIndex) const;
+  // v2.0.6 "Release" — true if this captured tab can be safely returned to
+  // REAPER as a visible floating window. Known/toggle windows, FX (TrackFX
+  // identity) and toolbars qualify. ReaImGui / plain arbitrary click-captures
+  // do NOT: reparenting a live ImGui window without firing its own teardown
+  // crashes in Docker::moveTo (ADR-035), so the Release menu item is hidden
+  // for them (they keep "Close Tab"). null/uncaptured → false.
+  bool CanReturnVisible(const TabEntry* tab) const;
   int GetTabCount(int paneId) const;
   bool IsWindowCaptured(HWND hwnd) const;
 
@@ -106,9 +122,19 @@ public:
   // plugin window itself. SWELL uses the v2.0 walk-to-top behaviour.
   static HWND ResolveCaptureSourceForClick(HWND underCursor);
 
+  // ADR-048 — capture allow-list. A window embedded in REAPER's MAIN window
+  // (GetParent == g_reaperMainHwnd) is core UI (arrange / ruler / TCP /
+  // transport) and is grabbable ONLY if it positively identifies as a real
+  // dockable surface (known toggle action, a " (docked)" frame, or a
+  // recognised dynamic-title native window). Top-level windows (floating FX /
+  // ReaImGui / dockers) are always grabbable. Rejecting the unidentified
+  // children stops capture-by-click from tearing REAPER's edit view into a
+  // pane and leaving the main window blank (forum v2.0.6).
+  static bool IsCapturableTarget(HWND topLevel, const char* title);
+
 private:
   PaneState m_panes[MAX_PANES];
   HWND m_containerHwnd;  // stored for CheckAlive recapture
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
-  void DoRelease(TabEntry& tab, bool toggleOff = true);
+  void DoRelease(TabEntry& tab, bool toggleOff = true, bool returnVisible = false);
 };

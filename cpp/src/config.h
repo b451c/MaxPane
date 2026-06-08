@@ -4,7 +4,7 @@
 // cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
 // the Settings dialog "About" section reads this verbatim, and the
 // updater compares it against GitHub Releases tag_name on startup.
-#define MAXPANE_VERSION_STRING "v2.0.5"
+#define MAXPANE_VERSION_STRING "v2.1.0"
 
 // Layout constants
 static const int MAX_PANES = 16;
@@ -176,3 +176,17 @@ static const int NAVBAR_TOOLTIP_DELAY_MS  = 600;
 // click-frame jank threshold of ~16 ms).
 static const int TIMER_ID_WORKSPACE_FLUSH = 8;
 static const int WORKSPACE_FLUSH_DELAY_MS = 30;
+
+// Bug I — a captured ReaImGui / Lua-gfx window (ReaMD, TK Patchbay) resizes
+// REAPER's own main window when it is squeezed below its ImGui content minimum.
+// Two-part guard, active only while such a capture is present:
+//   ARB_DOCK_MIN_*  — minimum size the container reports via WM_GETMINMAXINFO so
+//                     REAPER won't shrink the dock (on the axis it controls via
+//                     the divider) to the collapse point.
+//   ARB_PANE_MIN    — pane size below which we HIDE the capture instead of
+//                     sizing it (covers the perpendicular axis, driven by
+//                     REAPER's window, which ignores our reported min). The
+//                     window reappears, repainted, once the pane grows back.
+static const int ARB_DOCK_MIN_W = 360;
+static const int ARB_DOCK_MIN_H = 280;
+static const int ARB_PANE_MIN   = 200;

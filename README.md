@@ -59,6 +59,40 @@ remembers your layouts.
 
 Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 
+## What's new in 2.1
+
+- **Screenset integration** — MaxPane's layout now round-trips through REAPER
+  "Window sets". Save a Window set with MaxPane configured, recall it later,
+  and MaxPane restores its panes and re-captures its windows automatically
+  (previously the windows came back floating and you had to re-open MaxPane
+  by hand).
+- **Dark-mode "Auto" follows the system again** — under REAPER (which forces an
+  Aqua app appearance) "Auto (follow system)" was stuck on light even in macOS
+  Dark mode; it now reads the OS setting directly.
+- **Stability pass** — manager windows (Routing Matrix / Track Manager) no
+  longer float after closing MaxPane; tab bar + dividers redraw correctly after
+  reopen; tab-bar hover works under a focused plugin tab; floating MaxPane
+  position/monitor persists across Cmd+Q; releasing a captured toolbar no longer
+  fires its buttons; captured ReaImGui windows (ReaMD) no longer shrink REAPER's
+  main window; Windows startup lag reduced.
+- **Capture-by-click redesigned** — safe around modal dialogs and the core edit
+  view, with a crosshair cursor, hover name + outline preview, and Esc to cancel.
+- **"Release Window" returns the window to REAPER visible (floating)** for all
+  types; "Close Tab" stays the destructive action.
+
+**Known limitations:** ReaImGui scripts with large UIs (e.g. TK Patchbay) can
+still shrink REAPER's main window if their pane is made very small (full
+per-window fix in v2.2); a *docked* MaxPane on a second monitor may return to
+the main monitor after restart (use floating mode, which remembers its monitor);
+changing the macOS appearance while REAPER runs needs a Settings re-open to take
+effect.
+
+**Platform testing:** 2.1.0 is verified on **macOS (arm64)**. The Windows and
+Linux binaries are built by CI but not yet runtime-tested for this release —
+please report any issues.
+
+Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 2.0.5
 
 Bugfix release.

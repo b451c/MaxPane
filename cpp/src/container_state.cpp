@@ -151,6 +151,20 @@ void MaxPaneContainer::CaptureFloatGeometry()
   m_floatH = h;
 }
 
+// F-B (forum v2.0.6) — persist current floating geometry to ExtState now.
+// The only pre-existing saver was Shutdown()'s `!g_atexitSaved && m_floating`
+// block, but the two real session-end paths bypass Shutdown(): onAtExit (Cmd+Q
+// / close-session, see main.cpp) and WM_DESTROY (REAPER docker close button).
+// Both now call this so the last on-screen position/size survives a reopen
+// instead of falling back to defaults (100,100,800,600) on the primary monitor.
+// No-op when docked; CaptureFloatGeometry rejects pathologic teardown rects.
+void MaxPaneContainer::PersistFloatingGeometry()
+{
+  if (!m_floating) return;
+  CaptureFloatGeometry();
+  SaveFloatingState();
+}
+
 void MaxPaneContainer::SaveState()
 {
   // Don't persist the temporary solo layout — it would overwrite the real tree

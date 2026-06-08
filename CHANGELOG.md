@@ -4,6 +4,93 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.1.0] - 2026-06-08
+
+**Feature + stability release.** MaxPane's layout now round-trips through REAPER
+"Window sets" (screensets) — recalling a set restores MaxPane and re-captures
+its windows instead of leaving them floating. Plus the full v2.0.6 bugfix cycle
+(manager-window float-on-close, restore redraw, ReaImGui collapse for ReaMD,
+floating geometry, toolbar release, Windows startup lag, and more) and a
+dark-mode "Auto" fix. Bumped to 2.1.0 (minor) for the screenset feature.
+
+**Platform testing:** verified on **macOS (arm64)**. The Windows and Linux
+binaries are produced by CI but have **not yet been runtime-tested** for this
+release — please report any issues on the forum or GitHub.
+
+> Most of the *Fixed* and *Changed* items below were developed as the
+> **v2.0.6 bugfix cycle** — triaged from forum thread 307267 (page 2) after the
+> 2.0.5 release — but v2.0.6 was never released on its own. They ship here,
+> folded into 2.1.0, alongside the new screenset feature and the dark-mode fix.
+
+### Added
+
+- **Screenset integration.** MaxPane now registers a REAPER screenset callback,
+  so saving and recalling a Window set restores MaxPane's pane layout and
+  re-captures its windows automatically. Previously a recalled Window set
+  re-opened the formerly-captured windows *floating* (REAPER reopened the
+  native windows but knew nothing about MaxPane), and you had to re-open
+  MaxPane by hand for them to snap back in. The screenset blob reuses the same
+  serialization as the project `<MAXPANE_STATE>` chunk and drives the same
+  restore path; it defers to a project-load restore when one is in flight so
+  the two never fight. (reported on the forum by DerTonmeister, todoublez)
+
+### Fixed
+
+- **Dark mode "Auto (follow system)" now follows the macOS system setting.** It
+  was stuck on the light palette even in system Dark mode, because REAPER ships
+  with `NSRequiresAquaSystemAppearance` and forces an Aqua app appearance;
+  MaxPane was reading that forced appearance. It now reads the OS-wide
+  appearance (`AppleInterfaceStyle`) directly. (Force dark / Force light were
+  unaffected.)
+- **Manager windows no longer left floating when MaxPane closes.** Capturing
+  Routing Matrix / Track Manager (or other toggle-action manager windows) and
+  closing MaxPane could leave them floating, because the toggle and `WM_CLOSE`
+  both no-op while the window is MaxPane's child. Release now retries the toggle
+  after detaching so REAPER's visibility state is re-synced.
+- **Tab bar and pane dividers no longer blank after reopening** until you grab a
+  splitter — the container view is now force-laid-out and redrawn at the end of
+  the restore.
+- **Tab-bar hover works when a captured FX/plugin tab has focus.** A focused
+  plugin window used to steal the mouse-moved stream; the container now has an
+  always-active tracking area.
+- **Captured ReaImGui windows no longer shrink REAPER's main window** when their
+  pane is made small (fully fixed for ReaMD and similar; see Known limitations
+  for large-UI scripts like TK Patchbay).
+- **TK Patchbay (and other ReaImGui scripts) no longer crash when their pane is
+  minimized.** A captured ReaImGui window in a pane shrunk to zero area is now
+  hidden rather than sized into an invalid state that could trip an
+  `ImGui_EndChild` assertion. (reported on the forum by Rodulf)
+- **Floating MaxPane position / size / monitor persists** across Cmd+Q and close.
+- **Releasing a captured toolbar no longer fires its buttons.**
+- **Windows:** reduced the 10-15s startup lag (module-enumeration caching).
+- **macOS:** ReaImGui / script windows (empty native title) now appear in the
+  "Open windows" capture menu, matching Windows.
+- **Nav bar no longer shows a grey un-painted band** when the container is narrow.
+
+### Changed
+
+- **"Release Window" returns the captured window to REAPER visible (floating)**
+  for all window types — "Close Tab" remains the separate destructive action.
+- **Capture-by-click redesigned** — modal-dialog and core-window safety guards
+  (can no longer freeze REAPER by grabbing a modal, or tear out the main edit
+  view), a crosshair cursor while armed, a hover preview of the target's name +
+  outline, and Esc to cancel.
+- Removed the tab "Close Others / Close to Right / Close All" submenu (over-
+  engineered for MaxPane's tab counts); the launcher "Capture a window" button
+  now stays visible while you arm a click-capture.
+
+### Known limitations
+
+- **ReaImGui windows with large UIs (e.g. TK Patchbay)** can still shrink
+  REAPER's main window if their MaxPane pane is made very small. ReaMD and
+  standard windows are fine. A per-window adaptive minimum is planned for v2.2.
+- **A docked MaxPane placed on a second monitor** may return to the main monitor
+  after a restart — REAPER manages docked-window position and does not reliably
+  persist a second-monitor docker. Use MaxPane's **floating mode**, which
+  remembers its monitor across restart.
+- **Switching the macOS appearance while REAPER is running** does not live-update
+  MaxPane; re-open Settings (or restart) to pick up the new Light/Dark setting.
+
 ## [2.0.5] - 2026-06-03
 
 **Bugfix release. Captured plugin windows now restore into MaxPane when a saved project is opened (no longer come back floating). In-pane tab/plugin order is preserved across restore. Windows capture-by-click now works for the MIDI editor.**

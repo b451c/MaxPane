@@ -431,15 +431,7 @@ bool MaxPaneContainer::OnHomeOverlayClick(int x, int y)
       }
     }
     CloseHomeOverlay();
-    if (paneId >= 0) {
-      m_captureMode.active = true;
-      m_captureMode.targetPaneId = paneId;
-      // Sprint 1 Entry 13 — nav-bar capture-button click is already-down
-      // when the timer fires; init true so the first NEW click is rising.
-      m_captureMode.prevLmbDown = true;
-      InvalidateRect(m_hwnd, nullptr, FALSE);
-      StartCaptureTimer();
-    }
+    EnterCaptureMode(paneId);  // ADR-048 — single arm path (guards paneId<0)
     return true;
   }
   // Clicked outside cards/CTA → close overlay (non-destructive return).
@@ -456,8 +448,7 @@ void MaxPaneContainer::EnterDragMode()
   // Cancel any overlapping UI states.
   if (m_homeOverlay) CloseHomeOverlay();
   if (m_captureMode.active) {
-    KillTimer(m_hwnd, TIMER_ID_CAPTURE);
-    m_captureMode.active = false;
+    ExitCaptureMode();  // ADR-048 — pops the capture crosshair
   }
 
   DragDock::Reset(m_drag);

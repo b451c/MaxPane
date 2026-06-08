@@ -42,9 +42,13 @@ struct Layout {
 Layout Compute(const RECT& containerRect, const WorkspaceManager& wsMgr);
 
 // Render the hero into hdc. `hoverTarget` should be HIT_NONE, HIT_CAPTURE_BUTTON,
-// or a card index in [0, cardCount).
+// or a card index in [0, cardCount). `captureArmed` (v2.0.6) morphs the CTA into
+// a "Click a window to capture..." armed state while capture-by-click is waiting.
+// `captureHoverName` (ADR-048), when armed and non-empty, shows the resolved
+// target name ("Capture: <name>") so the user reads what a click will grab.
 void Paint(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
-           int hoverTarget, bool darkMode);
+           int hoverTarget, bool darkMode, bool captureArmed = false,
+           const char* captureHoverName = nullptr);
 
 // Render a tooltip for the given card showing the windows captured in that
 // workspace. Called after Paint so it draws above cards.

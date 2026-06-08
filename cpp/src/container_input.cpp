@@ -336,6 +336,7 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
   if (IsInLauncherMode()) {
     RECT rc;
     GetClientRect(m_hwnd, &rc);
+    rc.top += NavBarReservedHeight();  // ADR-048 — match Paint's launcher origin
     Launcher::Layout lay = Launcher::Compute(rc, *m_wsMgr);
     int hit = Launcher::HitTest(lay, x, y);
     if (hit != m_launcherHover) {

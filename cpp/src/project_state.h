@@ -17,6 +17,18 @@ struct PendingProjectState {
 // slots 1..N-1 to <MAXPANE_STATE_1>..<MAXPANE_STATE_N-1>.
 extern PendingProjectState g_pendingProjectState[MaxPaneContainer::MAX_INSTANCES];
 
+// v2.1 (ADR-049) — true while a project-load open-poll is in flight (defined in
+// main.cpp). The screenset LOAD path defers to it so a project restore wins.
+extern bool g_projOpenTimerActive;
+
+// Serialize a container's tree + pane tabs into a StateAccessor (KEY=VALUE).
+// Shared by the RPP <MAXPANE_STATE> chunk path (OnSaveExtensionConfig) and the
+// screenset SAVE_STATE path so the blob format has a single source of truth.
+// Returns false on a corrupt tree (caller writes nothing). Defined in
+// project_state.cpp.
+class StateAccessor;  // fwd (state_accessor.h)
+bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc);
+
 // project_config_extension_t callbacks
 bool OnProcessExtensionLine(const char* line, ProjectStateContext* ctx,
                             bool isUndo, project_config_extension_t* reg);

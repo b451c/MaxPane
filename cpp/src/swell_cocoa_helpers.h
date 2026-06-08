@@ -46,6 +46,57 @@ void SetWindowAlwaysOnTop(HWND hwnd, bool onTop);
 // the icon against its backdrop.
 void BlitBGRABitmapMacOS(HDC hdc, const void* bgra, int sw, int sh,
                         int dx, int dy, int dw, int dh);
+
+// F-H2 (forum v2.0.6) — add an always-active NSTrackingArea to the container
+// view so mouseMoved: (tab-bar hover) keeps firing even when a captured FX/AU
+// plugin tab becomes the key window. Cocoa only delivers mouseMoved to the key
+// window otherwise; macOS-specific (Win32/GTK deliver move events regardless).
+void EnableContainerMouseTracking(HWND hwnd);
+
+// ADR-048 (forum v2.0.6) — capture-by-click safety. Reparenting a window
+// while an app-modal dialog is up (e.g. REAPER's "Save changes?" on quit)
+// freezes REAPER's modal run loop: the captured dialog goes dead and REAPER
+// is bricked (a user had to force-quit). [NSApp modalWindow] is non-nil for
+// the whole modal session (SWELL itself uses this as its authoritative modal
+// check), so the capture poll refuses to grab anything while it is set.
+bool IsAppModalActive();
+// Per-window backstop to IsAppModalActive(): reject the specific resolved
+// target if it is the modal window itself, a sheet, or a sheet's parent.
+// Returns true (safe) for ordinary REAPER/plugin/floating windows.
+bool IsWindowSafeToCapture(HWND hwnd);
+
+// ADR-048 — true when `candidate` lives inside REAPER's MAIN NSWindow (core
+// arrange/ruler/TCP, or a window docked in the main docker) vs a separate
+// window. The capture allow-list uses this (GetParent is unreliable on macOS
+// SWELL — floating windows report g_reaperMainHwnd as their owner).
+bool IsEmbeddedInMainWindow(HWND candidate);
+
+// ADR-048 — capture-by-click cursor feedback. While armed to pick a window,
+// show a crosshair so it's obvious capture mode is live. A naive [NSCursor push]
+// reverts because AppKit's per-window cursor rects re-assert on every
+// mouse-moved (the reason the earlier crosshair attempt was abandoned);
+// disabling cursor rects across the app's windows for the brief armed window
+// stops the re-assertion. Reversed on disarm. Idempotent — safe to call
+// repeatedly. macOS only (Win32/GTK manage the cursor per WM_SETCURSOR).
+void SetCaptureCursorActive(bool on);
+// Re-assert the capture crosshair from the poll (covers windows that don't
+// emit mouseMoved + the still-mouse case). No-op unless armed.
+void RefreshCaptureCursor();
+
+// ADR-048 — capture-by-click cancel key. SWELL's GetAsyncKeyState(VK_ESCAPE)
+// always returns 0 on macOS (swell-kb.mm maps only mouse + modifier keys), so
+// the capture poll can't see Escape that way. Query the Escape key (virtual
+// keycode 53) directly via CoreGraphics, focus-independent.
+bool IsCaptureCancelKeyDown();
+
+// ADR-048 — capture hover-highlight overlay. ShowCaptureHighlight outlines the
+// window under the crosshair (pass `nullptr` to hide); HideCaptureHighlight is
+// called before the committing WindowFromPoint so the click hits the real
+// target; IsCaptureHighlightWindow lets the poll skip ticks where the cursor
+// sits on the overlay (it's click-through, so it must be excluded from resolve).
+void ShowCaptureHighlight(HWND target);
+void HideCaptureHighlight();
+bool IsCaptureHighlightWindow(HWND hwnd);
 #elif defined(_WIN32)
 // Sprint 1 Entry 6 — native Win32 implementations. The helpers were
 // previously {} stubs on every non-Apple platform; F1a Detach-to-Floating
@@ -123,6 +174,36 @@ inline void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)
   SetWindowPos(hwnd, onTop ? HWND_TOPMOST : HWND_NOTOPMOST,
                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
+// Win32 delivers WM_MOUSEMOVE to the window under the cursor regardless of
+// focus, so the macOS key-window hover gap doesn't exist here.
+inline void EnableContainerMouseTracking(HWND) {}
+
+// ADR-048 — capture-by-click safety (see __APPLE__ block). A native Win32
+// modal disables its owner; REAPER's main window is disabled for the whole
+// modal session, so GW_ENABLEDPOPUP / IsWindowEnabled is the modal marker.
+inline bool IsAppModalActive()
+{
+  extern HWND g_reaperMainHwnd;
+  return g_reaperMainHwnd && !IsWindowEnabled(g_reaperMainHwnd);
+}
+inline bool IsWindowSafeToCapture(HWND hwnd)
+{
+  if (!hwnd) return false;
+  if (IsAppModalActive()) return false;
+  // A modal dialog disables its owner; refuse a window whose owner is disabled.
+  HWND owner = GetWindow(hwnd, GW_OWNER);
+  if (owner && !IsWindowEnabled(owner)) return false;
+  return true;
+}
+// Win32 cursor is managed per WM_SETCURSOR; no app-wide override yet.
+inline void SetCaptureCursorActive(bool) {}
+inline void RefreshCaptureCursor() {}
+// Win32 GetAsyncKeyState(VK_ESCAPE) works natively.
+inline bool IsCaptureCancelKeyDown() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }
+// Hover-highlight overlay not yet implemented on Win32 (would need a layered window).
+inline void ShowCaptureHighlight(HWND) {}
+inline void HideCaptureHighlight() {}
+inline bool IsCaptureHighlightWindow(HWND) { return false; }
 #else
 inline void ForceViewLayoutAndDisplay(HWND) {}
 inline bool IsSystemDarkMode() { return false; }
@@ -131,4 +212,24 @@ inline void ApplyFloatingWindowChrome(HWND, const char*) {}
 inline void ClampRectToVisibleScreen(RECT*) {}
 inline void OpenUrlPlatform(const char*) {}
 inline void SetWindowAlwaysOnTop(HWND, bool) {}
+inline void EnableContainerMouseTracking(HWND) {}
+// ADR-048 — capture-by-click safety. Generic SWELL_DialogBox disables all
+// other top-level windows during a modal (swell-dlg-generic.cpp), so the
+// disabled REAPER main window is a reliable modal marker on Linux/GTK.
+inline bool IsAppModalActive()
+{
+  extern HWND g_reaperMainHwnd;
+  return g_reaperMainHwnd && !IsWindowEnabled(g_reaperMainHwnd);
+}
+inline bool IsWindowSafeToCapture(HWND hwnd)
+{
+  if (!hwnd) return false;
+  return !IsAppModalActive();
+}
+inline void SetCaptureCursorActive(bool) {}
+inline void RefreshCaptureCursor() {}
+inline bool IsCaptureCancelKeyDown() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }
+inline void ShowCaptureHighlight(HWND) {}
+inline void HideCaptureHighlight() {}
+inline bool IsCaptureHighlightWindow(HWND) { return false; }
 #endif

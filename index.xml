@@ -44,6 +44,43 @@
 ]]></description>
       </metadata>
 
+      <version name="2.1.0" author="b451c" time="2026-06-08T00:00:00Z">
+        <changelog><![CDATA[Feature + stability release. New: MaxPane's layout now round-trips through REAPER Window sets (screensets). Plus the full v2.0.6 bugfix cycle and a dark-mode fix.
+
+Platform testing: verified on macOS (arm64). Windows and Linux binaries are built by CI but not yet runtime-tested for this release - please report issues on the forum or GitHub.
+
+Added:
+- Screenset integration: saving and recalling a REAPER Window set now restores MaxPane's layout and re-captures its windows, instead of leaving them floating until you re-open MaxPane manually.
+
+Fixed:
+- Dark mode "Auto (follow system)" now follows the macOS system setting (it was stuck on the light palette under REAPER, which forces an Aqua app appearance).
+- Manager windows (Routing Matrix, Track Manager) are no longer left floating when MaxPane is closed.
+- Tab bar and pane dividers no longer stay blank after reopening MaxPane until you nudge a splitter.
+- Tab-bar hover works when a captured FX/plugin tab has keyboard focus.
+- Captured ReaImGui windows (e.g. ReaMD) no longer shrink REAPER's main window when their pane is made small.
+- Floating MaxPane position/size/monitor persists across Cmd+Q and close.
+- Releasing a captured toolbar no longer randomly fires its buttons.
+- Windows: reduced the 10-15s startup lag.
+- macOS: ReaImGui / script windows now appear in the "Open windows" capture menu.
+- Nav bar no longer shows a grey band when MaxPane is narrow.
+
+Changed:
+- "Release Window" now returns the captured window to REAPER visible (floating) for all window types; "Close Tab" stays the destructive action.
+- Capture-by-click redesigned: modal-dialog + core-window safety guards, crosshair cursor, hover name + outline preview, Esc to cancel.
+
+Known limitations:
+- ReaImGui windows with large UIs (e.g. TK Patchbay) can still shrink REAPER's main window if their MaxPane pane is made very small; ReaMD and standard windows are fine. Full per-window fix in v2.2.
+- A docked MaxPane placed on a second monitor may return to the main monitor after a restart (REAPER manages docked-window position). Use MaxPane's floating mode, which remembers its monitor.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.1.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.1.0/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.1.0/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.1.0/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.1.0/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.0.5" author="b451c" time="2026-06-03T00:00:00Z">
         <changelog><![CDATA[Bugfix release. Captured plugin windows now restore into MaxPane when a saved project is opened (no longer come back floating). In-pane tab/plugin order is preserved across restore. Windows capture-by-click now works for the MIDI editor.
 

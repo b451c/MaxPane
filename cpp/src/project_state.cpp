@@ -107,16 +107,19 @@ bool OnProcessExtensionLine(const char* line, ProjectStateContext* ctx,
 // SaveExtensionConfig — write one <MAXPANE_STATE[_N]> chunk per live instance
 // =========================================================================
 
-static void WriteOneInstanceChunk(ProjectStateContext* ctx, MaxPaneContainer& container)
+// Shared serialization (declared in project_state.h). Writes tree_version +
+// tree nodes + compact pane tabs into `acc`. Single source of truth for both
+// the RPP <MAXPANE_STATE> chunk (below) and the screenset SAVE_STATE path
+// (screenset.cpp, ADR-049). Returns false on a corrupt tree (write nothing).
+bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
 {
-  if (!container.GetHwnd()) return;
+  if (!container.GetHwnd()) return false;
 
-  RppWriteAccessor writeAcc;
   const SplitTree& tree = container.GetTree();
   const WindowManager& winMgr = container.GetWinMgr();
   const char* section = container.ExtSection();
 
-  writeAcc.Set(section, "tree_version", "2", true);
+  acc.Set(section, "tree_version", "2", true);
 
   NodeSnapshot snap[MAX_TREE_NODES];
   int nodeCount = 0;
@@ -124,15 +127,15 @@ static void WriteOneInstanceChunk(ProjectStateContext* ctx, MaxPaneContainer& co
 
   for (int i = 0; i < nodeCount; i++) {
     if (snap[i].type == NODE_BRANCH && snap[i].childA == snap[i].childB) {
-      DBG("[MaxPane] SaveExtensionConfig: inst %d corrupt tree node %d, skipping chunk\n",
+      DBG("[MaxPane] WriteContainerState: inst %d corrupt tree node %d, skipping\n",
           container.InstanceId(), i);
-      return;
+      return false;
     }
   }
 
-  WorkspaceManager::WriteTreeNodesStatic(section, "", snap, nodeCount, writeAcc);
+  WorkspaceManager::WriteTreeNodesStatic(section, "", snap, nodeCount, acc);
 
-  // Write pane tabs compactly for RPP — skip empty panes and empty tab slots.
+  // Write pane tabs compactly — skip empty panes and empty tab slots.
   // (Avoids the stale-clearing entries that WritePaneTabsStatic emits for ExtState.)
   char buf[256];
   char key[128];
@@ -142,11 +145,11 @@ static void WriteOneInstanceChunk(ProjectStateContext* ctx, MaxPaneContainer& co
 
     snprintf(key, sizeof(key), "pane_%d_tab_count", p);
     snprintf(buf, sizeof(buf), "%d", ps->tabCount);
-    writeAcc.Set(section, key, buf, true);
+    acc.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "pane_%d_active_tab", p);
     snprintf(buf, sizeof(buf), "%d", ps->activeTab);
-    writeAcc.Set(section, key, buf, true);
+    acc.Set(section, key, buf, true);
 
     for (int t = 0; t < ps->tabCount; t++) {
       const TabEntry& tab = ps->tabs[t];
@@ -161,16 +164,23 @@ static void WriteOneInstanceChunk(ProjectStateContext* ctx, MaxPaneContainer& co
           }
           char val[512];
           snprintf(val, sizeof(val), "arb:%s:%s", cmdStr, tab.name);
-          writeAcc.Set(section, key, val, true);
+          acc.Set(section, key, val, true);
         } else {
-          writeAcc.Set(section, key, tab.name, true);
+          acc.Set(section, key, tab.name, true);
         }
       }
       snprintf(key, sizeof(key), "pane_%d_tab_%d_color", p, t);
       snprintf(buf, sizeof(buf), "%d", tab.colorIndex);
-      writeAcc.Set(section, key, buf, true);
+      acc.Set(section, key, buf, true);
     }
   }
+  return true;
+}
+
+static void WriteOneInstanceChunk(ProjectStateContext* ctx, MaxPaneContainer& container)
+{
+  RppWriteAccessor writeAcc;
+  if (!WriteContainerState(container, writeAcc)) return;
 
   ctx->AddLine("<%s", container.RppChunkTag());
   DBG("[MaxPane] SaveExtensionConfig: inst %d writing %d kv lines\n",

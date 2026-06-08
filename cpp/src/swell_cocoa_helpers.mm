@@ -1,16 +1,21 @@
 // macOS only — compiled via CMakeLists.txt (APPLE target_sources)
 #import <Cocoa/Cocoa.h>
+#import <QuartzCore/QuartzCore.h>   // CALayer (capture hover-highlight overlay)
 #include "swell_cocoa_helpers.h"
 #include "debug.h"
 
 bool IsSystemDarkMode()
 {
-  if (@available(macOS 10.14, *)) {
-    NSAppearanceName appearanceName = [[NSApp effectiveAppearance] bestMatchFromAppearancesWithNames:
-      @[NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
-    return [appearanceName isEqualToString:NSAppearanceNameDarkAqua];
-  }
-  return false;
+  // REAPER ships with NSRequiresAquaSystemAppearance=YES, which forces the
+  // application's [NSApp effectiveAppearance] to Aqua (light) regardless of the
+  // macOS system setting. Reading effectiveAppearance therefore always reported
+  // "light" and broke "Auto (follow system)" under a dark system. Read the
+  // OS-wide appearance directly instead — the same value that
+  // `defaults read -g AppleInterfaceStyle` returns ("Dark" when dark, nil when
+  // light). Available since 10.10; nil on older systems → light, which is
+  // correct (no dark mode pre-10.10).
+  NSString* style = [[NSUserDefaults standardUserDefaults] stringForKey:@"AppleInterfaceStyle"];
+  return style != nil && [style caseInsensitiveCompare:@"Dark"] == NSOrderedSame;
 }
 
 void ForceViewLayoutAndDisplay(HWND hwnd)
@@ -85,6 +90,38 @@ void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
   [window setAcceptsMouseMovedEvents:YES];
 }
 
+void EnableContainerMouseTracking(HWND hwnd)
+{
+  if (!hwnd) return;
+  NSView* view = (NSView*)hwnd;
+  if (![view isKindOfClass:[NSView class]]) return;
+
+  // Don't add a second always-active moved-tracking area if one is already
+  // present (Create can run multiple times across a container's lifetime).
+  for (NSTrackingArea* ta in [view trackingAreas]) {
+    NSTrackingAreaOptions o = [ta options];
+    if ((o & NSTrackingMouseMoved) && (o & NSTrackingActiveAlways)) return;
+  }
+
+  // F-H2 (forum v2.0.6) — Cocoa delivers mouseMoved: only to the key window.
+  // When a captured FX/AU plugin tab becomes key, the MaxPane container's
+  // NSView stops receiving mouseMoved → the tab-bar hover highlight freezes
+  // (REAPER-native captures like Routing Matrix don't steal key the same way,
+  // so hover worked there). An always-active tracking area delivers mouseMoved
+  // to this view regardless of key-window status; SWELL's own mouseMoved: then
+  // posts WM_MOUSEMOVE → OnMouseMove keeps hover live. NSTrackingInVisibleRect
+  // auto-tracks the view's bounds, so no manual update on resize is needed.
+  NSTrackingAreaOptions opts = NSTrackingMouseMoved
+                             | NSTrackingActiveAlways
+                             | NSTrackingInVisibleRect;
+  NSTrackingArea* area = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:opts
+                                                        owner:view
+                                                     userInfo:nil];
+  [view addTrackingArea:area];
+  [area release];  // view retains it; balance our alloc (project is MRC).
+}
+
 void OpenUrlPlatform(const char* url)
 {
   if (!url || !url[0]) return;
@@ -92,6 +129,179 @@ void OpenUrlPlatform(const char* url)
   NSURL* u = [NSURL URLWithString:s];
   if (!u) return;
   [[NSWorkspace sharedWorkspace] openURL:u];
+}
+
+bool IsAppModalActive()
+{
+  // True while an app-modal dialog runs. REAPER's "Save changes?" box (and
+  // SWELL file/alert panels) run via NSRunAlertPanel / [NSApp runModalForWindow:]
+  // (swell-miscdlg.mm, swell-dlg.mm), both of which set [NSApp modalWindow];
+  // SWELL itself trusts this exact signal as its modal check (swell-dlg.mm
+  // EndDialog). Capturing a window during the session reparents the modal's
+  // NSWindow and freezes the modal run loop → REAPER bricked (forum v2.0.6:
+  // owner force-quit). The capture poll refuses to grab anything while set.
+  return [NSApp modalWindow] != nil;
+}
+
+bool IsWindowSafeToCapture(HWND hwnd)
+{
+  if (!hwnd) return false;
+  // Belt-and-suspenders backstop to IsAppModalActive(): reject the specific
+  // resolved target if it is the modal window, a sheet, or a sheet's parent —
+  // none are legitimate reparent targets. Ordinary REAPER/plugin/floating
+  // windows (NSWindow, not the modal panel) pass.
+  NSView* view = (NSView*)hwnd;
+  if (![view isKindOfClass:[NSView class]]) return true;  // unknown — defer to other guards
+  NSWindow* win = [view window];
+  if (!win) return true;
+  if ([NSApp modalWindow] == win) return false;
+  if ([win isSheet] || [win sheetParent] != nil) return false;
+  return true;
+}
+
+static bool s_captureCursorActive = false;
+static id   s_captureMoveMonitor = nil;
+
+bool IsEmbeddedInMainWindow(HWND candidate)
+{
+  // True when `candidate` lives inside REAPER's MAIN NSWindow (arrange / ruler /
+  // TCP / a window docked in the main docker) vs a SEPARATE window (floating
+  // FX/ReaImGui/dockers). NOTE: GetParent is NOT a usable discriminator here —
+  // on macOS SWELL a floating window's GetParent returns g_reaperMainHwnd as
+  // its OWNER (MEMORY: "SetParent(nullptr) → parent = REAPER main"), so every
+  // window looks like a child of main. NSWindow identity is the real signal.
+  extern HWND g_reaperMainHwnd;
+  if (!candidate || !g_reaperMainHwnd) return false;
+  NSView* cand = (NSView*)candidate;
+  NSView* main = (NSView*)g_reaperMainHwnd;
+  if (![cand isKindOfClass:[NSView class]] ||
+      ![main isKindOfClass:[NSView class]]) return false;
+  NSWindow* mainWin = [main window];
+  return mainWin != nil && [cand window] == mainWin;
+}
+
+void SetCaptureCursorActive(bool on)
+{
+  if (on == s_captureCursorActive) return;  // idempotent — balance the pair
+  s_captureCursorActive = on;
+  if (on) {
+    // Stop AppKit re-asserting per-window cursor rects on every mouse-moved
+    // (the reason a plain [NSCursor push] flickered back to the arrow), then
+    // set the crosshair. REAPER + MaxPane share one process, so iterating
+    // [NSApp windows] also covers REAPER's native windows.
+    for (NSWindow* w in [NSApp windows]) [w disableCursorRects];
+    [[NSCursor crosshairCursor] set];
+    // Re-assert the crosshair after every mouse-moved across the app. A window
+    // asserts its OWN cursor while handling the move, so setting synchronously
+    // here loses the race (the window's set runs after ours). dispatch_async
+    // defers our set to the next runloop hop, AFTER the window finishes the
+    // event — so the crosshair wins (Apple DTS pattern, forum/thread/708211).
+    // Return the event (never nil) so SWELL hover/tracking keeps running.
+    s_captureMoveMonitor = [[NSEvent addLocalMonitorForEventsMatchingMask:
+        (NSEventMaskMouseMoved | NSEventMaskLeftMouseDragged)
+        handler:^NSEvent*(NSEvent* ev) {
+          dispatch_async(dispatch_get_main_queue(), ^{
+            if (s_captureCursorActive) [[NSCursor crosshairCursor] set];
+          });
+          return ev;
+        }] retain];
+  } else {
+    if (s_captureMoveMonitor) {
+      [NSEvent removeMonitor:s_captureMoveMonitor];
+      [s_captureMoveMonitor release];
+      s_captureMoveMonitor = nil;
+    }
+    for (NSWindow* w in [NSApp windows]) [w enableCursorRects];
+    [[NSCursor arrowCursor] set];
+  }
+}
+
+void RefreshCaptureCursor()
+{
+  // Belt-and-suspenders to the move-monitor: re-assert the crosshair from the
+  // capture poll (~20 Hz). Covers windows that don't generate mouseMoved (so
+  // the monitor never fires over them) and the still-mouse case. No-op unless
+  // armed. dispatch_async so it lands after any in-flight event handling.
+  if (!s_captureCursorActive) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (s_captureCursorActive) [[NSCursor crosshairCursor] set];
+  });
+}
+
+// ADR-048 — capture hover-highlight overlay. A single borderless, transparent,
+// CLICK-THROUGH window (ignoresMouseEvents:YES) drawn over the window under the
+// crosshair so the user sees exactly what a click will grab. It must never
+// participate in hit-testing: the capture poll hides it before WindowFromPoint
+// on the committing click, and skips ticks where the cursor sits on it (see
+// IsCaptureHighlightWindow), so the proven poll+WindowFromPoint path is intact.
+static NSWindow* s_highlightWin = nil;
+
+static void EnsureHighlightWindow()
+{
+  if (s_highlightWin) return;
+  NSWindow* w = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 16, 16)
+                                            styleMask:NSWindowStyleMaskBorderless
+                                              backing:NSBackingStoreBuffered
+                                                defer:YES];
+  [w setOpaque:NO];
+  [w setBackgroundColor:[NSColor clearColor]];
+  [w setIgnoresMouseEvents:YES];     // click-through — never steals the capture click
+  [w setHasShadow:NO];
+  [w setLevel:NSPopUpMenuWindowLevel];  // above REAPER's windows
+  [w setCollectionBehavior:(NSWindowCollectionBehaviorCanJoinAllSpaces |
+                            NSWindowCollectionBehaviorStationary |
+                            NSWindowCollectionBehaviorIgnoresCycle |
+                            NSWindowCollectionBehaviorFullScreenAuxiliary)];
+  NSView* cv = [w contentView];
+  [cv setWantsLayer:YES];
+  CALayer* layer = [cv layer];
+  [layer setBorderWidth:3.0];
+  [layer setBorderColor:[[NSColor systemBlueColor] CGColor]];
+  [layer setBackgroundColor:[[[NSColor systemBlueColor]
+                               colorWithAlphaComponent:0.12] CGColor]];
+  [layer setCornerRadius:2.0];
+  s_highlightWin = w;  // retained by alloc; singleton kept for app lifetime
+}
+
+void ShowCaptureHighlight(HWND target)
+{
+  if (!target) { if (s_highlightWin) [s_highlightWin orderOut:nil]; return; }
+  NSView* v = (NSView*)target;
+  if (![v isKindOfClass:[NSView class]]) {
+    if (s_highlightWin) [s_highlightWin orderOut:nil];
+    return;
+  }
+  NSWindow* tw = [v window];
+  if (!tw) { if (s_highlightWin) [s_highlightWin orderOut:nil]; return; }
+  // View bounds → window coords → screen coords. Works for a floating window's
+  // contentView and for a docked subview (outlines just the docked region).
+  NSRect inWin = [v convertRect:[v bounds] toView:nil];
+  NSRect screenRect = [tw convertRectToScreen:inWin];
+  EnsureHighlightWindow();
+  [s_highlightWin setFrame:screenRect display:YES];
+  [s_highlightWin orderFrontRegardless];  // never becomes key (borderless)
+}
+
+void HideCaptureHighlight()
+{
+  if (s_highlightWin) [s_highlightWin orderOut:nil];
+}
+
+bool IsCaptureHighlightWindow(HWND hwnd)
+{
+  if (!hwnd || !s_highlightWin) return false;
+  NSView* v = (NSView*)hwnd;
+  if (![v isKindOfClass:[NSView class]]) return false;
+  return [v window] == s_highlightWin;
+}
+
+bool IsCaptureCancelKeyDown()
+{
+  // Escape = virtual keycode 53 (kVK_Escape). CoreGraphics combined session
+  // state is focus-independent — works while the user hovers any REAPER window.
+  // SWELL's GetAsyncKeyState(VK_ESCAPE) always returns 0 here (swell-kb.mm).
+  return CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState,
+                               (CGKeyCode)53);
 }
 
 void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)

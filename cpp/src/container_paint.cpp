@@ -45,7 +45,8 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     RECT below = rc;
     below.top += NavBarReservedHeight();
     Launcher::Layout lay = Launcher::Compute(below, *m_wsMgr);
-    Launcher::Paint(hdc, lay, *m_wsMgr, m_launcherHover, dark);
+    Launcher::Paint(hdc, lay, *m_wsMgr, m_launcherHover, dark, m_captureMode.active,
+                    m_captureMode.hoverName);
     if (m_launcherTooltipCard >= 0) {
       Launcher::PaintTooltip(hdc, lay, *m_wsMgr, m_launcherTooltipCard, dark);
     }
@@ -125,9 +126,16 @@ void MaxPaneContainer::OnPaint(HDC hdc)
 
       SetBkMode(hdc, TRANSPARENT);
       SetTextColor(hdc, COLOR_EMPTY_HEADER_TEXT);
-      char headerText[128];
+      char headerText[320];
       if (m_captureMode.active && m_captureMode.targetPaneId == paneId) {
-        snprintf(headerText, sizeof(headerText), " Click a window to capture...");
+        // ADR-048 — live preview of the resolved target before the user clicks.
+        if (m_captureMode.hoverName[0]) {
+          snprintf(headerText, sizeof(headerText),
+                   " Capture: %s   (Esc to cancel)", m_captureMode.hoverName);
+        } else {
+          snprintf(headerText, sizeof(headerText),
+                   " Click a window to capture...   (Esc to cancel)");
+        }
       } else {
         // Show sequential visual index (1-based position in leaf list)
         snprintf(headerText, sizeof(headerText), " Pane %d (click to assign)", i + 1);
@@ -163,7 +171,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
         SelectObject(hdc, oldPen);
       }
 
-      SetTextColor(hdc, IsSystemDarkMode() ? RGB(120, 120, 120) : RGB(80, 80, 80));
+      SetTextColor(hdc, MaxPaneIsDarkMode() ? RGB(120, 120, 120) : RGB(80, 80, 80));
       DrawTextUtf8(hdc, "Click header to assign a window", -1, &contentRect,
                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }

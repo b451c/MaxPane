@@ -50,6 +50,9 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
 
   m_captureMode.active = false;
   m_captureMode.targetPaneId = -1;
+  m_captureMode.prevLmbDown = false;
+  m_captureMode.hoverName[0] = '\0';
+  m_captureMode.hoverCapturable = false;
   memset(&m_dragState, 0, sizeof(m_dragState));
   m_dragState.sourcePaneId = -1;
   m_dragState.highlightPaneId = -1;
@@ -157,6 +160,10 @@ bool MaxPaneContainer::Create()
   SetTimer(m_hwnd, TIMER_ID_CHECK, TIMER_INTERVAL, nullptr);
   ShowWindow(m_hwnd, SW_SHOW);
   m_visible = true;
+
+  // F-H2 (forum v2.0.6) — keep tab-bar hover alive when a captured FX/AU plugin
+  // tab grabs key-window status (Cocoa only sends mouseMoved to the key window).
+  EnableContainerMouseTracking(m_hwnd);
 
   if (g_SetExtState) {
     g_SetExtState(m_extSection, "was_visible", "1", true);
@@ -279,8 +286,8 @@ void MaxPaneContainer::Shutdown()
   }
 
   if (m_captureMode.active) {
-    KillTimer(m_hwnd, TIMER_ID_CAPTURE);
-    m_captureMode.active = false;
+    ExitCaptureMode();                    // ADR-048 — pops the capture crosshair
+    KillTimer(m_hwnd, TIMER_ID_CAPTURE);  // unconditional during teardown
   }
   m_captureQueue->CancelAll();
 
@@ -364,7 +371,10 @@ bool MaxPaneContainer::WasIntendedVisible() const
 bool MaxPaneContainer::IsInLauncherMode() const
 {
   if (m_soloActive) return false;
-  if (m_captureMode.active) return false;
+  // v2.0.6 — keep the launcher visible while capture-by-click is ARMED (was:
+  // hidden the instant the CTA was pressed, which read as "nothing happened").
+  // It now stays until a window is actually captured (tabCount > 0 below), and
+  // the CTA morphs to a "Click a window..." armed state for feedback.
   if (m_dragState.active) return false;
   if (m_tree.GetLeafCount() != 1) return false;
   int paneId = m_tree.GetPaneId(m_tree.GetLeafList()[0]);
@@ -408,6 +418,33 @@ void MaxPaneContainer::StopCaptureTimerIfIdle()
   if (!m_captureMode.active && !m_captureQueue->HasPending()) {
     KillTimer(m_hwnd, TIMER_ID_CAPTURE);
   }
+}
+
+void MaxPaneContainer::EnterCaptureMode(int paneId)
+{
+  if (paneId < 0) return;
+  m_captureMode.active = true;
+  m_captureMode.targetPaneId = paneId;
+  // Sprint 1 Entry 13 — the arming click is "already down"; init true so the
+  // first NEW down-stroke counts as the rising edge that commits the capture.
+  m_captureMode.prevLmbDown = true;
+  m_captureMode.hoverName[0] = '\0';
+  m_captureMode.hoverCapturable = false;
+  StartCaptureTimer();
+  SetCaptureCursorActive(true);   // ADR-048 — crosshair while armed (macOS)
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void MaxPaneContainer::ExitCaptureMode()
+{
+  bool was = m_captureMode.active;
+  m_captureMode.active = false;
+  m_captureMode.hoverName[0] = '\0';
+  m_captureMode.hoverCapturable = false;
+  SetCaptureCursorActive(false);  // ADR-048 — restore the normal cursor
+  HideCaptureHighlight();         // ADR-048 — drop the hover outline
+  StopCaptureTimerIfIdle();
+  if (was) InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 // =========================================================================
@@ -643,6 +680,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
   if (IsInLauncherMode()) {
     RECT cr;
     GetClientRect(m_hwnd, &cr);
+    cr.top += NavBarReservedHeight();  // ADR-048 — match Paint's launcher origin
     m_wsMgr->LoadList();
     Launcher::Layout lay = Launcher::Compute(cr, *m_wsMgr);
     const int hit = Launcher::HitTest(lay, x, y);
@@ -701,9 +739,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
 
   // If in capture mode and user clicked inside the container, cancel
   if (m_captureMode.active) {
-    KillTimer(m_hwnd, TIMER_ID_CAPTURE);
-    m_captureMode.active = false;
-    InvalidateRect(m_hwnd, nullptr, FALSE);
+    ExitCaptureMode();  // ADR-048 — pops the capture crosshair
     return;
   }
 
@@ -1051,41 +1087,13 @@ void MaxPaneContainer::HandleTabMenuCommand(int cmd, int paneId, int tabIdx)
     RefreshLayout();
     SaveState();
     MarkWorkspaceDirty();  // Feature A
-  } else if (cmd == MenuIds::TAB_CLOSE_OTHERS ||
-             cmd == MenuIds::TAB_CLOSE_TO_RIGHT ||
-             cmd == MenuIds::TAB_CLOSE_ALL) {
-    // C3 (ADR-027) — bulk-close family. Close from the right so earlier
-    // indices stay valid. For Others, we close to the right of `tabIdx`
-    // first (its index is stable), then to the left (its index then
-    // shifts left by 1 per close, but the i in our loop already
-    // descends — so positions match the live list).
-    int tabCount = m_winMgr.GetTabCount(paneId);
-    auto recordAndClose = [&](int i) {
-      if (const TabEntry* t = m_winMgr.GetTab(paneId, i)) {
-        if (t->captured && t->toggleAction > 0) {
-          AppendActionToStaleListForSection(m_extSection, t->toggleAction);
-        }
-      }
-      RecordClosedTab(paneId, i);  // C1 — capture snapshot before destroy
-      m_winMgr.CloseTab(paneId, i);
-    };
-    // C2 (ADR-027) — pinned tabs are exempt from bulk close. They survive
-    // Close Others / Close to Right / Close All. The clicked tab (if pinned)
-    // also survives — even from "Close All" — because users expect "All"
-    // to mean "all that aren't deliberately stuck open".
-    auto maybeRecordAndClose = [&](int i) {
-      const TabEntry* t = m_winMgr.GetTab(paneId, i);
-      if (t && t->pinned) return;
-      recordAndClose(i);
-    };
-    if (cmd == MenuIds::TAB_CLOSE_ALL) {
-      for (int i = tabCount - 1; i >= 0; i--) maybeRecordAndClose(i);
-    } else if (cmd == MenuIds::TAB_CLOSE_TO_RIGHT) {
-      for (int i = tabCount - 1; i > tabIdx; i--) maybeRecordAndClose(i);
-    } else { // TAB_CLOSE_OTHERS
-      for (int i = tabCount - 1; i > tabIdx; i--) maybeRecordAndClose(i);
-      for (int i = tabIdx - 1; i >= 0; i--) maybeRecordAndClose(i);
-    }
+  } else if (cmd == MenuIds::TAB_RELEASE) {
+    // v2.0.6 — Release: detach the captured window back to REAPER as a visible
+    // floating window. Deliberately NO AppendActionToStaleListForSection and NO
+    // RecordClosedTab: the window stays open under REAPER's own control, so it
+    // must NOT be queued for the startup ghost-cleanup (B15/B17 would close it
+    // next launch) and it is not a "closed tab" to reopen.
+    m_winMgr.CloseTab(paneId, tabIdx, /*returnVisible=*/true);
     RefreshLayout();
     SaveState();
     MarkWorkspaceDirty();  // Feature A
@@ -1213,13 +1221,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
   // Capture by Click
   if (cmd == MenuIds::CAPTURE_BY_CLICK) {
-    m_captureMode.active = true;
-    m_captureMode.targetPaneId = paneId;
-    // Sprint 1 Entry 13 — the menu click is "already down"; initial true
-    // suppresses self-trigger on the next timer tick.
-    m_captureMode.prevLmbDown = true;
-    InvalidateRect(m_hwnd, nullptr, FALSE);
-    StartCaptureTimer();
+    EnterCaptureMode(paneId);  // ADR-048 — single arm path (crosshair + preview)
     return;
   }
 
@@ -1255,14 +1257,14 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
   // Close (release active tab only)
   if (cmd == MenuIds::RELEASE) {
+    // v2.0.6 — Release Window: detach the active tab's captured window back to
+    // REAPER as a free-floating VISIBLE window. Deliberately NO
+    // AppendActionToStaleListForSection (unlike the close paths) — the window
+    // stays open under REAPER's own control, so queuing its action for the
+    // startup ghost-cleanup (B15/B17) would silently close it on next launch.
     const PaneState* ps = m_winMgr.GetPaneState(paneId);
     if (ps && ps->activeTab >= 0) {
-      // Record action ID for stale-cleanup before close (see HandleTabMenuCommand).
-      const TabEntry& t = ps->tabs[ps->activeTab];
-      if (t.captured && t.toggleAction > 0) {
-        AppendActionToStaleListForSection(m_extSection, t.toggleAction);
-      }
-      m_winMgr.CloseTab(paneId, ps->activeTab);
+      m_winMgr.CloseTab(paneId, ps->activeTab, /*returnVisible=*/true);
     }
     RefreshLayout();
     SaveState();
@@ -1382,6 +1384,28 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
     case WM_ERASEBKGND:
       return 1;  // we paint everything in WM_PAINT
 
+    case WM_GETMINMAXINFO: {
+      // Bug I — when this container holds a captured ReaImGui / Lua-gfx window,
+      // report a minimum size so REAPER won't shrink the dock (on the axis its
+      // divider controls — REAPER honors ptMinTrackSize there) to the point
+      // where the capture is squeezed below its content min and resizes REAPER's
+      // own main window (collapse). SWELL's NSWindow minSize sends this to the
+      // contentView (swell-dlg.mm:2462), so it also clamps a floating MaxPane on
+      // both axes. Only when such a capture is present, so empty / native-only
+      // MaxPanes still dock arbitrarily small. The perpendicular axis (driven by
+      // REAPER's window, which ignores this) is covered by the pane floor-hide
+      // in WindowManager::RepositionAll.
+      if (self && self->m_winMgr.HasCapturedArbitrary()) {
+        MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+        if (mmi) {
+          if (mmi->ptMinTrackSize.x < ARB_DOCK_MIN_W) mmi->ptMinTrackSize.x = ARB_DOCK_MIN_W;
+          if (mmi->ptMinTrackSize.y < ARB_DOCK_MIN_H) mmi->ptMinTrackSize.y = ARB_DOCK_MIN_H;
+        }
+        return 0;
+      }
+      break;
+    }
+
     case WM_SIZE: {
       if (self) {
         RECT rc;
@@ -1472,19 +1496,18 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         if (self->IsInLauncherMode()) {
           RECT rc;
           GetClientRect(hwnd, &rc);
+          // ADR-048 — match Paint's launcher origin (container_paint.cpp shifts
+          // the layout down by NavBarReservedHeight()). Without this offset the
+          // CTA/card hit rects sit NAV_BAR_HEIGHT px above the painted buttons,
+          // so the CTA only "worked" along its top edge and above it.
+          rc.top += self->NavBarReservedHeight();
           Launcher::Layout lay = Launcher::Compute(rc, *self->m_wsMgr);
           int hit = Launcher::HitTest(lay, x, y);
           if (hit == Launcher::HIT_CAPTURE_BUTTON) {
             int paneId = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[0]);
-            if (paneId >= 0) {
-              self->m_captureMode.active = true;
-              self->m_captureMode.targetPaneId = paneId;
-              // Sprint 1 Entry 13 — see CAPTURE_BY_CLICK comment.
-              self->m_captureMode.prevLmbDown = true;
-              self->m_launcherHover = Launcher::HIT_NONE;
-              InvalidateRect(hwnd, nullptr, FALSE);
-              self->StartCaptureTimer();
-            }
+            DBG("[MaxPane] Launcher capture CTA clicked → arm capture-by-click pane=%d\n", paneId);
+            self->m_launcherHover = Launcher::HIT_NONE;
+            self->EnterCaptureMode(paneId);  // ADR-048 — guards paneId<0
             return 0;
           }
           if (hit >= 0 && hit < self->m_wsMgr->GetCount()) {
@@ -1801,8 +1824,64 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       else if (self && wParam == TIMER_ID_CAPTURE) {
         // Handle capture-by-click mode
         if (self->m_captureMode.active) {
+          // ADR-048 — capture-by-click safety: never grab a window while an
+          // app-modal dialog (e.g. REAPER's "Save changes?" on quit) is up.
+          // Reparenting the modal freezes REAPER's modal run loop → the dialog
+          // dies and REAPER is bricked (forum v2.0.6: a user had to force-quit).
+          // Disarm; the click reaches the modal normally (GetAsyncKeyState
+          // polling doesn't consume it).
+          if (IsAppModalActive()) {
+            self->ExitCaptureMode();
+            return 0;
+          }
+          RefreshCaptureCursor();  // ADR-048 — hold the crosshair (macOS)
           POINT pt;
           GetCursorPos(&pt);
+
+          // ADR-048 — live hover preview: every tick, resolve the window under
+          // the cursor and stash its display name + capturability so the armed
+          // pane / launcher CTA can show "Capture: <name>" before the click.
+          // Mirrors the rising-edge resolve below (kept separate because the
+          // commit path also resolves the docked-frame child).
+          {
+            HWND uc = WindowFromPoint(pt);
+            // ADR-048 — skip ticks where the cursor sits on our own (click-
+            // through) highlight overlay: re-resolving would find the overlay,
+            // not the target, and the target can't have changed while we're
+            // still over it. The committing click hides the overlay first.
+            if (!IsCaptureHighlightWindow(uc)) {
+              char hoverName[256] = {0};
+              bool capturable = false;
+              HWND tl = nullptr;
+              if (uc && uc != self->m_hwnd && uc != g_reaperMainHwnd &&
+                  !self->m_winMgr.IsWindowCaptured(uc)) {
+                tl = WindowManager::ResolveCaptureSourceForClick(uc);
+                if (tl && tl != self->m_hwnd && tl != g_reaperMainHwnd &&
+                    IsWindowSafeToCapture(tl)) {
+                  char t[256];
+                  WindowManager::ResolveWindowDisplayName(tl, t, sizeof(t));
+                  // ADR-048 — allow-list (checked on the un-stripped title so the
+                  // " (docked)" signal survives). Core main-window views fail it.
+                  if (t[0] && WindowManager::IsCapturableTarget(tl, t)) {
+                    char* dk = strstr(t, " (docked)");
+                    if (dk) *dk = '\0';
+                    safe_strncpy(hoverName, t, sizeof(hoverName));
+                    capturable = true;
+                  }
+                }
+              }
+              if (capturable != self->m_captureMode.hoverCapturable ||
+                  strcmp(hoverName, self->m_captureMode.hoverName) != 0) {
+                self->m_captureMode.hoverCapturable = capturable;
+                safe_strncpy(self->m_captureMode.hoverName, hoverName,
+                             sizeof(self->m_captureMode.hoverName));
+                InvalidateRect(self->m_hwnd, nullptr, FALSE);
+              }
+              // Outline the resolved target (or hide when not capturable).
+              ShowCaptureHighlight(capturable ? tl : nullptr);
+            }
+          }
+
           short mouseState = GetAsyncKeyState(VK_LBUTTON);
           // Sprint 1 Entry 13 — rising-edge LMB detection. The previous
           // "if (currently-down)" branch had two bugs: (a) the button
@@ -1814,6 +1893,9 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           self->m_captureMode.prevLmbDown = lmbDown;
 
           if (risingEdge) {
+            // ADR-048 — drop the click-through overlay so WindowFromPoint
+            // resolves the real target under the cursor, not our highlight.
+            HideCaptureHighlight();
             HWND underCursor = WindowFromPoint(pt);
             if (underCursor && underCursor != self->m_hwnd &&
                 underCursor != g_reaperMainHwnd &&
@@ -1829,7 +1911,13 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
                 // ReaImGui scripts) get a name via the module-DLL waterfall
                 // so the capture flow doesn't drop them at the title gate.
                 WindowManager::ResolveWindowDisplayName(topLevel, title, sizeof(title));
-                if (title[0]) {
+                // ADR-048 — allow-list gate. Rejects core REAPER main-window
+                // views (arrange / ruler / TCP) so a stray click can't tear the
+                // edit surface into a pane and blank the main window.
+                if (title[0] && !WindowManager::IsCapturableTarget(topLevel, title)) {
+                  DBG("[MaxPane] capture rejected (core/unidentified main view): '%s'\n", title);
+                }
+                else if (title[0]) {
                   HWND captureHwnd = topLevel;
                   HWND dockFrame = nullptr;
                   char* dockedSuffix = strstr(title, " (docked)");
@@ -1843,28 +1931,31 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
                   }
                   int pId = self->m_captureMode.targetPaneId;
                   int toggleAction = LookupToggleAction(title);
-                  self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toggleAction);
+                  // ADR-048 — per-window safety backstop: never reparent a
+                  // modal/sheet (catastrophic brick). The poll-level
+                  // IsAppModalActive() gate above already covers the common
+                  // case; this guards the resolved target itself.
+                  if (IsWindowSafeToCapture(captureHwnd)) {
+                    self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toggleAction);
 
-                  if (dockFrame && IsWindow(dockFrame)) {
-                    ShowWindow(dockFrame, SW_HIDE);
+                    if (dockFrame && IsWindow(dockFrame)) {
+                      ShowWindow(dockFrame, SW_HIDE);
+                    }
+
+                    self->RefreshLayout();
+                    self->SaveState();
                   }
-
-                  self->RefreshLayout();
-                  self->SaveState();
                 }
               }
 
-              self->m_captureMode.active = false;
-              self->StopCaptureTimerIfIdle();
-              InvalidateRect(self->m_hwnd, nullptr, FALSE);
+              self->ExitCaptureMode();  // ADR-048 — disarm + pop crosshair
             }
           }
 
-          short escState = GetAsyncKeyState(VK_ESCAPE);
-          if (escState & 0x8000) {
-            self->m_captureMode.active = false;
-            self->StopCaptureTimerIfIdle();
-            InvalidateRect(self->m_hwnd, nullptr, FALSE);
+          // ADR-048 — Esc cancel. SWELL's GetAsyncKeyState(VK_ESCAPE) always
+          // returns 0 on macOS, so route through the CoreGraphics keycode probe.
+          if (IsCaptureCancelKeyDown()) {
+            self->ExitCaptureMode();  // disarm + pop crosshair
           }
         }
         // Handle async capture queue
@@ -1885,6 +1976,14 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
             // deferred pane back to its saved order before persisting.
             self->FinalizeRestoreOrder();
             self->SaveState();
+            // F-H (forum v2.0.6) — force a real Cocoa layout+display once the
+            // restore finishes. RefreshLayout's InvalidateRect doesn't repaint
+            // the container's own NSView after children were reparented in
+            // (SWELL doesn't cascade setNeedsDisplay), so the tab bar + pane
+            // dividers stay blank until the user nudges a splitter to trigger a
+            // real WM_SIZE relayout. A forced layout pass paints them now.
+            self->RefreshLayout();
+            ForceViewLayoutAndDisplay(self->m_hwnd);
           }
         }
         else {
@@ -1911,6 +2010,11 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_DESTROY: {
       if (self) {
+        // F-B (forum v2.0.6) — the docker close button reaches us via
+        // WM_DESTROY (not Toggle→Shutdown), so persist floating geometry here
+        // too. Skip when atexit already saved it (quit path) to avoid reading
+        // a rect mid-teardown; CaptureFloatGeometry rejects pathologic rects.
+        if (!g_atexitSaved) self->PersistFloatingGeometry();
         // B4: REAPER's docker close button (or any external DestroyWindow)
         // bypasses Shutdown(). Captured children must be reparented out
         // before we disappear, or they become frameless ghosts owned by a

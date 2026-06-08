@@ -14,12 +14,15 @@ namespace MenuIds {
   static const int OPEN_WINDOWS_BASE = 4000;
   static const int OPEN_WINDOWS_MAX = 4500;
   static const int TAB_CLOSE = 5000;
-  // C3 (ADR-027) — tab right-click "Close Others / to Right / All".
-  static const int TAB_CLOSE_OTHERS   = 5001;
-  static const int TAB_CLOSE_TO_RIGHT = 5002;
-  static const int TAB_CLOSE_ALL      = 5003;
+  // 5001-5003 retired in v2.0.6 (bulk-close "Close Others/to Right/All" removed
+  // — over-engineering for MaxPane's low tab count). IDs left unused, not reissued.
   // C2 (ADR-027) — toggle tab pinned state.
   static const int TAB_TOGGLE_PINNED  = 5004;
+  // v2.0.6 — "Release Window" on the tab menu: detach the captured window back
+  // to REAPER as a free-floating VISIBLE window (distinct from TAB_CLOSE which
+  // hides/closes it). Shown only for types WindowManager::CanReturnVisible
+  // accepts (known/toggle, FX, toolbar — not ReaImGui).
+  static const int TAB_RELEASE = 5005;
   static const int TAB_MOVE_BASE = 5100;
   static const int WS_LOAD_BASE = 6000;
   static const int WS_SAVE = 6100;

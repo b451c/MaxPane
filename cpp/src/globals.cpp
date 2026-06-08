@@ -3,6 +3,10 @@
 // Global REAPER API function pointers
 void (*g_DockWindowAddEx)(HWND, const char*, const char*, bool) = nullptr;
 void (*g_DockWindowRemove)(HWND) = nullptr;
+// v2.1 — screenset integration (ADR-049)
+void (*g_screenset_registerNew)(char*, void*, void*) = nullptr;
+void (*g_screenset_unregister)(char*) = nullptr;
+int  (*g_DockIsChildOfDock)(HWND, bool*) = nullptr;
 void (*g_Main_OnCommand)(int, int) = nullptr;
 const char* (*g_GetExtState)(const char*, const char*) = nullptr;
 void (*g_SetExtState)(const char*, const char*, const char*, bool) = nullptr;

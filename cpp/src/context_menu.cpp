@@ -3,6 +3,7 @@
 #include "globals.h"
 #include "favorites_manager.h"
 #include "workspace_manager.h"
+#include "debug.h"
 #include <cstdio>
 #include <cstring>
 
@@ -84,7 +85,21 @@ static BOOL CALLBACK EnumOpenWindowsProc(HWND hwnd, LPARAM lParam)
   }
   if (!accept) return TRUE;
 #else
-  if (!buf[0]) return TRUE;
+  // v2.0.6 #5 — empty-title windows on macOS (ReaImGui / Lua-gfx scripts such
+  // as TK Patchbay, whose GetWindowText returns "") were silently dropped here,
+  // so they never showed up in the "Open windows" capture menu — the user could
+  // only grab them via Capture by Click. Mirror the click path: synthesize a
+  // label via ResolveWindowDisplayName (yields "#untitled" on macOS, the same
+  // name the click path already produces) instead of dropping the window. Gate
+  // the new path behind the 50×50 floor FindWindowEnumProc uses so tiny internal
+  // helper NSWindows don't flood the menu now that empty titles are admitted.
+  if (!buf[0]) {
+    RECT wr; GetClientRect(hwnd, &wr);
+    if ((wr.right - wr.left) < 50 || (wr.bottom - wr.top) < 50) return TRUE;
+    WindowManager::ResolveWindowDisplayName(hwnd, buf, sizeof(buf));
+    DBG("[MaxPane] OpenWindowsMenu: admit empty-title hwnd=%p as '%s' (size=%ldx%ld)\n",
+        (void*)hwnd, buf, (long)(wr.right - wr.left), (long)(wr.bottom - wr.top));
+  }
   if (strlen(buf) < 3) return TRUE;
 #endif
 
@@ -151,8 +166,6 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
 
   int insertPos = 0;
 
-  int tabCount = winMgr.GetTabCount(paneId);
-
   // C2 (ADR-027) — Pin/Unpin Tab on top: pinning is a promotion action, not
   // a close-related one. Label flips, check-mark reflects state.
   {
@@ -187,40 +200,23 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // C3 — bulk-close family grouped in a "Close" submenu so they don't crowd
-  // the primary action. Greyed entries inside submenu when nothing to act on.
-  {
-    HMENU closeMenu = CreatePopupMenu();
-    if (closeMenu) {
-      int subPos = 0;
-      MENUITEMINFO mi = {};
-      mi.cbSize = sizeof(mi);
-      mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-      mi.fType = MFT_STRING;
+  // v2.0.6 — bulk-close family ("Close Others / to Right / All") removed: a
+  // MaxPane pane holds a handful of windows, not a browser's worth of tabs, so
+  // the submenu was over-engineering. "Close Tab" (above) + "Delete Pane" (pane
+  // menu, releases all) cover the real need.
 
-      mi.wID = MenuIds::TAB_CLOSE_OTHERS;
-      mi.dwTypeData = (char*)"Close Others";
-      mi.fState = (tabCount > 1) ? 0 : MFS_GRAYED;
-      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
-
-      mi.wID = MenuIds::TAB_CLOSE_TO_RIGHT;
-      mi.dwTypeData = (char*)"Close to Right";
-      mi.fState = (tabIndex < tabCount - 1) ? 0 : MFS_GRAYED;
-      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
-
-      mi.wID = MenuIds::TAB_CLOSE_ALL;
-      mi.dwTypeData = (char*)"Close All";
-      mi.fState = (tabCount > 0) ? 0 : MFS_GRAYED;
-      InsertMenuItem(closeMenu, subPos++, TRUE, &mi);
-
-      MENUITEMINFO submi = {};
-      submi.cbSize = sizeof(submi);
-      submi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-      submi.fType = MFT_STRING;
-      submi.hSubMenu = closeMenu;
-      submi.dwTypeData = (char*)"Close";
-      InsertMenuItem(menu, insertPos++, TRUE, &submi);
-    }
+  // v2.0.6 — "Release Window": detach the captured window back to REAPER as a
+  // free-floating VISIBLE window (distinct from "Close Tab" above, which hides
+  // it). Shown only for tab types that can safely float (CanReturnVisible):
+  // known/toggle windows, FX, toolbars — hidden for ReaImGui (ADR-035 crash).
+  if (winMgr.CanReturnVisible(winMgr.GetTab(paneId, tabIndex))) {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::TAB_RELEASE;
+    mi.dwTypeData = (char*)"Release Window";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
   // Separator between close-block and the rest.
@@ -694,11 +690,12 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &sep);
   }
 
-  // Release Window — releases the captured window in the active tab back to
-  // REAPER. Only meaningful when there's a captured active tab.
+  // Release Window — detaches the active tab's captured window back to REAPER as
+  // a free-floating VISIBLE window (v2.0.6). Shown only for types that can
+  // safely float (CanReturnVisible: known/toggle, FX, toolbar — not ReaImGui).
   {
     const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
-    if (activeTab && activeTab->captured) {
+    if (winMgr.CanReturnVisible(activeTab)) {
       MENUITEMINFO mi = {};
       mi.cbSize = sizeof(mi);
       mi.fMask = MIIM_ID | MIIM_TYPE;

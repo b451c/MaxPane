@@ -272,9 +272,12 @@ void DrawCard(HDC hdc, const RECT& cardRect, const WorkspaceEntry& ws,
 // ---- CTA button ----------------------------------------------------------
 
 void DrawCaptureButton(HDC hdc, const RECT& btnRect, bool hover,
-                        bool hasWorkspaces, const Palette& pal)
+                        bool hasWorkspaces, bool armed, const Palette& pal,
+                        const char* hoverName)
 {
-  HBRUSH bg = CreateSolidBrush(hover ? pal.ctaBgHover : pal.ctaBg);
+  // Armed = capture-by-click waiting for the user to click a window. Use the
+  // hover background so the CTA reads as "active".
+  HBRUSH bg = CreateSolidBrush((hover || armed) ? pal.ctaBgHover : pal.ctaBg);
   FillRect(hdc, &btnRect, bg);
   DeleteObject(bg);
 
@@ -288,9 +291,19 @@ void DrawCaptureButton(HDC hdc, const RECT& btnRect, bool hover,
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, pal.ctaText);
-  const char* label = hasWorkspaces
-    ? "+  Capture a window"
-    : "+  Capture your first window";
+  // ADR-048 — when armed and hovering a capturable window, show its name so
+  // the user reads what a click will grab before committing (no blind dock).
+  char armedBuf[280];
+  const char* label;
+  if (armed && hoverName && hoverName[0]) {
+    snprintf(armedBuf, sizeof(armedBuf), "Capture: %s   (Esc to cancel)", hoverName);
+    label = armedBuf;
+  } else if (armed) {
+    label = "Click a window to capture...  (Esc to cancel)";
+  } else {
+    label = hasWorkspaces ? "+  Capture a window"
+                          : "+  Capture your first window";
+  }
   RECT textRect = btnRect;
   DrawTextUtf8(hdc, label, -1, &textRect,
            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -409,7 +422,8 @@ Layout Compute(const RECT& containerRect, const WorkspaceManager& wsMgr)
 // ============================================================================
 
 void Paint(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
-            int hoverTarget, bool dark)
+            int hoverTarget, bool dark, bool captureArmed,
+            const char* captureHoverName)
 {
   Palette pal = GetPalette(dark);
 
@@ -473,7 +487,7 @@ void Paint(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
   // CTA
   DrawCaptureButton(hdc, lay.captureBtn,
                      hoverTarget == HIT_CAPTURE_BUTTON,
-                     lay.hasWorkspaces, pal);
+                     lay.hasWorkspaces, captureArmed, pal, captureHoverName);
 
   // Tip
   SetTextColor(hdc, pal.tip);

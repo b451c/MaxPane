@@ -52,12 +52,19 @@ static LRESULT CALLBACK ToolbarSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, 
   WNDPROC origProc = (WNDPROC)(INT_PTR)GetProp(hwnd, kOrigWndProcProp);
   if (!origProc) return DefWindowProc(hwnd, msg, wParam, lParam);
 
-  if (msg == WM_LBUTTONDOWN) {
+  if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_LBUTTONDBLCLK) {
     int x = (short)LOWORD(lParam);
     int y = (short)HIWORD(lParam);
     if (!PointHitsChild(hwnd, x, y)) {
-      // Click on toolbar background — eat it to prevent REAPER's drag-to-undock
-      DBG("[MaxPane] ToolbarSubclass: ate WM_LBUTTONDOWN on background at (%d,%d)\n", x, y);
+      // Click on toolbar background — eat the whole down/up/dblclk on background.
+      // DOWN blocks REAPER's drag-to-undock; UP/DBLCLK (F-D, forum v2.0.6) stop
+      // a stray release event from reaching REAPER's toolbar proc and firing a
+      // button. Eating only DOWN left the matching UP to slip through during
+      // DoRelease's toggle/reparent and "randomly activate" a toolbar action.
+      DBG("[MaxPane] ToolbarSubclass: ate %s on background at (%d,%d)\n",
+          msg == WM_LBUTTONDOWN ? "WM_LBUTTONDOWN"
+        : msg == WM_LBUTTONUP   ? "WM_LBUTTONUP"
+                                : "WM_LBUTTONDBLCLK", x, y);
       return 0;
     }
   }
@@ -597,22 +604,73 @@ static bool CleanPluginModuleName(const char* fullPath, char* buf, int bufSize)
 }
 
 // Find the loaded module whose address range contains `addr`.
-static HMODULE FindModuleByAddress(void* addr)
+//
+// F-E (forum v2.0.6) — EnumProcessModules followed by a GetModuleInformation
+// call per DLL is O(loaded modules); with 100-200 VST DLLs that costs 10-100ms.
+// It used to run for EVERY titleless window EnumWindows visited, for EVERY
+// FindReaperWindow call, so restoring a project full of captured plugins stalled
+// REAPER's main thread for 10-15s on Windows. Cache the module address-range
+// table and reuse it across calls; the costly GetModuleInformation rebuild fires
+// only when the loaded-module count actually changes (a plugin DLL loaded since
+// the last build), detected via a cheap EnumProcessModules count probe on miss.
+// Main-thread only (FindReaperWindow), so no locking.
+struct ModRange { BYTE* base; BYTE* end; HMODULE mod; };
+static ModRange g_modCache[512];
+static int g_modCacheCount = -1;        // -1 = never built; else cached ranges
+static int g_modKnownModuleCount = -1;  // raw module count at last build
+
+static void BuildModuleCache()
 {
-  if (!addr) return nullptr;
-  HMODULE mods[256];
+  g_modCacheCount = 0;
+  HMODULE mods[512];
   DWORD needed = 0;
   HANDLE proc = GetCurrentProcess();
-  if (!EnumProcessModules(proc, mods, sizeof(mods), &needed)) return nullptr;
+  if (!EnumProcessModules(proc, mods, sizeof(mods), &needed)) {
+    g_modKnownModuleCount = 0;
+    return;
+  }
   const DWORD count = needed / sizeof(HMODULE);
-  for (DWORD i = 0; i < count && i < 256; i++) {
+  g_modKnownModuleCount = (int)count;
+  for (DWORD i = 0; i < count && i < 512; i++) {
     MODULEINFO mi = {};
     if (!GetModuleInformation(proc, mods[i], &mi, sizeof(mi))) continue;
     BYTE* base = (BYTE*)mi.lpBaseOfDll;
-    BYTE* end  = base + mi.SizeOfImage;
-    if ((BYTE*)addr >= base && (BYTE*)addr < end) return mods[i];
+    g_modCache[g_modCacheCount].base = base;
+    g_modCache[g_modCacheCount].end  = base + mi.SizeOfImage;
+    g_modCache[g_modCacheCount].mod  = mods[i];
+    g_modCacheCount++;
+  }
+}
+
+static HMODULE LookupModuleCache(void* addr)
+{
+  for (int i = 0; i < g_modCacheCount; i++) {
+    if ((BYTE*)addr >= g_modCache[i].base && (BYTE*)addr < g_modCache[i].end)
+      return g_modCache[i].mod;
   }
   return nullptr;
+}
+
+static HMODULE FindModuleByAddress(void* addr)
+{
+  if (!addr) return nullptr;
+  if (g_modCacheCount < 0) BuildModuleCache();
+  HMODULE m = LookupModuleCache(addr);
+  if (m) return m;
+  // Miss. Cheap probe: did the module set grow since the cache was built? Only a
+  // newly-loaded DLL warrants the costly GetModuleInformation rebuild; a miss
+  // against an unchanged set is a genuine non-module address — skip it without
+  // paying the rebuild. This is what bounds the cost during a bulk restore.
+  HMODULE mods[512];
+  DWORD needed = 0;
+  if (EnumProcessModules(GetCurrentProcess(), mods, sizeof(mods), &needed)) {
+    int now = (int)(needed / sizeof(HMODULE));
+    if (now != g_modKnownModuleCount) {
+      BuildModuleCache();
+      m = LookupModuleCache(addr);
+    }
+  }
+  return m;
 }
 
 // EnumChildWindows callback for TryExtractAppNameFromChildren.
@@ -872,6 +930,26 @@ HWND WindowManager::ResolveCaptureSourceForClick(HWND underCursor)
   }
   return (topLevel == g_reaperMainHwnd) ? nullptr : topLevel;
 #endif
+}
+
+bool WindowManager::IsCapturableTarget(HWND topLevel, const char* title)
+{
+  if (!topLevel || !title) return false;
+  // Separate windows (floating FX / ReaImGui / dockers) are always grabbable.
+  // Only views embedded in REAPER's MAIN window need a positive ID, so an
+  // unidentified core view (arrange/ruler/TCP) can't be torn out into a pane
+  // and blank the main window (ADR-048).
+#ifdef __APPLE__
+  // GetParent is unreliable on macOS SWELL (floating windows report main as
+  // their owner) — compare NSWindow identity instead.
+  bool embedded = IsEmbeddedInMainWindow(topLevel);
+#else
+  bool embedded = (GetParent(topLevel) == g_reaperMainHwnd);
+#endif
+  if (!embedded) return true;
+  return LookupToggleAction(title) > 0
+      || strstr(title, " (docked)") != nullptr
+      || GetDynamicTitlePrefix(title) != nullptr;
 }
 
 int WindowManager::DiscoverActionForWindow(HWND hwnd, const char* windowTitle)
@@ -1146,7 +1224,27 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
   return true;
 }
 
-void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
+bool WindowManager::CanReturnVisible(const TabEntry* tab) const
+{
+  if (!tab || !tab->captured) return false;
+  if (!tab->isArbitrary) return true;                      // known/toggle windows
+  if (FxCapture::IsFxIdentity(tab->actionCmd)) return true; // FX (TrackFX identity)
+  if (GetToolbarToggleAction(tab->name) > 0) return true;   // toolbars
+  // A KNOWN REAPER window (Routing Matrix, Track Manager, Screensets, …) is
+  // saved by name on the restore path (isArbitrary=false → handled above), but
+  // capture-by-click always routes through the arbitrary path (isArbitrary=
+  // true) and resolves the same numeric toggle action. Without this, such a
+  // window loses "Release Window" after a release + click re-capture. Safe to
+  // float back via its toggle. EXCLUDE ReaImGui / Lua scripts (named "_RS…"
+  // command) — reparent-without-teardown crashes ImGui Docker (ADR-035).
+  if (tab->toggleAction > 0 && strncmp(tab->actionCmd, "_RS", 3) != 0)
+    return true;
+  // ReaImGui / plain arbitrary click-captures with no real toggle: no safe
+  // floating-return. Release hidden.
+  return false;
+}
+
+void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
 {
   if (!tab.captured) return;
 
@@ -1155,8 +1253,12 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
 
   if (tab.hwnd && IsWindow(tab.hwnd)) {
-    // Remove toolbar subclass before reparenting
-    UnsubclassToolbar(tab.hwnd);
+    // F-D (forum v2.0.6) — the toolbar subclass is now removed at fx_done,
+    // AFTER the toggle/reparent below finishes pumping messages. Removing it
+    // here (the old spot) let a stray WM_LBUTTONUP from the release gesture
+    // reach REAPER's toolbar proc once it was unsubclassed, firing a button.
+    // Keeping ToolbarSubclassProc installed through the transition lets it eat
+    // those background events symmetrically.
 
     // v2.0.4 #1 (ADR-037) — FX identity path. REAPER's TrackFX_Show(_, _, 2)
     // closes the FX UI cleanly and updates its own tracker. Skips the
@@ -1165,9 +1267,17 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
     // layout's FX windows go away when I switch layouts" — the plugin
     // instance keeps running, only the floating UI hides.
     if (FxCapture::IsFxIdentity(tab.actionCmd)) {
-      DBG("[MaxPane] DoRelease: FX identity '%s' — TrackFX_Show(hide)\n",
-          tab.actionCmd);
-      FxCapture::Hide(tab.actionCmd);
+      if (!returnVisible) {
+        DBG("[MaxPane] DoRelease: FX identity '%s' — TrackFX_Show(hide)\n",
+            tab.actionCmd);
+        FxCapture::Hide(tab.actionCmd);
+      } else {
+        // F-Release (v2.0.6) — keep the FX floating. REAPER still tracks it as
+        // shown (showFlag 3 from capture); we only detach it from MaxPane and
+        // show it below, so no FxCapture::Hide and no fx_done hide.
+        DBG("[MaxPane] DoRelease: FX identity '%s' — return-visible (keep floating)\n",
+            tab.actionCmd);
+      }
 
       if (IsWindow(tab.hwnd)) {
         // FX UI may still be alive as a top-level NSWindow if REAPER's
@@ -1179,10 +1289,12 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
 
         if (tab.originalRect.right > tab.originalRect.left &&
             tab.originalRect.bottom > tab.originalRect.top) {
-          int w = tab.originalRect.right - tab.originalRect.left;
-          int h = tab.originalRect.bottom - tab.originalRect.top;
+          RECT rr = tab.originalRect;
+          // Return-visible: keep the floating FX on-screen (mirrors the
+          // toggle/known branch). Close path: raw rect, behavior unchanged.
+          if (returnVisible) ClampRectToVisibleScreen(&rr);
           SetWindowPos(tab.hwnd, nullptr,
-                       tab.originalRect.left, tab.originalRect.top, w, h,
+                       rr.left, rr.top, rr.right - rr.left, rr.bottom - rr.top,
                        SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
         }
         // FX windows are REAPER's own — they have their own chrome managed
@@ -1218,8 +1330,10 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
           (long)tab.originalRect.left, (long)tab.originalRect.top,
           (long)tab.originalRect.right, (long)tab.originalRect.bottom);
 
-      // Fire toggle while WS_CHILD.
-      if (preState != 0) {
+      // Fire toggle while WS_CHILD. Skipped for return-visible: we deliberately
+      // leave REAPER's toggle state at 1 so it keeps the window open, then detach
+      // + re-show it below (v2.0.6 Release).
+      if (!returnVisible && preState != 0) {
         DBG("[B27] >>> calling g_Main_OnCommand(%d, 0) pre-detach\n", tab.toggleAction);
         g_Main_OnCommand(tab.toggleAction, 0);
         int postState = g_GetToggleCommandState
@@ -1237,7 +1351,25 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
 #endif
         }
       } else {
-        DBG("[B27] preState==0 — skipping toggle/close\n");
+        DBG("[B27] skipping toggle/close (returnVisible=%d preState=%d)\n",
+            returnVisible ? 1 : 0, preState);
+      }
+
+      // F-G (forum v2.0.6) — hide BEFORE detaching. Manager windows (Routing
+      // Matrix, Track Manager) ignore both the toggle AND WM_CLOSE while they
+      // are our WS_CHILD — REAPER keeps their toggle state==1. SWELL's
+      // SetParent(nullptr) on a still-VISIBLE child then re-creates a visible
+      // top-level NSWindow at the view's screen frame, so the window floats
+      // back as a ghost (most visible when it was an INACTIVE tab whose
+      // RepositionAll SW_HIDE didn't take). Forcing it hidden first makes the
+      // detach land it cleanly off-screen, matching the benign path the window
+      // already takes when it happened to be hidden at release time. Runs after
+      // the toggle/WM_CLOSE above so those still act on the visible window.
+      if (!returnVisible) {
+        DBG("[B27] >>> pre-detach hide (F-G): visible=%d\n", IsWindowVisible(tab.hwnd) ? 1 : 0);
+        ShowWindow(tab.hwnd, SW_HIDE);
+        ForceHideWindow(tab.hwnd);
+        DBG("[B27] <<< pre-detach hide done: visible=%d\n", IsWindowVisible(tab.hwnd) ? 1 : 0);
       }
 
       // Detach. Entry 11 — DetachToTopLevel flips WS_CHILD → WS_POPUP after
@@ -1248,8 +1380,39 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       DBG("[B27] <<< SetParent done: GetParent=%p IsWindowVisible=%d\n",
           GetParent(tab.hwnd), IsWindowVisible(tab.hwnd) ? 1 : 0);
 
-      // Restore position.
-      if (tab.originalRect.right > tab.originalRect.left &&
+      // F-G (forum v2.0.6) — if the window STILL reports open after toggle +
+      // WM_CLOSE + detach, REAPER re-floats it on a later tick (state stays 1
+      // for manager windows whose close no-ops while reparented). state==1 only
+      // floats when REAPER re-shows it (focus-dependent: the active tab closes
+      // clean, an inactive one floats). Forcing state→0 stops the re-float in
+      // every case. Retry the toggle now that the window is detached.
+      if (!returnVisible &&
+          g_GetToggleCommandState && tab.toggleAction > 0 && g_Main_OnCommand &&
+          g_GetToggleCommandState(tab.toggleAction) == 1) {
+        DBG("[B27] >>> F-G post-detach toggle retry (state still 1)\n");
+        g_Main_OnCommand(tab.toggleAction, 0);
+        DBG("[B27] <<< F-G retry: state=%d visible=%d\n",
+            g_GetToggleCommandState(tab.toggleAction),
+            IsWindowVisible(tab.hwnd) ? 1 : 0);
+      }
+
+      // Restore position. Close path (else): raw originalRect, unchanged.
+      // Return-visible: clamp on-screen, and skip toolbars entirely — their
+      // captured rect is the degenerate docked 42x42@(0,0) (B24); let REAPER
+      // re-float them at their own geometry instead of pinning a corner sliver.
+      if (returnVisible) {
+        if (GetToolbarToggleAction(tab.name) <= 0 &&
+            tab.originalRect.right > tab.originalRect.left &&
+            tab.originalRect.bottom > tab.originalRect.top) {
+          RECT rr = tab.originalRect;
+          ClampRectToVisibleScreen(&rr);
+          SetWindowPos(tab.hwnd, nullptr, rr.left, rr.top,
+                       rr.right - rr.left, rr.bottom - rr.top,
+                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+          DBG("[B27] >>> return-visible SetWindowPos clamped (%ld,%ld,%ld,%ld)\n",
+              (long)rr.left, (long)rr.top, (long)rr.right, (long)rr.bottom);
+        }
+      } else if (tab.originalRect.right > tab.originalRect.left &&
           tab.originalRect.bottom > tab.originalRect.top) {
         int w = tab.originalRect.right - tab.originalRect.left;
         int h = tab.originalRect.bottom - tab.originalRect.top;
@@ -1334,7 +1497,7 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
         DBG("[B27] <<< script closed: alive=%d visible=%d\n",
             IsWindow(tab.hwnd) ? 1 : 0,
             (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
-      } else if (toggleOff) {
+      } else if (toggleOff && !returnVisible) {
         DBG("[B27] >>> SendMessage(WM_CLOSE) on WS_CHILD (no-action path)\n");
         SendMessage(tab.hwnd, WM_CLOSE, 0, 0);
         DBG("[B27] <<< WM_CLOSE done: alive=%d visible=%d\n",
@@ -1373,17 +1536,37 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
       }
     }
 fx_done:
-    ShowWindow(tab.hwnd, SW_HIDE);
-    // B14: SWELL's SW_HIDE on a top-level NSWindow that "lives" in REAPER's
-    // HWND tree but visually occupies its own NSWindow (Media Explorer, FX
-    // Browser, Undo History — REAPER actions don't reliably toggle them off
-    // either) does not actually orderOut: the NSWindow. Bypass SWELL: call
-    // Cocoa orderOut: directly so the user-visible window vanishes regardless
-    // of REAPER's wnd_vis tracking.
-    ForceHideWindow(tab.hwnd);
-    DBG("[MaxPane] DoRelease: ForceHide applied to '%s' hwnd=%p, visible=%d\n",
-        tab.name, (void*)tab.hwnd,
-        (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+    // F-D (forum v2.0.6) — unsubclass here, after toggle/reparent finished.
+    // No-op for non-toolbars (GetProp returns null) and dead HWNDs. Runs in
+    // BOTH modes — the toolbar subclass must go regardless of close vs release.
+    UnsubclassToolbar(tab.hwnd);
+    if (returnVisible) {
+      // F-Release (v2.0.6) — the whole point: leave the detached window VISIBLE
+      // instead of hiding it. SW_SHOW + a forced Cocoa layout/display pass (SWELL
+      // SetParent doesn't trigger setNeedsLayout/Display). For toggle/known +
+      // toolbar windows REAPER also keeps state==1 and re-floats; for FX REAPER
+      // still tracks showFlag 3. No toggle-off, no stale-list entry → the
+      // startup ghost-cleanup (B15/B17) leaves this deliberately-open window alone.
+      if (IsWindow(tab.hwnd)) {            // defensive: hwnd can't die on this path
+        ShowWindow(tab.hwnd, SW_SHOW);
+        ForceViewLayoutAndDisplay(tab.hwnd);
+      }
+      DBG("[MaxPane] DoRelease: return-visible show '%s' hwnd=%p, visible=%d\n",
+          tab.name, (void*)tab.hwnd,
+          (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+    } else {
+      ShowWindow(tab.hwnd, SW_HIDE);
+      // B14: SWELL's SW_HIDE on a top-level NSWindow that "lives" in REAPER's
+      // HWND tree but visually occupies its own NSWindow (Media Explorer, FX
+      // Browser, Undo History — REAPER actions don't reliably toggle them off
+      // either) does not actually orderOut: the NSWindow. Bypass SWELL: call
+      // Cocoa orderOut: directly so the user-visible window vanishes regardless
+      // of REAPER's wnd_vis tracking.
+      ForceHideWindow(tab.hwnd);
+      DBG("[MaxPane] DoRelease: ForceHide applied to '%s' hwnd=%p, visible=%d\n",
+          tab.name, (void*)tab.hwnd,
+          (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+    }
   }
 
   tab.hwnd = nullptr;
@@ -1431,13 +1614,15 @@ void WindowManager::SetActiveTab(int paneId, int tabIndex)
   }
 }
 
-void WindowManager::CloseTab(int paneId, int tabIndex)
+void WindowManager::CloseTab(int paneId, int tabIndex, bool returnVisible)
 {
   if (paneId < 0 || paneId >= MAX_PANES) return;
   PaneState& ps = m_panes[paneId];
   if (tabIndex < 0 || tabIndex >= ps.tabCount) return;
 
-  DoRelease(ps.tabs[tabIndex]);
+  // toggleOff stays true so the toggle/known branch is entered (it does the
+  // detach + reposition); returnVisible then decides hide-vs-show inside.
+  DoRelease(ps.tabs[tabIndex], /*toggleOff=*/true, returnVisible);
 
   ShiftTabsLeft(ps.tabs, ps.tabCount, tabIndex);
 
@@ -1645,7 +1830,22 @@ void WindowManager::RepositionAll(const SplitTree& tree)
     int w = paneRect.right - paneRect.left;
     int h = paneRect.bottom - paneRect.top - headerOffset;
 
-    if (w <= 0 || h <= 0) continue;
+    if (w <= 0 || h <= 0) {
+      // F-A (forum v2.0.6) — degenerate pane geometry: a collapsed splitter,
+      // or exiting solo on a container that was shrunk while soloed, can yield
+      // a pane with non-positive area. Leaving a captured window SHOWN at its
+      // stale (pre-collapse) size corrupts Direct2D/ImGui hosts — ReaImGui
+      // (e.g. TK Patchbay) asserts in ImGui_EndChild when its host window's
+      // size desyncs from the ImGui frame. Hide every captured window in this
+      // pane instead of skipping it visible. RefreshLayout re-runs this pass
+      // once the pane regains positive area, re-showing + repositioning it.
+      for (int t = 0; t < ps.tabCount; t++) {
+        TabEntry& tab = ps.tabs[t];
+        if (tab.captured && tab.hwnd && IsWindow(tab.hwnd))
+          ShowWindow(tab.hwnd, SW_HIDE);
+      }
+      continue;
+    }
 
     for (int t = 0; t < ps.tabCount; t++) {
       TabEntry& tab = ps.tabs[t];
@@ -1653,6 +1853,20 @@ void WindowManager::RepositionAll(const SplitTree& tree)
       if (!IsWindow(tab.hwnd)) continue;
 
       if (t == ps.activeTab) {
+        // Bug I — never size a captured ReaImGui / Lua-gfx window below its
+        // content min: it pushes back by resizing REAPER's own main window
+        // (collapse). The container min-size clamp (WM_GETMINMAXINFO) protects
+        // the dock-divider axis; this covers the perpendicular axis (driven by
+        // REAPER's window, which ignores our reported min) by HIDING the capture
+        // before the pane squeezes it small. Both axes guarded so it works for
+        // any dock edge + floating. The reShow logic below repaints it when the
+        // pane grows back. Arbitrary-only — native GDI captures don't cascade.
+        if (tab.isArbitrary && (w < ARB_PANE_MIN || h < ARB_PANE_MIN)) {
+          ShowWindow(tab.hwnd, SW_HIDE);
+          DBG("[MaxPane] Bug I: hid '%s' below floor pane=(w%d h%d) min=%d\n",
+              tab.name, w, h, ARB_PANE_MIN);
+          continue;
+        }
         // Sprint 1 Entry 19 — Direct2D-rendered children (ReaImGui, JUCE,
         // Reabeat) leave the previous client-area bits on screen after
         // SetWindowPos because the default copy-bits behaviour copies old
@@ -1661,6 +1875,13 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         // resize. SWP_NOCOPYBITS discards stale bits and lets the plugin
         // present a fresh frame. KNOWN_WINDOWS native captures (GDI-based)
         // stay on the default copy-bits path — flicker-free for them.
+        // Bug I — detect a hidden→shown transition (the window was hidden by
+        // the height floor-hide above and the pane has now grown back). A
+        // ReaImGui view re-shown via SWP_SHOWWINDOW stays grey until the user
+        // switches tabs; an explicit SW_SHOWNA (what SetActiveTab does and what
+        // visibly fixes it) gives it a clean show. Handled after the resize.
+        bool reShow = tab.isArbitrary && !IsWindowVisible(tab.hwnd);
+
         UINT swpFlags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED;
         if (tab.isArbitrary) swpFlags |= SWP_NOCOPYBITS;
         SetWindowPos(tab.hwnd, HWND_TOP, x, y, w, h, swpFlags);
@@ -1682,11 +1903,30 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         }
         // Force Cocoa display pass on the view and all subviews
         ForceViewLayoutAndDisplay(tab.hwnd);
+
+        // Bug I — clean re-show for a window unhidden by the floor-hide, so it
+        // repaints without a manual tab switch (mirrors SetActiveTab).
+        if (reShow) {
+          ShowWindow(tab.hwnd, SW_SHOWNA);
+          InvalidateRect(tab.hwnd, nullptr, TRUE);
+          ForceViewLayoutAndDisplay(tab.hwnd);
+        }
       } else {
         ShowWindow(tab.hwnd, SW_HIDE);
       }
     }
   }
+}
+
+bool WindowManager::HasCapturedArbitrary() const
+{
+  for (int i = 0; i < MAX_PANES; i++) {
+    const PaneState& ps = m_panes[i];
+    for (int t = 0; t < ps.tabCount; t++) {
+      if (ps.tabs[t].captured && ps.tabs[t].isArbitrary) return true;
+    }
+  }
+  return false;
 }
 
 bool WindowManager::CheckAlive()

@@ -126,15 +126,17 @@ jobs:
 
             Native C++ extension for REAPER — tiling window manager with tabs, workspaces, and drag-and-drop.
 
+            > **Platform testing:** this release is verified on **macOS (arm64)**. The Windows and Linux binaries are built by CI but have **not yet been runtime-tested for this release** — please report any issues on the forum or [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+
             ### Downloads
 
             | Platform | File | Status |
             |----------|------|--------|
-            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Stable |
-            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Stable |
-            | Windows x64 | `reaper_maxpane-x64.dll` | ✅ Stable |
-            | Linux x86_64 | `reaper_maxpane-x86_64.so` | ✅ Stable (v2.0.2+) |
-            | Linux aarch64 | `reaper_maxpane-aarch64.so` | ✅ Stable (v2.0.2+) |
+            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Tested |
+            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Built (CI) |
+            | Windows x64 | `reaper_maxpane-x64.dll` | 🟡 Built, not runtime-tested this release |
+            | Linux x86_64 | `reaper_maxpane-x86_64.so` | 🟡 Built, not runtime-tested this release |
+            | Linux aarch64 | `reaper_maxpane-aarch64.so` | 🟡 Built, not runtime-tested this release |
 
             ### Installation
 
