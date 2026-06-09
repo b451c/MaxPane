@@ -383,3 +383,8 @@ its development:
 - **ReaPack** — https://reapack.com
 - **REAPER SDK** — https://github.com/justinfrankel/reaper-sdk
 - **WDL / SWELL** — https://github.com/justinfrankel/WDL
+
+
+---
+
+Made by [falami.studio](https://falami.studio/lab/maxpane/) — audio production & engineering studio.
