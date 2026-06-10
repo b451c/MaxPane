@@ -27,6 +27,9 @@
 // Sprint 1 Entry 15 — kbd_getTextFromCmd (REAPER 6.71+) for action display
 // names used by DiscoverActionForWindow.
 #define REAPERAPI_WANT_kbd_getTextFromCmd
+// v2.2.1 — ADR-061 amendment: the Linux GL-ReaImGui capture gate reads
+// ReaImGui's "Disable hardware acceleration" flag from REAPER's ini.
+#define REAPERAPI_WANT_get_ini_file
 
 // v2.0.4 #1 — AU/VST plugin window save/restore via native track+FX GUID
 // pair (ADR-037). All available since REAPER 6.x.
@@ -671,6 +674,8 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   // globals.h hides KbdSectionInfo behind void* to keep the header free of
   // SDK type dependencies.
   g_kbd_getTextFromCmd = (const char* (*)(int, void*))kbd_getTextFromCmd;
+  // v2.2.1 — ADR-061 amendment (Linux GL-ReaImGui gate)
+  g_get_ini_file = get_ini_file;
   g_EnumProjects = EnumProjects;
   g_GetProjExtState = GetProjExtState;
   g_SetProjExtState = SetProjExtState;

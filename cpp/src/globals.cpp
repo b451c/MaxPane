@@ -17,6 +17,8 @@ int (*g_GetToggleCommandState)(int) = nullptr;
 int (*g_NamedCommandLookup)(const char*) = nullptr;
 const char* (*g_ReverseNamedCommandLookup)(int) = nullptr;
 const char* (*g_kbd_getTextFromCmd)(int, void*) = nullptr;
+// v2.2.1 — ADR-061 amendment (Linux GL-ReaImGui gate reads reaper.ini)
+const char* (*g_get_ini_file)() = nullptr;
 HINSTANCE g_hInstance = nullptr;
 ReaProject* (*g_EnumProjects)(int, char*, int) = nullptr;
 int (*g_GetProjExtState)(ReaProject*, const char*, const char*, char*, int) = nullptr;

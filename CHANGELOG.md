@@ -4,6 +4,67 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.1] - 2026-06-11
+
+ReaImGui script windows (TK Patchbay and friends) get a definitive,
+per-platform resolution, including two crash fixes found on Linux minutes
+after v2.2.0 — this is the release v2.2.0 should have been. Verified in
+live owner sessions on Ubuntu and Windows 11 VMs and on macOS.
+
+### Fixed
+
+- **Linux: closing a captured script tab could crash REAPER.** Scripts
+  destroy their own window inside the close toggle; the release path then
+  touched the freed window. All release paths now re-validate the window
+  after the toggle.
+- **Linux: capturing a GL-rendered ReaImGui window (e.g. TK Patchbay)
+  killed REAPER** on the script's next frame — reparenting destroys the
+  X11 window under the script's GL context. Capture now works when
+  ReaImGui's "Disable hardware acceleration" preference is enabled
+  (Preferences > Plug-ins > ReaImGui; restart the script after changing
+  it); otherwise MaxPane refuses the capture and tells you exactly that
+  instead of crashing.
+- **Windows: captured ReaImGui windows were mouse-dead** — they rendered
+  but ignored the mouse, because the script kept hit-testing against its
+  pre-capture screen position. Captured script windows are now fully
+  interactive (verified live with TK Patchbay).
+- **Windows: closing a captured untitled ReaImGui script could launch the
+  ReaImGui demo** — action discovery matched the shared renderer module
+  name. Discovery is now skipped for untitled ReaImGui windows on all
+  platforms.
+- **A script window enforcing its own minimum size no longer overflows its
+  pane**, covering the splitter and the neighboring tab bar. MaxPane
+  learns the enforced minimum at runtime (Windows/Linux); below it the
+  window hides and the pane explains: "needs at least WxH px — enlarge
+  this pane to show it."
+- **Captured ImGui windows dragged by their background no longer slide out
+  of their pane** — the position snaps back within a tick.
+- The floor-hidden pane hint no longer smears during resize or shows the
+  previous tab's stale last frame underneath.
+- **"Release Window" works for captured ReaImGui windows on Linux** — the
+  window returns floating and alive.
+
+### Added
+
+- **Capture refusals now explain themselves.** When MaxPane declines to
+  capture a window (e.g. the Linux ReaImGui hardware-acceleration case), a
+  message says why and what to do, instead of silently doing nothing.
+
+### Known limitations
+
+- **Linux: capturing GL ReaImGui windows requires ReaImGui's "Disable
+  hardware acceleration"** (Preferences > Plug-ins > ReaImGui). A script
+  started before the preference was enabled keeps hardware rendering for
+  its lifetime — restart the script after enabling.
+- **macOS: ReaImGui scripts that enforce a fixed minimum window size
+  (e.g. TK Patchbay) can resize and move REAPER's main window** when
+  captured into a pane smaller than that minimum. This is structural in
+  ReaImGui's macOS backend: its size enforcement targets the hosting
+  window, which after capture is REAPER's own. Workaround: dock such
+  scripts natively in REAPER's docker, or keep the MaxPane pane at least
+  as large as the script's minimum. Scripts without size constraints
+  (e.g. ReaMD) are unaffected.
+
 ## [2.2.0] - 2026-06-10
 
 Windows and Linux reach interaction parity: capture-by-click and

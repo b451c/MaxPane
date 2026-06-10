@@ -436,12 +436,58 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
 // Defined below (after ResolveWindowDisplayName); fwd-declared so the capture
 // path can flag ReaImGui hosts for the Bug I size-guard scope (v2.1.1).
 static bool IsReaImGuiHostWindow(HWND hwnd);
+// ADR-061 amendment (v2.2.1) — capture-refusal reason channel. The capture
+// gates live deep in WindowManager but toasts belong to the container; the
+// refusal site leaves a message here and the failing UI path (click / menu /
+// drag) consumes it for the toast instead of the generic "couldn't capture".
+static char s_captureRefusal[200] = "";
+void WindowManager::SetCaptureRefusal(const char* msg)
+{
+  safe_strncpy(s_captureRefusal, msg ? msg : "", sizeof(s_captureRefusal));
+}
+const char* WindowManager::TakeCaptureRefusal()
+{
+  static char out[200];
+  if (!s_captureRefusal[0]) return nullptr;
+  safe_strncpy(out, s_captureRefusal, sizeof(out));
+  s_captureRefusal[0] = '\0';
+  return out;
+}
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+// ADR-061 — narrow GL-only ReaImGui probe; defined next to
+// IsReaImGuiHostWindow, used by the Linux capture blocks below.
+static bool IsImGuiGlContextWindow(HWND hwnd);
+// ADR-061 amendment (v2.2.1, VM-verified live 2026-06-10): a GL ReaImGui
+// window survives capture when ReaImGui renders via its offscreen software
+// path — "Disable hardware acceleration" in Preferences > Plug-ins >
+// ReaImGui ([reaimgui] forcecpu_gdk=1 in reaper.ini). The GL context then
+// lives on a hidden offscreen GdkWindow and the script blits through
+// WM_PAINT, so SWELL-generic SetParent destroying the child's OS window no
+// longer pulls the surface out from under it. Read live on every gate pass:
+// GetPrivateProfileInt is cheap and the user can flip the pref mid-session.
+// Residual risk (documented): a script STARTED before the pref was enabled
+// keeps its hardware-GL renderer for its lifetime (ReaImGui caches the flag
+// per context) — hence the "restart the script" wording in the toast.
+static const char* const kGlCaptureRefusalMsg =
+  "To capture ReaImGui windows on Linux, enable 'Disable hardware "
+  "acceleration' in Preferences > Plug-ins > ReaImGui, then restart the script.";
+static bool IsReaImGuiSoftwareRenderingOn()
+{
+  if (!g_get_ini_file) return false;
+  return GetPrivateProfileInt("reaimgui", "forcecpu_gdk", 0, g_get_ini_file()) == 1;
+}
+#endif
 
 bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction, const char* actionCmd)
 {
   DBG("[MaxPane] CaptureArbitraryWindow: pane=%d name='%s' hwnd=%p action=%d cmd='%s'\n",
       paneId, displayName ? displayName : "(null)", (void*)targetHwnd, toggleAction,
       actionCmd ? actionCmd : "(null)");
+  // ADR-061 amendment — drop any stale refusal (e.g. left by a hover pass
+  // over a non-capturable window) so failure toasts never show a reason
+  // that belongs to a different window.
+  SetCaptureRefusal(nullptr);
   if (paneId < 0 || paneId >= MAX_PANES) return false;
   if (!targetHwnd || !displayName) return false;
 
@@ -496,7 +542,25 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
   // for the matching show/hide action via module name + title-token
   // scoring; result drives correct workspace-restore + close-WM_CLOSE.
   // Skip when FX identity already populated tab.actionCmd above.
-  if (tab.toggleAction <= 0 && !tab.actionCmd[0]) {
+  // ADR-061 follow-up (v2.2.1, live Linux repro): NEVER discover from a
+  // synthetic '#<class> (untitled)' fallback name — it is a window CLASS,
+  // not a title, and every untitled ReaImGui script shares the same one.
+  // Token scoring then matches whichever ReaImGui action happens to score
+  // ('imgui' matched "Custom: ReaImGui_Demo.lua"), so closing TK Patchbay
+  // launched the demo. action=0 + empty cmd → close path just hides — safe.
+  // ADR-062 follow-up (live Win32 repro): the Win32 empty-title fallback
+  // derives the display name from the plugin MODULE instead — and for any
+  // untitled ReaImGui script that module is the shared renderer
+  // (reaper_imgui-x64.dll → 'Imgui-x64'), so token 'imgui' matched the demo
+  // again, through a name that doesn't start with '#'. Same rule, other
+  // door: a ReaImGui-class window with no real window title has nothing
+  // discovery could legitimately match — skip. Non-ReaImGui empty-title
+  // plugins (ReaBeat, Reamix) keep module discovery: their module IS the
+  // plugin, not a shared renderer.
+  char realTitle[128] = "";
+  if (targetHwnd) GetWindowText(targetHwnd, realTitle, sizeof(realTitle));
+  if (tab.toggleAction <= 0 && !tab.actionCmd[0] && displayName[0] != '#' &&
+      !(IsReaImGuiHostWindow(targetHwnd) && !realTitle[0])) {
     tab.toggleAction = DiscoverActionForWindow(targetHwnd, displayName);
   }
   // ADR-052 — never capture the Main toolbar (main-window top chrome).
@@ -510,6 +574,22 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
         tab.toggleAction, displayName);
     return false;
   }
+#if !defined(_WIN32) && !defined(__APPLE__)
+  // ADR-061 — a GL-backed ReaImGui window cannot survive capture on Linux:
+  // SWELL-generic SetParent destroys the real X11/GDK window under the
+  // script's GL context, and the script's next frame kills the whole REAPER
+  // (TK Patchbay, live VM 2026-06-10 — DoCapture logged DONE, death came on
+  // the heartbeat). Reject before anything is committed; this is the single
+  // choke point for menu / favorites / workspace-restore captures too.
+  // Lua_LICE_gfx windows paint via LICE into the window DC and survive
+  // (MIDI Lyrics captured + released fine) — only the GL class is blocked.
+  if (IsImGuiGlContextWindow(targetHwnd) && !IsReaImGuiSoftwareRenderingOn()) {
+    DBG("[MaxPane] CaptureArbitraryWindow: REJECTED ReaImGui-GL window '%s' on Linux (ADR-061, forcecpu off)\n",
+        displayName);
+    SetCaptureRefusal(kGlCaptureRefusalMsg);
+    return false;
+  }
+#endif
   tab.isArbitrary = true;
   if (actionCmd && actionCmd[0] && !tab.actionCmd[0]) {
     safe_strncpy(tab.actionCmd, actionCmd, sizeof(tab.actionCmd));
@@ -528,6 +608,12 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
                    (tab.toggleAction > 0 && g_GetToggleCommandState &&
                     g_GetToggleCommandState(tab.toggleAction) == -1);
   DBG("[MaxPane] CaptureArbitraryWindow: '%s' isReaImGui=%d\n", tab.name, tab.isReaImGui);
+  // ADR-061 item #2 — the learned-min fields are runtime-only; reset them so
+  // a reused tab slot can't inherit a previous window's floor.
+  tab.arbMinW = tab.arbMinH = 0;
+  tab.lastSetW = tab.lastSetH = 0;
+  tab.pendMinW = tab.pendMinH = 0;
+  tab.lastSetX = tab.lastSetY = 0;
 
   // Detect dynamic-title windows (e.g. MIDI Editor "MIDI take: ...")
   const char* dynPrefix = GetDynamicTitlePrefix(displayName);
@@ -824,6 +910,35 @@ static bool IsReaImGuiHostWindow(HWND hwnd)
   EnumChildWindows(hwnd, ReaImGuiChildScanProc, (LPARAM)&found);
   return found;
 }
+
+#if !defined(_WIN32) && !defined(__APPLE__)
+// ADR-061 — GL-only variant of the probe above: class 'reaper_imgui_context'
+// on the host or a direct child, EXCLUDING 'Lua_LICE_gfx_standalone'. On
+// SWELL-generic a child window has no OS window of its own, so SetParent
+// destroys the X11/GDK window the script's GL context renders into —
+// ReaImGui crashes REAPER on its next frame. LICE-gfx windows paint into
+// the window DC and survive reparenting, so they stay capturable.
+static BOOL CALLBACK ImGuiGlChildScanProc(HWND child, LPARAM lp)
+{
+  char cls[64] = {};
+  GetClassName(child, cls, sizeof(cls));
+  if (strcmp(cls, "reaper_imgui_context") == 0) {
+    *(bool*)lp = true;
+    return FALSE;
+  }
+  return TRUE;
+}
+static bool IsImGuiGlContextWindow(HWND hwnd)
+{
+  if (!hwnd || !IsWindow(hwnd)) return false;
+  char cls[64] = {};
+  GetClassName(hwnd, cls, sizeof(cls));
+  if (strcmp(cls, "reaper_imgui_context") == 0) return true;
+  bool found = false;
+  EnumChildWindows(hwnd, ImGuiGlChildScanProc, (LPARAM)&found);
+  return found;
+}
+#endif
 
 // =========================================================================
 // Sprint 1 Entry 15 — DiscoverActionForWindow (action-table scoring)
@@ -1137,6 +1252,17 @@ bool WindowManager::IsCapturableTarget(HWND topLevel, const char* title)
   // action-based backstop lives in CaptureArbitraryWindow (a switched main
   // toolbar can carry the displayed toolbar's name instead).
   if (strcmp(title, "Main toolbar") == 0) return false;
+#if !defined(_WIN32) && !defined(__APPLE__)
+  // ADR-061 — GL ReaImGui windows can't be captured on Linux (see
+  // CaptureArbitraryWindow); reject here too, BEFORE the not-embedded
+  // early-accept below, so the hover preview never advertises them.
+  if (IsImGuiGlContextWindow(topLevel) && !IsReaImGuiSoftwareRenderingOn()) {
+    DBG("[MaxPane] IsCapturableTarget: reject ReaImGui-GL '%s' on Linux (ADR-061, forcecpu off)\n",
+        title);
+    SetCaptureRefusal(kGlCaptureRefusalMsg);
+    return false;
+  }
+#endif
   // Separate windows (floating FX / ReaImGui / dockers) are always grabbable.
   // Only views embedded in REAPER's MAIN window need a positive ID, so an
   // unidentified core view (arrange/ruler/TCP) can't be torn out into a pane
@@ -1476,6 +1602,15 @@ bool WindowManager::CanReturnVisible(const TabEntry* tab) const
   // command) — reparent-without-teardown crashes ImGui Docker (ADR-035).
   if (tab->toggleAction > 0 && strncmp(tab->actionCmd, "_RS", 3) != 0)
     return true;
+#if !defined(_WIN32) && !defined(__APPLE__)
+  // ADR-061 amendment (v2.2.1, owner request after the live forcecpu loop):
+  // on SWELL-generic the return-visible path was proven live for ReaImGui —
+  // detach recreates the GdkWindow and the offscreen-software renderer (the
+  // only kind the Linux capture gate admits) keeps drawing; the demo and TK
+  // Patchbay both came back floating and alive. macOS keeps the ADR-035
+  // gating until the same proof exists there.
+  if (tab->isReaImGui) return true;
+#endif
   // ReaImGui / plain arbitrary click-captures with no real toggle: no safe
   // floating-return. Release hidden.
   return false;
@@ -1575,20 +1710,35 @@ static void ReleaseToggleKnown(TabEntry& tab, bool returnVisible)
     int postState = g_GetToggleCommandState
                       ? g_GetToggleCommandState(tab.toggleAction) : -1;
     DBG("[B27] <<< action done: postState=%d (was %d), IsWindowVisible=%d\n",
-        postState, preState, IsWindowVisible(tab.hwnd) ? 1 : 0);
-    if (postState == 1 && preState == 1) {
+        postState, preState,
+        (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+    if (postState == 1 && preState == 1 && IsWindow(tab.hwnd)) {
       DBG("[B27] >>> action NO-OP, sending WM_CLOSE\n");
       SendMessage(tab.hwnd, WM_CLOSE, 0, 0);
 #ifdef MAXPANE_DEBUG
       int post2 = g_GetToggleCommandState
                     ? g_GetToggleCommandState(tab.toggleAction) : -1;
       DBG("[B27] <<< WM_CLOSE done: postState=%d, IsWindowVisible=%d\n",
-          post2, IsWindowVisible(tab.hwnd) ? 1 : 0);
+          post2, (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
 #endif
     }
   } else {
     DBG("[B27] skipping toggle/close (returnVisible=%d preState=%d)\n",
         returnVisible ? 1 : 0, preState);
+  }
+
+  // The toggle can DESTROY the window outright when tab.toggleAction is a
+  // script command (ReaImGui / Lua-gfx, preState==-1): the script tears its
+  // window down inside Main_OnCommand. On SWELL-generic an HWND is a heap
+  // pointer — every touch after that is use-after-free, and close-X on a
+  // captured script tab killed the whole REAPER on Linux (v2.2.0 live
+  // report; macOS never crashed because NSViews are obj-c-retained).
+  // SWELL-generic IsWindow walks the window list comparing pointers without
+  // dereferencing the candidate, so it is the one safe probe everywhere.
+  // ReleaseNoAction and ReleaseFxIdentity already guard this way.
+  if (!IsWindow(tab.hwnd)) {
+    DBG("[B27] window destroyed by its own toggle — skip hide/detach/restore\n");
+    return;
   }
 
   // F-G (forum v2.0.6) — hide BEFORE detaching. Manager windows (Routing
@@ -1808,9 +1958,12 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
 
     // Shared release tail (all three protocols funnel here; was `fx_done:`).
     // F-D (forum v2.0.6) — unsubclass here, after toggle/reparent finished.
-    // No-op for non-toolbars (GetProp returns null) and dead HWNDs. Runs in
-    // BOTH modes — the toolbar subclass must go regardless of close vs release.
-    UnsubclassToolbar(tab.hwnd);
+    // No-op for non-toolbars (GetProp returns null). Runs in BOTH modes —
+    // the toolbar subclass must go regardless of close vs release. The
+    // IsWindow re-check is mandatory: a script window can be DESTROYED by
+    // its own toggle inside the release protocol (Linux close-X crash —
+    // GetProp on a freed SWELL-generic HWND is use-after-free).
+    if (IsWindow(tab.hwnd)) UnsubclassToolbar(tab.hwnd);
     if (returnVisible) {
       // F-Release (v2.0.6) — the whole point: leave the detached window VISIBLE
       // instead of hiding it. SW_SHOW + a forced Cocoa layout/display pass (SWELL
@@ -1825,7 +1978,7 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
       DBG("[MaxPane] DoRelease: return-visible show '%s' hwnd=%p, visible=%d\n",
           tab.name, (void*)tab.hwnd,
           (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
-    } else {
+    } else if (IsWindow(tab.hwnd)) {  // script toggles can destroy the hwnd
       ShowWindow(tab.hwnd, SW_HIDE);
       // B14: SWELL's SW_HIDE on a top-level NSWindow that "lives" in REAPER's
       // HWND tree but visually occupies its own NSWindow (Media Explorer, FX
@@ -1837,6 +1990,9 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
       DBG("[MaxPane] DoRelease: ForceHide applied to '%s' hwnd=%p, visible=%d\n",
           tab.name, (void*)tab.hwnd,
           (IsWindow(tab.hwnd) && IsWindowVisible(tab.hwnd)) ? 1 : 0);
+    } else {
+      DBG("[MaxPane] DoRelease: hwnd already destroyed — skip hide tail '%s'\n",
+          tab.name);
     }
   }
 
@@ -2145,10 +2301,25 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         // pane grows back. ReaImGui-only (v2.1.1) — toolbars / FX / native GDI
         // captures don't cascade and are legitimately small, so they are never
         // floor-hidden (regression in v2.1.0 hid docked toolbars in small panes).
-        if (tab.isReaImGui && (w < ARB_PANE_MIN || h < ARB_PANE_MIN)) {
+        // ADR-061 item #2 (v2.2.1) — per-window learned min on top of the
+        // fixed safety floor: a script that re-asserts a size larger than
+        // the pane (e.g. TK Patchbay's 600x400 SetNextWindowSizeConstraints)
+        // would otherwise overflow the pane on SWELL-generic and cover the
+        // splitter + the next pane's tab bar. Learned by CheckAlive's drift
+        // watchdog; 0 until a disagreement is observed, so behaviour is
+        // unchanged for windows that accept our sizing.
+        int floorW = ARB_PANE_MIN, floorH = ARB_PANE_MIN;
+        if (tab.arbMinW > floorW) floorW = tab.arbMinW;
+        if (tab.arbMinH > floorH) floorH = tab.arbMinH;
+        if (tab.isReaImGui && (w < floorW || h < floorH)) {
           ShowWindow(tab.hwnd, SW_HIDE);
-          DBG("[MaxPane] Bug I: hid ReaImGui '%s' below floor pane=(w%d h%d) min=%d\n",
-              tab.name, w, h, ARB_PANE_MIN);
+          // ADR-062 — clear the window's stale pixels: on SWELL-generic
+          // hiding a child does NOT repaint the parent area it covered, so
+          // the script's last frame lingered under the floor-hidden hint
+          // (read as a dead/frozen window). Erase + repaint the pane rect.
+          InvalidateRect(m_containerHwnd, &paneRect, TRUE);
+          DBG("[MaxPane] Bug I: hid ReaImGui '%s' below floor pane=(w%d h%d) floor=(w%d h%d)\n",
+              tab.name, w, h, floorW, floorH);
           continue;
         }
         // Sprint 1 Entry 19 — Direct2D-rendered children (ReaImGui, JUCE,
@@ -2170,6 +2341,25 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         if (tab.isArbitrary) swpFlags |= SWP_NOCOPYBITS;
         SetWindowPos(tab.hwnd, HWND_TOP, x, y, w, h, swpFlags);
         SendMessage(tab.hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h));
+        // ADR-061 item #2 — remember what we asked for; CheckAlive's drift
+        // watchdog compares the actual rect against this to learn the
+        // script's asserted content-min.
+        if (tab.isReaImGui) {
+          tab.lastSetW = w;
+          tab.lastSetH = h;
+          tab.lastSetX = x;
+          tab.lastSetY = y;
+          // ADR-061 item #3 — a reparented SWELL child never receives
+          // WM_MOVE, so ReaImGui's viewport keeps its pre-capture screen
+          // position and maps all mouse input against that stale rect: the
+          // window renders but is mouse-dead (ImGui hit-tests MousePos in
+          // screen space against viewport->Pos). Its WM_MOVE handler only
+          // sets PlatformRequestMove and re-reads ClientToScreen, so a
+          // synthetic WM_MOVE after every reposition keeps it current.
+          SendMessage(tab.hwnd, WM_MOVE, 0, MAKELPARAM(x, y));
+          DBG("[MaxPane][DRIFT] RepositionAll set '%s' local=(%d,%d %dx%d) + WM_MOVE\n",
+              tab.name, x, y, w, h);
+        }
 
         // Propagate WM_SIZE to child controls — SWELL doesn't cascade
         // layout changes to subviews after reparent (no setNeedsLayout).
@@ -2213,6 +2403,30 @@ bool WindowManager::HasCapturedReaImGui() const
   return false;
 }
 
+// ADR-062 follow-up — read a child's rect in its parent's CLIENT space,
+// normalized so (x,y) is the visual top-left and w/h are positive. Raw
+// GetWindowRect subtraction is platform-poisoned for this: mac SWELL
+// returns rects in NATIVE y-up screen coords (a child view can read back
+// top > bottom, making bottom-top negative), and on Win32 a floating
+// container's window rect includes the caption/frame while SetWindowPos
+// coords are client-relative. ScreenToClient of both corners + min/max
+// lands in the same coordinate system RepositionAll's SetWindowPos uses,
+// on all three platforms.
+static void GetChildRectInParentClient(HWND child, HWND parent,
+                                       int* x, int* y, int* w, int* h)
+{
+  RECT r = {};
+  GetWindowRect(child, &r);
+  POINT a = { r.left, r.top };
+  POINT b = { r.right, r.bottom };
+  ScreenToClient(parent, &a);
+  ScreenToClient(parent, &b);
+  *x = (a.x < b.x) ? a.x : b.x;
+  *y = (a.y < b.y) ? a.y : b.y;
+  *w = (a.x < b.x) ? (b.x - a.x) : (a.x - b.x);
+  *h = (a.y < b.y) ? (b.y - a.y) : (a.y - b.y);
+}
+
 bool WindowManager::CheckAlive()
 {
   bool changed = false;
@@ -2248,6 +2462,72 @@ bool WindowManager::CheckAlive()
               // an HWND we don't track anymore.
               if (tab.hwnd && IsWindow(tab.hwnd)) UnsubclassToolbar(tab.hwnd);
               dead = true;
+            }
+          }
+          // ADR-061 item #2 (v2.2.1) — drift watchdog. A captured ReaImGui
+          // script can re-assert its own size every frame (ImGui size
+          // constraints); on SWELL-generic the grown child then overflows
+          // the pane, covering the splitter + the next pane's tab bar (seen
+          // live on the Linux VM: set 547x329, script forced 600x400). When
+          // the actual size disagrees with what RepositionAll last set and
+          // the SAME size shows up on two consecutive ticks (rules out the
+          // one-frame lag while the script adopts a new pane size), learn
+          // it per axis as the window's content-min; returning changed=true
+          // makes OnTimer re-run RepositionAll, whose floor-hide now honours
+          // the learned min. No disagreement observed → nothing changes.
+          else if (tab.isReaImGui && t == ps.activeTab && IsWindowVisible(tab.hwnd) &&
+                   tab.lastSetW > 0) {
+            // ADR-062 follow-up (live macOS repro: TK still cascaded
+            // REAPER's own window smaller): the original screen-rect
+            // subtraction read a NEGATIVE height on mac (y-up child rects),
+            // so minH never learned and the floor-hide never engaged.
+            // Client-space conversion fixes learning on mac and kills the
+            // caption-offset snap-back false-fire on a floating Win32
+            // container.
+            int relX, relY, aw, ah;
+            GetChildRectInParentClient(tab.hwnd, m_containerHwnd,
+                                       &relX, &relY, &aw, &ah);
+            // ADR-061 item #3b — ImGui "drag window by background" moves the
+            // captured child: ImGui issues Platform_SetWindowPos with SCREEN
+            // coords, SWELL applies them PARENT-relative, and the child sails
+            // out of its pane (owner repro: grab TK Patchbay background →
+            // the whole view slides sideways until the next relayout). Snap
+            // it back to the pane slot and send WM_MOVE so ImGui re-reads
+            // the real position and keeps mapping input correctly.
+            if ((relX > tab.lastSetX + 4 || relX < tab.lastSetX - 4 ||
+                 relY > tab.lastSetY + 4 || relY < tab.lastSetY - 4)) {
+              DBG("[MaxPane][DRIFT] '%s' moved to local=(%d,%d), snapping back to (%d,%d)\n",
+                  tab.name, relX, relY, tab.lastSetX, tab.lastSetY);
+              SetWindowPos(tab.hwnd, nullptr, tab.lastSetX, tab.lastSetY, 0, 0,
+                           SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+              SendMessage(tab.hwnd, WM_MOVE, 0,
+                          MAKELPARAM(tab.lastSetX, tab.lastSetY));
+              GetChildRectInParentClient(tab.hwnd, m_containerHwnd,
+                                         &relX, &relY, &aw, &ah);  // fresh data
+            }
+            // ±4 px tolerance — SWELL/GDK scaling produces off-by-one rect
+            // read-backs (seen live: set 471, read 472); don't learn a floor
+            // from rounding noise.
+            const int eps = 4;
+            if (aw > tab.lastSetW + eps || ah > tab.lastSetH + eps) {
+              if (aw == tab.pendMinW && ah == tab.pendMinH) {
+                const int minW = (aw > tab.lastSetW + eps) ? aw : 0;
+                const int minH = (ah > tab.lastSetH + eps) ? ah : 0;
+                if (tab.arbMinW != minW || tab.arbMinH != minH) {
+                  tab.arbMinW = minW;
+                  tab.arbMinH = minH;
+                  DBG("[MaxPane][DRIFT] learned content-min for '%s': %dx%d (set %dx%d, actual %dx%d)\n",
+                      tab.name, minW, minH, tab.lastSetW, tab.lastSetH, aw, ah);
+                  changed = true;  // OnTimer re-runs RepositionAll → floor-hide
+                }
+              } else {
+                tab.pendMinW = aw;
+                tab.pendMinH = ah;
+                DBG("[MaxPane][DRIFT] '%s' actual %dx%d != set %dx%d (pending confirm)\n",
+                    tab.name, aw, ah, tab.lastSetW, tab.lastSetH);
+              }
+            } else {
+              tab.pendMinW = tab.pendMinH = 0;
             }
           }
         }

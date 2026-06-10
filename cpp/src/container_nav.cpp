@@ -598,6 +598,11 @@ void MaxPaneContainer::DragModeTick()
       // capture that CaptureArbitraryWindow would reject anyway.
       if (!WindowManager::IsCapturableTarget(topLevel, title)) {
         DBG("[MaxPane] DragDock: reject — not capturable: '%s'\n", title);
+        // ADR-061 amendment — surface a gate-specific reason (e.g. the Linux
+        // GL-ReaImGui forcecpu hint) instead of a silently dead drag.
+        if (const char* reason = WindowManager::TakeCaptureRefusal()) {
+          ShowToast(reason);
+        }
         m_drag.lastBtnDown = btnDown;
         return;
       }

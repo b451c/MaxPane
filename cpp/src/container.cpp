@@ -1207,7 +1207,10 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
           ShowWindow(dockFrame, SW_HIDE);
         }
         if (!captured) {
-          ShowToast("Couldn't capture — pane is full or window is already captured.");
+          // ADR-061 amendment — prefer the gate's specific reason.
+          const char* reason = WindowManager::TakeCaptureRefusal();
+          ShowToast(reason ? reason
+            : "Couldn't capture — pane is full or window is already captured.");
         }
 
         RefreshLayout();
@@ -1503,6 +1506,11 @@ void MaxPaneContainer::OnCaptureTimerTick()
           // edit surface into a pane and blank the main window.
           if (title[0] && !WindowManager::IsCapturableTarget(topLevel, title)) {
             DBG("[MaxPane] capture rejected (core/unidentified main view): '%s'\n", title);
+            // ADR-061 amendment — surface a gate-specific reason (e.g. the
+            // Linux GL-ReaImGui forcecpu hint) instead of failing silently.
+            if (const char* reason = WindowManager::TakeCaptureRefusal()) {
+              ShowToast(reason);
+            }
           }
           else if (title[0]) {
             HWND dockFrame = nullptr;
@@ -1523,7 +1531,10 @@ void MaxPaneContainer::OnCaptureTimerTick()
                 ShowWindow(dockFrame, SW_HIDE);
               }
               if (!captured) {
-                ShowToast("Couldn't capture — pane is full or window is already captured.");
+                // ADR-061 amendment — prefer the gate's specific reason.
+                const char* reason = WindowManager::TakeCaptureRefusal();
+                ShowToast(reason ? reason
+                  : "Couldn't capture — pane is full or window is already captured.");
               }
 
               RefreshLayout();

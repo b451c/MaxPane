@@ -121,7 +121,8 @@ remembers your layouts.
 ### Platform
 - **macOS arm64 + x86_64** — primary platform, actively tested on every release.
 - **Windows x64** — supported and CI-built; capture and drag interactions
-  verified live on Windows 11 for v2.2.0. Community reports welcome.
+  verified live on Windows 11 for v2.2.0, ReaImGui script capture (TK
+  Patchbay) verified live for v2.2.1. Community reports welcome.
 - **Linux x86_64 + aarch64** — supported and CI-built; capture and drag
   interactions verified live on Ubuntu 24.04 for v2.2.0 (see Known
   limitations for the X11 title-bar quirk). Community reports welcome.
@@ -273,6 +274,21 @@ detail is in [CHANGELOG.md → 2.0.4 → Known limitations](CHANGELOG.md#known-l
   to roughly match the plugin's preferred size, or use the plugin's
   own zoom control if it exposes one. Same limitation in REAPER's
   native FX float windows.
+- **Linux: GL ReaImGui windows need software rendering to be captured.**
+  Reparenting destroys the X11 window under the script's GL context, so
+  MaxPane only captures these windows when ReaImGui's "Disable hardware
+  acceleration" preference is on (Preferences → Plug-ins → ReaImGui);
+  restart the script after enabling it. Otherwise the capture is refused
+  with a message saying exactly that. LICE-based script windows (Lua
+  `gfx`) are unaffected.
+- **macOS: ReaImGui scripts that enforce a fixed minimum window size
+  (e.g. TK Patchbay) can resize and move REAPER's main window** when
+  captured into a pane smaller than that minimum. ReaImGui's macOS
+  backend applies the script's size enforcement to the hosting window —
+  which after capture is REAPER's own. Workaround: dock such scripts
+  natively in REAPER's docker, or keep the MaxPane pane at least as
+  large as the script's minimum. Scripts without size constraints
+  (e.g. ReaMD) are unaffected.
 
 ---
 

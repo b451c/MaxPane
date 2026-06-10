@@ -76,7 +76,12 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     bool hasVisibleChild = false;
     if (ps && ps->activeTab >= 0 && ps->activeTab < ps->tabCount) {
       const TabEntry* tab = &ps->tabs[ps->activeTab];
-      hasVisibleChild = (tab->captured && tab->hwnd && IsWindow(tab->hwnd));
+      // ADR-062 — a floor-hidden ReaImGui child counts as NOT covering the
+      // pane: without the visibility check the content fill is skipped and
+      // the hint text accumulates over the previous tab's stale last frame
+      // (Win32 repro: smeared hint + Track Manager ghost under it).
+      hasVisibleChild = (tab->captured && tab->hwnd && IsWindow(tab->hwnd) &&
+                         IsWindowVisible(tab->hwnd));
     }
     if (!hasVisibleChild) {
       RECT contentRect = { pr.left, pr.top + TAB_BAR_HEIGHT, pr.right, pr.bottom };
@@ -119,6 +124,37 @@ void MaxPaneContainer::OnPaint(HDC hdc)
 
     if (ps && ps->tabCount > 0) {
       DrawTabBar(hdc, paneId, paneRect);
+      // ADR-062 — floor-hidden hint. A captured ReaImGui window whose pane
+      // is smaller than its (learned) content-min is HIDDEN by RepositionAll
+      // instead of overflowing the pane (the overflow used to cover the
+      // splitter + the next pane's tab bar). Without a hint the pane reads
+      // as a dead grey hole — say why and how to get the window back.
+      const TabEntry* at = (ps->activeTab >= 0 && ps->activeTab < ps->tabCount)
+                             ? &ps->tabs[ps->activeTab] : nullptr;
+      if (at && at->captured && at->isReaImGui && at->hwnd &&
+          IsWindow(at->hwnd) && !IsWindowVisible(at->hwnd)) {
+        int needW = ARB_PANE_MIN, needH = ARB_PANE_MIN;
+        if (at->arbMinW > needW) needW = at->arbMinW;
+        if (at->arbMinH > needH) needH = at->arbMinH;
+        RECT hintRect = paneRect;
+        hintRect.top += m_winMgr.PaneHeaderHeight(paneId);
+        hintRect.left += 8;
+        hintRect.right -= 8;
+        char hint[400];
+        snprintf(hint, sizeof(hint),
+                 "'%.200s' needs at least %dx%d px.\nEnlarge this pane to show it.",
+                 at->name, needW, needH);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, MaxPaneIsDarkMode() ? RGB(150, 150, 150)
+                                              : RGB(80, 80, 80));
+        // DT_CALCRECT-free vertical centering: let DrawText wrap within the
+        // pane and offset the rect to roughly mid-height for short hints.
+        RECT centered = hintRect;
+        int paneH = hintRect.bottom - hintRect.top;
+        if (paneH > 60) centered.top += paneH / 2 - 24;
+        DrawTextUtf8(hdc, hint, -1, &centered,
+                     DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+      }
     } else {
       RECT headerRect = paneRect;
       headerRect.bottom = headerRect.top + TAB_BAR_HEIGHT;

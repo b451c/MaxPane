@@ -32,6 +32,10 @@ extern const char* (*g_ReverseNamedCommandLookup)(int);
 // pass nullptr (main section) at call sites.
 extern const char* (*g_kbd_getTextFromCmd)(int cmd, void* section);
 
+// v2.2.1 — ADR-061 amendment: path to reaper.ini, read by the Linux
+// GL-ReaImGui capture gate (ReaImGui's [reaimgui] forcecpu_gdk flag).
+extern const char* (*g_get_ini_file)();
+
 // Plugin DLL/dylib HINSTANCE captured in ReaperPluginEntry (Sprint 1 Entry 5).
 // On Windows DialogBoxParam needs the plugin's own HINSTANCE to find dialog
 // resources — passing nullptr resolves to the host EXE (REAPER) which doesn't

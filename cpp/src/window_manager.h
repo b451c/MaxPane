@@ -30,6 +30,22 @@ struct TabEntry {
                                     // 10 misses the FindReaperWindow full-window-tree
                                     // enumeration drops from every tick (500 ms) to
                                     // every 8th (~4 s). Reset on recapture.
+  // ADR-061 item #2 (v2.2.1) — learned per-window ImGui content-min. A
+  // captured ReaImGui script that re-asserts a size LARGER than its pane
+  // (SetNextWindowSizeConstraints fires every frame) overflows the pane on
+  // SWELL-generic, covering the splitter + the next pane's tab bar (seen
+  // live: pane 547x329, script forces 600x400). CheckAlive's drift watchdog
+  // learns the asserted size after a 2-tick stable disagreement with what
+  // RepositionAll set; the floor-hide then treats it as that window's
+  // minimum. Runtime-only — relearned on every capture, never persisted.
+  int arbMinW, arbMinH;          // learned content-min (0 = none learned)
+  int lastSetW, lastSetH;        // size RepositionAll last requested
+  int pendMinW, pendMinH;        // drift candidate awaiting 2nd-tick confirm
+  int lastSetX, lastSetY;        // position RepositionAll last requested
+                                 // (parent-relative). ImGui drag-window-by-
+                                 // background moves the captured child in
+                                 // SCREEN coords that SWELL applies parent-
+                                 // relative — the watchdog snaps it back.
 };
 
 // Returns the stable search prefix for known dynamic-title windows,
@@ -170,6 +186,12 @@ public:
   // children stops capture-by-click from tearing REAPER's edit view into a
   // pane and leaving the main window blank (forum v2.0.6).
   static bool IsCapturableTarget(HWND topLevel, const char* title);
+
+  // ADR-061 amendment (v2.2.1) — capture-refusal reason channel. A gate that
+  // rejects a capture leaves a user-facing message; the UI path that owns the
+  // toast consumes it (returns nullptr when none pending; consuming clears).
+  static void SetCaptureRefusal(const char* msg);
+  static const char* TakeCaptureRefusal();
 
 private:
   PaneState m_panes[MAX_PANES];

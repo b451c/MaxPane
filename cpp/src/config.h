@@ -4,7 +4,7 @@
 // cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
 // the Settings dialog "About" section reads this verbatim, and the
 // updater compares it against GitHub Releases tag_name on startup.
-#define MAXPANE_VERSION_STRING "v2.2.0"
+#define MAXPANE_VERSION_STRING "v2.2.1"
 
 // Layout constants
 static const int MAX_PANES = 16;

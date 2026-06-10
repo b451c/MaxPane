@@ -44,6 +44,35 @@
 ]]></description>
       </metadata>
 
+      <version name="2.2.1" author="b451c" time="2026-06-11T01:00:00Z">
+        <changelog><![CDATA[ReaImGui script windows (TK Patchbay and friends) get a definitive, per-platform resolution, including two crash fixes found on Linux right after v2.2.0 - this is the release v2.2.0 should have been.
+
+Fixed:
+- Linux: closing a captured script tab could crash REAPER (use-after-free when the script destroys its own window during the close toggle).
+- Linux: capturing a GL-rendered ReaImGui window (e.g. TK Patchbay) killed REAPER. Capture now works when ReaImGui's "Disable hardware acceleration" preference is enabled (restart the script after changing it); otherwise MaxPane refuses with an explanatory message instead of crashing.
+- Windows: captured ReaImGui windows rendered but ignored the mouse - now fully interactive (verified live with TK Patchbay).
+- Windows: closing a captured untitled ReaImGui script could launch the ReaImGui demo.
+- A script window enforcing its own minimum size no longer overflows its pane: MaxPane learns the minimum at runtime (Windows/Linux), hides the window below it and explains "needs at least WxH px - enlarge this pane to show it."
+- Captured ImGui windows dragged by their background no longer slide out of their pane.
+- The floor-hidden pane hint no longer smears during resize or shows the previous tab's stale frame.
+- "Release Window" works for captured ReaImGui windows on Linux.
+
+Added:
+- Capture refusals now explain themselves (message with the reason and the fix) instead of silently doing nothing.
+
+Known limitations:
+- Linux: capturing GL ReaImGui windows requires ReaImGui's "Disable hardware acceleration" (Preferences > Plug-ins > ReaImGui); restart the script after enabling.
+- macOS: ReaImGui scripts that enforce a fixed minimum window size (e.g. TK Patchbay) can resize and move REAPER's main window when captured into a pane smaller than that minimum (structural in ReaImGui's macOS backend). Workaround: dock such scripts natively, or keep the pane at least as large as the script's minimum. Scripts without size constraints (e.g. ReaMD) are unaffected.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.2.1/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.2.1/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.2.1/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.2.1/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.2.1/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.2.0" author="b451c" time="2026-06-10T22:00:00Z">
         <changelog><![CDATA[Windows and Linux reach interaction parity - capture-by-click and drag-to-dock work and show live visual feedback on all three platforms, verified in live debug sessions on Windows 11 and Ubuntu VMs. Plus a hardening pass from a full-code audit.
 
