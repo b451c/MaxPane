@@ -19,160 +19,9 @@ remembers your layouts.
 
 ---
 
-## What's new in 2.2
-
-- **Windows and Linux reach interaction parity.** Capture-by-click and
-  drag-to-dock work end-to-end and were verified in live debug sessions on
-  Windows 11 and Ubuntu — including docked windows, floating script windows,
-  quick taps, and windows stacked over the main window.
-- **Live visual feedback on every platform.** Arming click-capture outlines
-  the window under the cursor with a blue frame; drag-to-dock frames the
-  exact drop zone — even over panes already occupied by a captured window.
-  The drop always lands where the frame shows.
-- **Natural title-bar drags.** When the cursor isn't over a pane but the
-  dragged window's body hangs over one, that pane is targeted as
-  "Add as tab" — so dragging a window by its title bar just works.
-- **MIDI toolbars are first-class.** All 16 MIDI toolbars + the piano-roll
-  toolbar capture cleanly and survive save/restore; the toolbar action table
-  was repaired (Toolbars 9–16 fired wrong actions, 17–32 now supported) and
-  REAPER's Main toolbar is excluded from capture (it used to leave a floating
-  ghost at every startup — existing ghosts self-heal).
-- **Quality-of-life:** collapsible navigation bar (chevron → thin strip);
-  single-window panes can auto-hide their tab bar; right-click cancels
-  capture mode everywhere; failures (failed capture, full workspace slots,
-  corrupt layout) now say so instead of doing nothing.
-
-**Platform note:** on Linux/X11 a bare title-bar click can't always be
-attributed to its window (the title bar belongs to the window manager) —
-clicking window content always works.
-
-Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
-
-## What's new in 2.1
-
-- **Screenset integration** — MaxPane's layout now round-trips through REAPER
-  "Window sets". Save a Window set with MaxPane configured, recall it later,
-  and MaxPane restores its panes and re-captures its windows automatically
-  (previously the windows came back floating and you had to re-open MaxPane
-  by hand).
-- **Dark-mode "Auto" follows the system again** — under REAPER (which forces an
-  Aqua app appearance) "Auto (follow system)" was stuck on light even in macOS
-  Dark mode; it now reads the OS setting directly.
-- **Stability pass** — manager windows (Routing Matrix / Track Manager) no
-  longer float after closing MaxPane; tab bar + dividers redraw correctly after
-  reopen; tab-bar hover works under a focused plugin tab; floating MaxPane
-  position/monitor persists across Cmd+Q; releasing a captured toolbar no longer
-  fires its buttons; captured ReaImGui windows (ReaMD) no longer shrink REAPER's
-  main window; Windows startup lag reduced.
-- **Capture-by-click redesigned** — safe around modal dialogs and the core edit
-  view, with a crosshair cursor, hover name + outline preview, and Esc to cancel.
-- **"Release Window" returns the window to REAPER visible (floating)** for all
-  types; "Close Tab" stays the destructive action.
-
-**Known limitations:** ReaImGui scripts with large UIs (e.g. TK Patchbay) can
-still shrink REAPER's main window if their pane is made very small (full
-per-window fix in v2.2); a *docked* MaxPane on a second monitor may return to
-the main monitor after restart (use floating mode, which remembers its monitor);
-changing the macOS appearance while REAPER runs needs a Settings re-open to take
-effect.
-
-**Platform testing:** 2.1.0 is verified on **macOS (arm64)**. The Windows and
-Linux binaries are built by CI but not yet runtime-tested for this release —
-please report any issues.
-
-Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
-
-## What's new in 2.0.5
-
-Bugfix release.
-
-- **Captured plugin windows restore into MaxPane on project open** instead
-  of coming back floating. Opening a saved project whose MaxPane had docked
-  FX now opens MaxPane and re-docks them — whether MaxPane was closed or
-  showing the launcher when you open the project.
-- **In-pane tab order preserved on restore.** Panes holding several
-  captured windows or plugins — especially FX across multiple tracks —
-  could come back in a scrambled order after a workspace or project
-  reload, because asynchronously re-captured windows landed in
-  capture-completion order rather than the saved order (and that order
-  was then saved back). Restore now re-sorts each pane to its saved
-  order, and re-derives tab colors + the active tab, once re-capture
-  finishes.
-- **Windows: capture-by-click of the MIDI editor** (and other
-  REAPER-native dynamic-title windows) now works, matching
-  macOS/Linux — previously the click was dropped and you had to use the
-  "Open Windows" submenu.
-
-This release needs user confirmation — if you reported one of these on
-the forum, please test and report whether it is fixed.
-
-See [CHANGELOG.md](CHANGELOG.md#205---2026-06-03) for details.
-
----
-
-## What's new in 2.0.4
-
-- **AU/VST/JSFX plugin window save & restore.** Capture a floating
-  plugin UI into a MaxPane pane, save the workspace, restart REAPER —
-  the plugin reattaches to its pane on workspace load (with the
-  matching project open). Identity uses the same `(track GUID, FX GUID)`
-  pair REAPER itself stores in RPP `FXID {…}` blocks, so it survives
-  FX slot reorder and plugin rename. Covers track FX, master FX, and
-  take FX.
-- **Inline hotkey binding.** Right-click a workspace card → "Bind
-  hotkey" now opens REAPER's keystroke-capture modal scoped to that
-  specific slot — no more hunting through the full Actions dialog.
-- **Non-blocking update check on startup.** REAPER startup no longer
-  freezes for the HTTP round-trip; new "Automatically on REAPER
-  startup" checkbox in Settings → UPDATES (default ON).
-- **Settings dialog compact redesign.** ~26% shorter (380 → 280 px),
-  tighter spacing, UPDATES section split out for clarity.
-
-See [CHANGELOG.md](CHANGELOG.md#204---2026-05-26) for the v2.0.4
-section including known limitations (project-bound restore,
-plugin-side window scaling, etc.).
-
-## What's new in 2.0
-
-- **Drag-to-dock** — grab any REAPER window from outside MaxPane and drop
-  it on a pane. Live preview shows the four split zones, the tab-bar
-  zone, and the body-center forgiving zone. Shift+drop replaces the
-  active tab.
-- **Up to 8 MaxPane containers** in one REAPER session — independent
-  layouts, captured windows, and project state. Open via
-  `MaxPane: Open Container`, `MaxPane: Open Container 2`, … through 8.
-- **Floating mode** — detach the whole container into a top-level
-  window with native chrome. Multi-monitor positions remembered.
-  Always-on-top toggle for keyboard-monitor setups.
-- **Quick Switcher** — bind one hotkey. Type a few characters. Fuzzy-
-  match across every open tab (across every instance), every saved
-  workspace, every favorite. Enter activates.
-- **32 workspace slots + 32 favorite slots** — bind hotkeys to any of
-  them via REAPER's Actions dialog. Or use the single "Workspace
-  pickup" action to reach all 32 from one binding.
-- **Persistent navigation bar** at the top of every container.
-  Home, Drag-to-dock, Quick Switch, Save workspace, Load▾, Settings,
-  Support — actions that used to be buried in the right-click menu
-  surfaced as a clean toolbar.
-- **Workspace launcher** — when a container is empty, you see a card
-  grid of saved workspaces with mini layout previews. One click loads.
-  Right-click for Rename / Duplicate / Delete / Bind Hotkey.
-- **C-series UX wins** — Reopen last closed tab (Cmd+Shift+T style),
-  pinned tabs (sticky, sort to left, exempt from bulk close), tab
-  Close-Others / Close-to-Right / Close-All, always-on-top floating.
-- **Settings dialog** — auto-open, show nav bar, dark-mode override,
-  default workspace, support links, all in one place.
-- **Toast bar + custom Save dialog** — non-fatal feedback ("Workspace
-  saved as 'Edit Mode'") via a 3-second toast strip; rename / duplicate
-  collisions surface clearly instead of failing silently.
-- **Reliability** — close-leak bugs that haunted v1.5.x are gone. The
-  close mechanism uses `WM_CLOSE` as primary, action-toggle as fallback,
-  startup ghost cleanup as safety net (see
-  [ARCHITECTURE.md](ARCHITECTURE.md) for the full story).
-
-Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
-
----
+> **Release history** lives in [CHANGELOG.md](CHANGELOG.md) — latest:
+> **v2.2.0** (Windows/Linux interaction parity, live capture/drag visual
+> feedback on all platforms, MIDI toolbar capture).
 
 ## Features
 
@@ -183,39 +32,60 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 - **Tabbed panes** — multiple windows per pane with a tab bar. Drag tabs
   between panes, reorder within a pane. Each tab bar has a **▼ menu** for
   pane operations.
+- **Floating mode** — detach the whole container into a top-level window
+  with native chrome. Multi-monitor positions remembered; always-on-top
+  toggle for keyboard-monitor setups.
 - **Solo / maximize** — temporarily expand any pane to fill the entire
   container; full tree restored on exit.
 - **5 layout presets** — Two Columns, Left + Right Split, Three Columns,
   2x2 Grid, Top + Bottom Split.
+- **Space savers** — the navigation bar collapses to a thin strip via its
+  chevron, and single-window panes can auto-hide their tab bar (Settings)
+  so the captured window gets every pixel.
 - **Pinned tabs** — sticky tabs sorted to the left of each pane, exempt
   from "Close Others" / "Close All".
-- **Tab colors** — color-code tabs with 8 palette colors.
+- **Tab colors** — color-code tabs with 8 palette colors. Reopen last
+  closed tab, Close Others / to Right / All.
 
 ### Capture
+- **Drag-to-dock** — grab any REAPER window from outside MaxPane and drop
+  it on a pane. A live preview frames the exact drop zone (four split
+  zones, tab bar, body center); Shift+drop replaces the active tab.
+  Dragging a window by its title bar targets the pane under the window's
+  body, so it just works.
+- **Click-to-capture** — arm capture mode, hover any window (a blue
+  outline shows exactly what a click will grab), click to dock it.
+  Esc or right-click cancels. Safe around modal dialogs and REAPER's
+  core edit views.
 - **15 known REAPER windows** — one-click capture for Mixer, Track
   Manager, Routing Matrix, Media Explorer, FX Browser, Project Bay,
   Region Manager, Region Render Matrix, Actions, Undo History,
   Navigator, Big Clock, Video, Performance Meter, Virtual MIDI
   Keyboard.
-- **Arbitrary window capture** — grab any visible REAPER window
-  (toolbars, third-party ReaImGui scripts like ReaBeat / ReaMD /
-  reamix.me) via the "Open Windows" submenu, click-to-capture mode, or
-  drag-to-dock.
-- **AU / VST / JSFX plugin UI capture (v2.0.4+)** — capture a floating
-  plugin window via click-to-capture or drag-to-dock; identity is
-  saved as a `(track GUID, FX GUID)` pair so it round-trips through
-  workspace save/load and project reopen as long as the matching
-  project is loaded. See Known limitations below for the project-
-  bound and plugin-scaling caveats.
+- **Arbitrary window capture** — grab any visible REAPER window via the
+  "Open Windows" submenu, click-to-capture, or drag-to-dock: toolbars
+  (1–32 **and all MIDI toolbars**), third-party ReaImGui scripts
+  (ReaBeat / ReaMD / reamix.me), managers, dockers.
+- **AU / VST / JSFX plugin UI capture** — capture a floating plugin
+  window; identity is saved as a `(track GUID, FX GUID)` pair so it
+  round-trips through workspace save/load and project reopen as long as
+  the matching project is loaded. See Known limitations below for the
+  project-bound and plugin-scaling caveats.
 - **Favorites** — pin frequently-used windows for instant access from any
   container's menu.
 
 ### Workspaces
 - **32 saved workspace slots** — tree layout + captured windows snapshot.
   One click in the launcher or one hotkey binding to recall.
+- **Workspace launcher** — an empty container shows a card grid of saved
+  workspaces with mini layout previews. One click loads; right-click for
+  Rename / Duplicate / Delete / Bind Hotkey.
 - **Per-project state** — layout is saved inside each `.RPP` project file
   via REAPER's `project_config_extension_t`, so different projects can
   have different MaxPane configurations and they load with the project.
+- **REAPER Window sets (screensets) integration** — MaxPane's layout
+  round-trips through Window sets: recall a set and MaxPane restores its
+  panes and re-captures its windows automatically.
 - **Custom Save dialog** — name input + clickable list of existing
   workspaces + dynamic status label so you know whether you're creating
   new or replacing.
@@ -226,6 +96,9 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
   state. Workspaces and favorites are shared across instances.
 
 ### Navigation + hotkeys
+- **Persistent navigation bar** — Home, Drag-to-dock, Quick Switch, Save,
+  Load▾, Settings, Support as a clean toolbar at the top of every
+  container (collapsible; current workspace name + dirty indicator).
 - **Quick Switcher** — fuzzy-match across open tabs / workspaces /
   favorites. Bind your own hotkey.
 - **`MaxPane: Workspace pickup`** — single hotkey, prompt for slot
@@ -241,16 +114,17 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
 - **Accelerator hook** — MaxPane action bindings fire even when MaxPane
   (or a captured pane) has focus — v1.x required REAPER's main window
   to have focus first.
+- **Settings + updates** — auto-open, nav bar, dark-mode override
+  (auto / light / dark), default workspace, tab-bar collapse, support
+  links; non-blocking update check on startup (toggleable).
 
 ### Platform
 - **macOS arm64 + x86_64** — primary platform, actively tested on every release.
-- **Windows x64** — supported and CI-built; runtime-verified less frequently
-  than macOS ([#8](https://github.com/b451c/MaxPane/issues/8) Windows mouse
-  input closed in v2.0.1). Community reports welcome.
-- **Linux x86_64 + aarch64** — supported and CI-built; runtime-verified less
-  frequently than macOS ([#9](https://github.com/b451c/MaxPane/issues/9)
-  FX Browser close crash no longer reproduces on REAPER 7.69). Community
-  reports welcome.
+- **Windows x64** — supported and CI-built; capture and drag interactions
+  verified live on Windows 11 for v2.2.0. Community reports welcome.
+- **Linux x86_64 + aarch64** — supported and CI-built; capture and drag
+  interactions verified live on Ubuntu 24.04 for v2.2.0 (see Known
+  limitations for the X11 title-bar quirk). Community reports welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
