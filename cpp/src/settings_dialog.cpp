@@ -27,7 +27,7 @@ enum DarkMode { DM_AUTO = 0, DM_DARK = 1, DM_LIGHT = 2, DM_COUNT = 3 };
 
 DarkMode ReadDarkMode()
 {
-  const char* dm = g_GetExtState ? g_GetExtState("MaxPane_cpp", "dark_mode") : nullptr;
+  const char* dm = g_GetExtState ? g_GetExtState(EXT_SECTION, "dark_mode") : nullptr;
   if (dm && std::strcmp(dm, "dark") == 0) return DM_DARK;
   if (dm && std::strcmp(dm, "light") == 0) return DM_LIGHT;
   return DM_AUTO;
@@ -59,15 +59,25 @@ static DarkMode g_pendingDarkMode = DM_AUTO;
 bool ReadShowNavBar()
 {
   if (!g_GetExtState) return true;
-  const char* v = g_GetExtState("MaxPane_cpp", "show_nav_bar");
+  const char* v = g_GetExtState(EXT_SECTION, "show_nav_bar");
   if (v && v[0] == '0' && v[1] == '\0') return false;
   return true;
+}
+
+// ADR-055 — collapse a pane's tab bar to a sliver when it holds a single
+// window. Global, default OFF; only literal "1" turns it on.
+bool ReadHideSingleTabBar()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "hide_single_tab_bar");
+  return (v && v[0] == '1' && v[1] == '\0');
 }
 
 void LoadValues(HWND dlg)
 {
   CheckDlgButton(dlg, IDC_SET_AUTOOPEN, IsAutoOpenEnabled() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_SHOWNAVBAR, ReadShowNavBar() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_HIDETABBAR, ReadHideSingleTabBar() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_AUTO_UPDATE, IsAutoUpdateEnabled() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
   SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
@@ -83,10 +93,12 @@ void CommitValues(HWND dlg)
   SetAutoOpenEnabled(IsDlgButtonChecked(dlg, IDC_SET_AUTOOPEN) == BST_CHECKED);
   SetAutoUpdateEnabled(IsDlgButtonChecked(dlg, IDC_SET_AUTO_UPDATE) == BST_CHECKED);
   if (g_SetExtState) {
-    g_SetExtState("MaxPane_cpp", "dark_mode", DarkModeExtStateValue(g_pendingDarkMode), true);
+    g_SetExtState(EXT_SECTION, "dark_mode", DarkModeExtStateValue(g_pendingDarkMode), true);
     InvalidateMaxPaneDarkModeCache();
     const bool showNav = (IsDlgButtonChecked(dlg, IDC_SET_SHOWNAVBAR) == BST_CHECKED);
-    g_SetExtState("MaxPane_cpp", "show_nav_bar", showNav ? "1" : "0", true);
+    g_SetExtState(EXT_SECTION, "show_nav_bar", showNav ? "1" : "0", true);
+    const bool hideTab = (IsDlgButtonChecked(dlg, IDC_SET_HIDETABBAR) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "hide_single_tab_bar", hideTab ? "1" : "0", true);
   }
 }
 
@@ -138,8 +150,8 @@ INT_PTR CALLBACK SettingsDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*
 
       if (id == IDC_SET_RESET) {
         if (g_SetExtState) {
-          g_SetExtState("MaxPane_cpp", "auto_open", "1", true);
-          g_SetExtState("MaxPane_cpp", "dark_mode", "auto", true);
+          g_SetExtState(EXT_SECTION, "auto_open", "1", true);
+          g_SetExtState(EXT_SECTION, "dark_mode", "auto", true);
           InvalidateMaxPaneDarkModeCache();
         }
         LoadValues(dlg);

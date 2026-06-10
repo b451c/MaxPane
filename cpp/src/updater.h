@@ -41,10 +41,16 @@ enum class AsyncResult {
   ParseError,        // got XML but couldn't extract / parse the version tag
 };
 
-// Fire-and-forget. Spawns a detached worker thread on the first call
-// per session; subsequent calls are no-ops (single-fire guard). Safe
-// to call from anywhere on the main thread; non-blocking.
+// Fire-and-forget. Spawns a worker thread on the first call per session;
+// subsequent calls are no-ops (single-fire guard). Safe to call from
+// anywhere on the main thread; non-blocking.
 void StartAsyncCheck();
+
+// Audit M1.5 — joins the worker (bounded by the HTTP 10s timeouts; instant
+// in the typical case). MUST be called from the plugin-unload path before
+// REAPER frees the library, or a still-running worker executes unmapped
+// code (crash at exit).
+void ShutdownAsyncCheck();
 
 // Snapshot of the worker's current state. Safe to call from the main
 // thread at any frequency. Container OnTimer polls this once per tick.

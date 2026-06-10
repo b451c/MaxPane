@@ -65,8 +65,9 @@ calls, no live REAPER process. Anything that needs `SetParent` or
 ## Code Style
 
 - **C++17.** No exceptions, no RTTI.
-- **Cross-platform first.** Every change must build on all four CI targets
-  (macOS arm64, macOS x86_64, Ubuntu, Windows). See ADR-017 in
+- **Cross-platform first.** Every change must build on all five CI targets
+  (macOS arm64, macOS x86_64, Windows x64, Linux x86_64, Linux aarch64).
+  See ADR-017 in
   `docs/v2/V2_DECISIONS.md` — multiplatform parity is a v2.0 hard
   requirement, not a "nice to have". The CI matrix enforces this.
 - **No direct Cocoa, GTK, or native Win32 calls in `cpp/src/*.cpp`.** Cocoa
@@ -79,8 +80,9 @@ calls, no live REAPER process. Anything that needs `SetParent` or
   `min` / `max` macros that collide with the STL.
 - **Named constants in `config.h`** — no magic numbers.
 - **Strict warnings.** Production target compiles with
-  `-Wall -Wextra -Wshadow -Wconversion` and **zero warnings**. CI rejects
-  anything that introduces one.
+  `-Wall -Wextra -Wshadow -Wconversion` and **zero warnings**. CI builds
+  with `-DMAXPANE_WERROR=ON`, which promotes warnings to errors
+  (clang/gcc `-Werror`, MSVC `/W4 /WX`) — a warning fails the build.
 - **No emojis in code or commits** unless an owner asks for them.
 - **Comments explain *why*, not *what*.** Well-named identifiers cover the
   what. Reserve comments for hidden constraints, subtle invariants,

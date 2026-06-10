@@ -25,21 +25,20 @@ struct TabEntry {
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
   bool pinned;                   // C2 (ADR-027) — sticky, sorted to left, exempt from Close Others
+  unsigned short recaptureBackoff;  // audit M3.3 — runtime-only miss counter for the
+                                    // uncaptured-dynamic-tab probe in CheckAlive; after
+                                    // 10 misses the FindReaperWindow full-window-tree
+                                    // enumeration drops from every tick (500 ms) to
+                                    // every 8th (~4 s). Reset on recapture.
 };
 
 // Returns the stable search prefix for known dynamic-title windows,
 // or nullptr if the window has a static title.
 const char* GetDynamicTitlePrefix(const char* title);
 
-// Returns the REAPER toggle action ID for a toolbar window, or 0 if not a toolbar.
-int GetToolbarToggleAction(const char* title);
-
-// Look up REAPER toggle action for any window title (toolbars + known windows).
-int LookupToggleAction(const char* title);
-
-// Reverse-lookup: given a toggle action ID, fill buf with the window search title.
-// Returns true if a mapping was found.
-bool GetSearchTitleForAction(int action, char* buf, int bufSize);
+// GetToolbarToggleAction / LookupToggleAction / GetSearchTitleForAction are
+// declared in config.h (definitions in config.cpp since v2.1.2 / ADR-052);
+// available here via the config.h include above.
 
 struct PaneState {
   TabEntry tabs[MAX_TABS_PER_PANE];
@@ -80,13 +79,20 @@ public:
   void ReleaseAllSelective(const int* staleActions, int staleCount);
   void RepositionAll(const SplitTree& tree);
   bool CheckAlive();  // returns true if any tabs were removed or recaptured
-  // Bug I — true if any pane holds a captured arbitrary (ReaImGui / Lua-gfx)
-  // window. Gates the dock min-size clamp so empty / native-only MaxPanes can
-  // still dock arbitrarily small.
-  bool HasCapturedArbitrary() const;
+  // ADR-055 — single-tab tab-bar collapse pref (Settings, global). Pushed in
+  // by the container; consulted by RepositionAll and exposed via
+  // PaneHeaderHeight so layout, paint and hit-testing share one answer.
+  void SetHideSingleTabBar(bool v) { m_hideSingleTabBar = v; }
+  bool GetHideSingleTabBar() const { return m_hideSingleTabBar; }
+  // Effective header height for a pane: TAB_BAR_COLLAPSED_HEIGHT when the
+  // pref is on and the pane holds exactly one tab; TAB_BAR_HEIGHT otherwise
+  // (incl. empty panes — their header carries the capture CTA text).
+  int PaneHeaderHeight(int paneId) const;
+
   // Bug I (ADR-045 / v2.1.1) — true if any captured tab is a ReaImGui / Lua-gfx
-  // host. Gates the dock min-clamp; narrower than HasCapturedArbitrary (which
-  // also matched toolbars / FX that don't cascade and shouldn't be size-guarded).
+  // host. Gates the dock min-clamp + pane floor-hide (toolbars / FX don't
+  // cascade and must never be size-guarded). The broader pre-v2.1.1
+  // HasCapturedArbitrary() variant was removed as dead code (audit M3.4).
   bool HasCapturedReaImGui() const;
 
   // Accessors
@@ -131,6 +137,30 @@ public:
   // plugin window itself. SWELL uses the v2.0 walk-to-top behaviour.
   static HWND ResolveCaptureSourceForClick(HWND underCursor);
 
+  // Linux-VM live debug 2026-06-10 — on X11 the title bar is the WINDOW
+  // MANAGER's decoration: WindowFromPoint returns null there, so the
+  // natural grab/click point of a window was invisible to capture-by-click
+  // and drag-to-dock. The click/press focuses the window though — return
+  // the foreground window when `screenPt` lies within its rect expanded
+  // upward by the decoration band. Returns null on macOS (titlebars belong
+  // to the NSWindow, WindowFromPoint already resolves them).
+  static HWND ForegroundFallbackForPoint(POINT screenPt);
+  // The capture/drag entry point for "what window is under this screen
+  // point". Wraps WindowFromPoint with the per-platform corrections: Win32
+  // adds the titlebar-band fallback; SWELL-generic FIRST prefers a floating
+  // top-level whose rect contains the point, because SWELL's WindowFromPoint
+  // walks windows in list order, not stacking order, and the main window
+  // swallows points over floating windows (Linux-VM live debug 2026-06-10).
+  static HWND WindowFromPointForCapture(POINT screenPt);
+
+  // Audit M2.7 — shared resolution of REAPER dock frames. If `title`
+  // carries DOCKED_TITLE_SUFFIX: strips it in place, resolves the inner
+  // child to capture, sets *dockFrameOut to the frame (to hide after a
+  // COMMITTED capture). When the suffix is absent, or no child matches,
+  // returns topLevel with *dockFrameOut = nullptr. Replaces three
+  // hand-rolled copies (Open Windows menu, capture-by-click, drag-to-dock).
+  static HWND ResolveDockFrameChild(HWND topLevel, char* title, HWND* dockFrameOut);
+
   // ADR-048 — capture allow-list. A window embedded in REAPER's MAIN window
   // (GetParent == g_reaperMainHwnd) is core UI (arrange / ruler / TCP /
   // transport) and is grabbable ONLY if it positively identifies as a real
@@ -144,6 +174,7 @@ public:
 private:
   PaneState m_panes[MAX_PANES];
   HWND m_containerHwnd;  // stored for CheckAlive recapture
+  bool m_hideSingleTabBar = false;  // ADR-055 — Settings pref mirror
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
   void DoRelease(TabEntry& tab, bool toggleOff = true, bool returnVisible = false);
 };

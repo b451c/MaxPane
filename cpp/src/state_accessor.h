@@ -50,7 +50,21 @@ class RppWriteAccessor : public StateAccessor {
 public:
   RppWriteAccessor() : m_count(0) { memset(m_entries, 0, sizeof(m_entries)); }
   void Set(const char* /*section*/, const char* key, const char* value, bool) override {
-    if (m_count >= RPP_KV_MAX || !key) return;
+    if (!key) return;
+    // Key-value semantics like every other StateAccessor: a repeated Set
+    // REPLACES. The old append-only behavior emitted duplicate "KEY VALUE"
+    // lines and RppReadAccessor returns the FIRST match — so any writer
+    // doing a clear-then-write pass (e.g. WritePaneTabsStatic's B21
+    // pre-clear) would have its real values shadowed by the cleared ones.
+    // project_state.cpp dodged this by hand-rolling its pane loop; this
+    // makes the accessor safe for every caller (audit 2026-06-10).
+    for (int i = 0; i < m_count; i++) {
+      if (strcmp(m_entries[i].key, key) == 0) {
+        safe_strncpy(m_entries[i].value, value ? value : "", RPP_KV_VAL_LEN);
+        return;
+      }
+    }
+    if (m_count >= RPP_KV_MAX) return;
     safe_strncpy(m_entries[m_count].key, key, RPP_KV_KEY_LEN);
     safe_strncpy(m_entries[m_count].value, value ? value : "", RPP_KV_VAL_LEN);
     m_count++;

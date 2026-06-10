@@ -8,20 +8,22 @@
 // sticking to the intersection.
 //
 // v2.0.4 #4 (ADR-040) — compact pass per owner feedback "ogromne wzgledem
-// ilosci funkcji". Was 360x380; now 360x280 (~26% shorter). Changes:
+// ilosci funkcji". Was 360x380; now 360x296 (~22% shorter). Changes:
 //   - Tighter section-header → first-control gaps (14 → 6).
 //   - "Color mode:" label inlined to the left of the cycle button.
 //   - HOTKEYS description shortened from 3 lines to 1.
 //   - UPDATES split out of ABOUT as its own section (button + auto-
 //     checkbox on a single row).
 //   - Bottom button breathing space cut from 47 to 22.
+// ADR-055 — third GENERAL checkbox (single-tab bar collapse); sections
+// below shifted +16, dialog height 280 → 296.
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 #include "settings_dialog.h"
 
-IDD_SETTINGS DIALOGEX 0, 0, 360, 280
+IDD_SETTINGS DIALOGEX 0, 0, 360, 296
 STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
 CAPTION "MaxPane Settings"
 BEGIN
@@ -35,55 +37,59 @@ BEGIN
                     IDC_SET_AUTOOPEN, 25, 22, 320, 14
     AUTOCHECKBOX    "Show navigation bar at top of every MaxPane",
                     IDC_SET_SHOWNAVBAR, 25, 38, 320, 14
+    AUTOCHECKBOX    "Collapse tab bar when a pane has a single window",
+                    IDC_SET_HIDETABBAR, 25, 54, 320, 14
 #else
     CHECKBOX        "Open MaxPane automatically when REAPER starts",
                     IDC_SET_AUTOOPEN, 25, 22, 320, 14
     CHECKBOX        "Show navigation bar at top of every MaxPane",
                     IDC_SET_SHOWNAVBAR, 25, 38, 320, 14
+    CHECKBOX        "Collapse tab bar when a pane has a single window",
+                    IDC_SET_HIDETABBAR, 25, 54, 320, 14
 #endif
 
     // ---- Appearance ----
-    LTEXT           "APPEARANCE", -1, 15, 58, 100, 10
-    LTEXT           "Color mode:", IDC_SET_DARK_GROUP, 25, 76, 60, 12
+    LTEXT           "APPEARANCE", -1, 15, 74, 100, 10
+    LTEXT           "Color mode:", IDC_SET_DARK_GROUP, 25, 92, 60, 12
     PUSHBUTTON      "Auto (follow system)", IDC_SET_DARK_CYCLE,
-                    90, 72, 175, 18
+                    90, 88, 175, 18
 
     // ---- Hotkeys ----
-    LTEXT           "HOTKEYS", -1, 15, 98, 100, 10
+    LTEXT           "HOTKEYS", -1, 15, 114, 100, 10
     LTEXT           "Right-click workspace cards to bind shortcuts. Browse all MaxPane actions:",
-                    IDC_SET_HOTKEYS_LBL, 25, 112, 320, 12
+                    IDC_SET_HOTKEYS_LBL, 25, 128, 320, 12
     PUSHBUTTON      "Open REAPER Actions...", IDC_SET_OPEN_ACTIONS,
-                    25, 126, 130, 18
+                    25, 142, 130, 18
 
     // ---- Updates (v2.0.4 #3) ----
-    LTEXT           "UPDATES", -1, 15, 152, 100, 10
+    LTEXT           "UPDATES", -1, 15, 168, 100, 10
     PUSHBUTTON      "Check for updates", IDC_SET_CHECK_UPDATE,
-                    25, 166, 130, 18
+                    25, 182, 130, 18
 #ifdef _WIN32
     AUTOCHECKBOX    "Automatically on REAPER startup",
-                    IDC_SET_AUTO_UPDATE, 165, 169, 190, 14
+                    IDC_SET_AUTO_UPDATE, 165, 185, 190, 14
 #else
     CHECKBOX        "Automatically on REAPER startup",
-                    IDC_SET_AUTO_UPDATE, 165, 169, 190, 14
+                    IDC_SET_AUTO_UPDATE, 165, 185, 190, 14
 #endif
 
     // ---- About (v2.0.3) ----
-    LTEXT           "ABOUT", -1, 15, 190, 100, 10
+    LTEXT           "ABOUT", -1, 15, 206, 100, 10
     // Sprint 1 Entry 7 — em-dash → "--": rc.exe defaults to ACP for
     // string literals. settings_dialog.cpp fills the actual version
     // string at WM_INITDIALOG time from MAXPANE_VERSION_STRING.
     LTEXT           "MaxPane (version filled at runtime)",
-                    IDC_SET_VERSION_LBL, 25, 204, 320, 12
+                    IDC_SET_VERSION_LBL, 25, 220, 320, 12
     LTEXT           "MIT License -- github.com/b451c/MaxPane",
-                    IDC_SET_LICENSE_LBL, 25, 216, 320, 12
-    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, 232, 60, 18
-    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, 232, 60, 18
-    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, 232, 60, 18
-    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, 232, 60, 18
+                    IDC_SET_LICENSE_LBL, 25, 232, 320, 12
+    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, 248, 60, 18
+    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, 248, 60, 18
+    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, 248, 60, 18
+    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, 248, 60, 18
 
     // ---- Bottom button row ----
     PUSHBUTTON      "Reset", IDC_SET_RESET,
-                    15, 258, 60, 18
-    DEFPUSHBUTTON   "OK", 1, 235, 258, 55, 18
-    PUSHBUTTON      "Cancel", 2, 295, 258, 55, 18
+                    15, 274, 60, 18
+    DEFPUSHBUTTON   "OK", 1, 235, 274, 55, 18
+    PUSHBUTTON      "Cancel", 2, 295, 274, 55, 18
 END

@@ -65,12 +65,12 @@ jobs:
       - name: Configure (macOS / Linux)
         if: runner.os != 'Windows'
         working-directory: cpp
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAXPANE_BUILD_TESTS=ON ${{ matrix.cmake_flags }}
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Debug -DMAXPANE_BUILD_TESTS=ON -DMAXPANE_WERROR=ON ${{ matrix.cmake_flags }}
 
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         working-directory: cpp
-        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DMAXPANE_BUILD_TESTS=ON
+        run: cmake -B build -G "Visual Studio 17 2022" -A x64 -DMAXPANE_BUILD_TESTS=ON -DMAXPANE_WERROR=ON
 
       # cmake --build is portable across generators (make / MSBuild / Ninja).
       # --config Debug is only honored by multi-config generators (Visual Studio).

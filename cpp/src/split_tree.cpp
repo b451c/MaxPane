@@ -234,7 +234,7 @@ void SplitTree::SplitRectV(const RECT& parent, float ratio,
                             RECT& outLeft, RECT& outSplitter, RECT& outRight)
 {
   int w = parent.right - parent.left;
-  int splitX = parent.left + (int)(w * ratio);
+  int splitX = parent.left + (int)((float)w * ratio);
   splitX = clamp_i(splitX, parent.left + MIN_PANE_SIZE, parent.right - MIN_PANE_SIZE - SPLITTER_WIDTH);
 
   outLeft = parent;
@@ -252,7 +252,7 @@ void SplitTree::SplitRectH(const RECT& parent, float ratio,
                             RECT& outTop, RECT& outSplitter, RECT& outBottom)
 {
   int h = parent.bottom - parent.top;
-  int splitY = parent.top + (int)(h * ratio);
+  int splitY = parent.top + (int)((float)h * ratio);
   splitY = clamp_i(splitY, parent.top + MIN_PANE_SIZE, parent.bottom - MIN_PANE_SIZE - SPLITTER_WIDTH);
 
   outTop = parent;

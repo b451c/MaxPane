@@ -39,7 +39,7 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
   // Compute per-instance identifiers. Instance 0 keeps the v1.5.x legacy
   // names so existing user data continues to load without migration.
   if (m_instanceId <= 0) {
-    safe_strncpy(m_extSection,   "MaxPane_cpp",       sizeof(m_extSection));
+    safe_strncpy(m_extSection,   EXT_SECTION,       sizeof(m_extSection));
     safe_strncpy(m_dockIdent,    "MaxPane_container", sizeof(m_dockIdent));
     safe_strncpy(m_rppChunkTag,  "MAXPANE_STATE",     sizeof(m_rppChunkTag));
   } else {
@@ -126,7 +126,6 @@ bool MaxPaneContainer::Create()
       m_currentWorkspaceName[0] = '\0';
       m_workspaceDirty = false;
     }
-    RefreshNavBarLabelCache();
   }
 
   LoadState();
@@ -318,10 +317,6 @@ void MaxPaneContainer::Shutdown()
   DestroyWindow(m_hwnd);
   m_hwnd = nullptr;
   m_visible = false;
-
-  // Feature A — drop the NavBar shim cache so a future container created
-  // at the same address doesn't inherit our stale label.
-  NavBar::ResetActiveWorkspaceLabel();
 }
 
 void MaxPaneContainer::Show()
@@ -433,6 +428,7 @@ void MaxPaneContainer::EnterCaptureMode(int paneId)
   StartCaptureTimer();
   SetCaptureCursorActive(true);   // ADR-048 — crosshair while armed (macOS)
   InvalidateRect(m_hwnd, nullptr, FALSE);
+  DBG("[MaxPane] EnterCaptureMode[%s]: pane=%d\n", m_extSection, paneId);
 }
 
 void MaxPaneContainer::ExitCaptureMode()
@@ -444,7 +440,10 @@ void MaxPaneContainer::ExitCaptureMode()
   SetCaptureCursorActive(false);  // ADR-048 — restore the normal cursor
   HideCaptureHighlight();         // ADR-048 — drop the hover outline
   StopCaptureTimerIfIdle();
-  if (was) InvalidateRect(m_hwnd, nullptr, FALSE);
+  if (was) {
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+    DBG("[MaxPane] ExitCaptureMode[%s]\n", m_extSection);
+  }
 }
 
 // =========================================================================
@@ -855,7 +854,6 @@ void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
               strcmp(m_currentWorkspaceName, srcEntry.name) == 0) {
             safe_strncpy(m_currentWorkspaceName, buf, sizeof(m_currentWorkspaceName));
             PersistWorkspaceLabel();
-            RefreshNavBarLabelCache();
           }
           snprintf(msg, sizeof(msg), "Renamed to '%s'", buf);
           ShowToast(msg);
@@ -870,7 +868,10 @@ void MaxPaneContainer::OpenLauncherCardMenu(int cardIdx, int x, int y)
 
     case MenuIds::LAUNCHER_CARD_DUPLICATE: {
       char buf[MAX_WORKSPACE_NAME];
-      snprintf(buf, sizeof(buf), "%s copy", srcEntry.name);
+      // Bounded %.*s so GCC can prove " copy" always fits (the truncation is
+      // intentional — buf is the workspace-name limit; -Werror=format-truncation).
+      snprintf(buf, sizeof(buf), "%.*s copy", (int)(sizeof(buf) - 6),
+               srcEntry.name);
       if (g_GetUserInputs &&
           g_GetUserInputs("Duplicate Workspace", 1, "Name:,extrawidth=200",
                           buf, sizeof(buf)) &&
@@ -1057,12 +1058,14 @@ void MaxPaneContainer::PaintToast(HDC hdc, const RECT& clientRect)
   auto lerp = [&](int from, int to) -> int {
     return to + (from - to) * alpha / 255;
   };
-  const int rF = GetRValue(COLOR_TAB_ACTIVE_TEXT);
-  const int gF = GetGValue(COLOR_TAB_ACTIVE_TEXT);
-  const int bF = GetBValue(COLOR_TAB_ACTIVE_TEXT);
-  const int rB = GetRValue(COLOR_TAB_BAR_BG);
-  const int gB = GetGValue(COLOR_TAB_BAR_BG);
-  const int bB = GetBValue(COLOR_TAB_BAR_BG);
+  // Shift+mask instead of GetR/G/BValue: the macros' BYTE/WORD casts on a
+  // compile-time COLORREF constant trip MSVC C4310 under the /WX gate.
+  const int rF = (int)(COLOR_TAB_ACTIVE_TEXT & 0xFF);
+  const int gF = (int)((COLOR_TAB_ACTIVE_TEXT >> 8) & 0xFF);
+  const int bF = (int)((COLOR_TAB_ACTIVE_TEXT >> 16) & 0xFF);
+  const int rB = (int)(COLOR_TAB_BAR_BG & 0xFF);
+  const int gB = (int)((COLOR_TAB_BAR_BG >> 8) & 0xFF);
+  const int bB = (int)((COLOR_TAB_BAR_BG >> 16) & 0xFF);
   SetTextColor(hdc, RGB(lerp(rF, rB), lerp(gF, gB), lerp(bF, bB)));
   SetBkMode(hdc, TRANSPARENT);
 
@@ -1192,23 +1195,19 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
       safe_strncpy(title, owe.title, sizeof(title));
 
       HWND dockFrame = nullptr;
-      char* docked = strstr(title, " (docked)");
-      if (docked) {
-        *docked = '\0';
-        dockFrame = targetHwnd;
-        HWND child = WindowManager::FindChildInParent(targetHwnd, title);
-        if (child) {
-          targetHwnd = child;
-        } else {
-          dockFrame = nullptr;
-        }
-      }
+      targetHwnd = WindowManager::ResolveDockFrameChild(targetHwnd, title, &dockFrame);
       if (targetHwnd && IsWindow(targetHwnd)) {
         int toggleAction = LookupToggleAction(title);
-        m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title, m_hwnd, toggleAction);
-
-        if (dockFrame && IsWindow(dockFrame)) {
+        // Audit M1.3 — hide the dock frame ONLY when the capture committed.
+        // The old unconditional hide made the user's window vanish (not in
+        // REAPER, not in MaxPane) whenever the pane was full.
+        bool captured = m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title,
+                                                        m_hwnd, toggleAction);
+        if (captured && dockFrame && IsWindow(dockFrame)) {
           ShowWindow(dockFrame, SW_HIDE);
+        }
+        if (!captured) {
+          ShowToast("Couldn't capture — pane is full or window is already captured.");
         }
 
         RefreshLayout();
@@ -1369,6 +1368,223 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 // Dialog Procedure
 // =========================================================================
 
+// Audit M2.3 — the TIMER_ID_CAPTURE pipeline, extracted verbatim from the
+// DlgProc WM_TIMER case (pattern: DragModeTick). The dispatcher was a
+// 681-line god-function with this 9-level-deep state machine inlined;
+// the order-sensitive safety gates (modal guard, overlay hide before
+// WindowFromPoint, allow-list) are unchanged, byte-for-byte.
+void MaxPaneContainer::OnCaptureTimerTick()
+{
+  // Handle capture-by-click mode
+  if (m_captureMode.active) {
+    // ADR-048 — capture-by-click safety: never grab a window while an
+    // app-modal dialog (e.g. REAPER's "Save changes?" on quit) is up.
+    // Reparenting the modal freezes REAPER's modal run loop → the dialog
+    // dies and REAPER is bricked (forum v2.0.6: a user had to force-quit).
+    // Disarm; the click reaches the modal normally (GetAsyncKeyState
+    // polling doesn't consume it).
+    if (IsAppModalActive()) {
+      ExitCaptureMode();
+      return;
+    }
+    RefreshCaptureCursor();  // ADR-048 — hold the crosshair (macOS)
+    POINT pt;
+    GetCursorPos(&pt);
+
+    // ADR-048 — live hover preview: every tick, resolve the window under
+    // the cursor and stash its display name + capturability so the armed
+    // pane / launcher CTA can show "Capture: <name>" before the click.
+    // Mirrors the rising-edge resolve below (kept separate because the
+    // commit path also resolves the docked-frame child).
+    {
+      HWND uc = WindowManager::WindowFromPointForCapture(pt);
+      // ADR-048 — skip ticks where the cursor sits on our own (click-
+      // through) highlight overlay: re-resolving would find the overlay,
+      // not the target, and the target can't have changed while we're
+      // still over it. The committing click hides the overlay first.
+      if (!IsCaptureHighlightWindow(uc)) {
+        char hoverName[256] = {0};
+        bool capturable = false;
+        HWND tl = nullptr;
+        if (uc && uc != m_hwnd && uc != g_reaperMainHwnd &&
+            !m_winMgr.IsWindowCaptured(uc)) {
+          tl = WindowManager::ResolveCaptureSourceForClick(uc);
+          if (tl && tl != m_hwnd && tl != g_reaperMainHwnd &&
+              IsWindowSafeToCapture(tl)) {
+            char t[256];
+            WindowManager::ResolveWindowDisplayName(tl, t, sizeof(t));
+            // ADR-048 — allow-list (checked on the un-stripped title so the
+            // DOCKED_TITLE_SUFFIX signal survives). Core main-window views fail it.
+            if (t[0] && WindowManager::IsCapturableTarget(tl, t)) {
+              char* dk = strstr(t, DOCKED_TITLE_SUFFIX);
+              if (dk) *dk = '\0';
+              safe_strncpy(hoverName, t, sizeof(hoverName));
+              capturable = true;
+            }
+          }
+        }
+        if (capturable != m_captureMode.hoverCapturable ||
+            strcmp(hoverName, m_captureMode.hoverName) != 0) {
+          m_captureMode.hoverCapturable = capturable;
+          safe_strncpy(m_captureMode.hoverName, hoverName,
+                       sizeof(m_captureMode.hoverName));
+          InvalidateRect(m_hwnd, nullptr, FALSE);
+          // Logged only on transitions, so this stays low-volume. Vital for
+          // diagnosing the silent-reject path on Win/Linux (audit follow-up).
+          DBG("[MaxPane] capture hover: '%s' capturable=%d\n",
+              hoverName[0] ? hoverName : "(none)", capturable ? 1 : 0);
+        }
+        // Outline the resolved target (or hide when not capturable).
+        ShowCaptureHighlight(capturable ? tl : nullptr);
+      }
+    }
+
+    short mouseState = GetAsyncKeyState(VK_LBUTTON);
+    // Sprint 1 Entry 13 — rising-edge LMB detection. The previous
+    // "if (currently-down)" branch had two bugs: (a) the button
+    // click that activated capture mode triggered the first tick
+    // immediately, (b) sub-tick LMB transitions slipped past the
+    // 50ms poll. Rising-edge fires once on every true down-stroke.
+    bool lmbDown = (mouseState & 0x8000) != 0;
+    bool risingEdge = lmbDown && !m_captureMode.prevLmbDown;
+#ifdef _WIN32
+    // Win-VM live debug 2026-06-10 — a quick tap fits entirely between two
+    // 50ms polls, so the rising edge never fired and armed capture looked
+    // dead (drag-to-dock at 16ms ticks didn't suffer). Win32's
+    // GetAsyncKeyState sets bit 0 ("pressed since the last call") exactly
+    // for this; both SWELLs leave it unimplemented (always 0). prevLmbDown
+    // must be false so the arming click itself can't self-commit on tick 1.
+    if (!risingEdge && !m_captureMode.prevLmbDown && (mouseState & 0x0001)) {
+      risingEdge = true;
+      DBG("[MaxPane] capture click: tap caught via pressed-since-last bit\n");
+    }
+#endif
+    m_captureMode.prevLmbDown = lmbDown;
+
+    if (risingEdge) {
+      // ADR-048 — drop the click-through overlay so WindowFromPoint
+      // resolves the real target under the cursor, not our highlight.
+      HideCaptureHighlight();
+      HWND underCursor = WindowManager::WindowFromPointForCapture(pt);
+      // Win-VM live debug 2026-06-10 — the commit gates were 100% silent, so
+      // a click that died here was indistinguishable from no click at all.
+      DBG("[MaxPane] capture click: under=%p self=%d main=%d captured=%d\n",
+          (void*)underCursor,
+          underCursor == m_hwnd ? 1 : 0,
+          underCursor == g_reaperMainHwnd ? 1 : 0,
+          (underCursor && m_winMgr.IsWindowCaptured(underCursor)) ? 1 : 0);
+      if (underCursor && underCursor != m_hwnd &&
+          underCursor != g_reaperMainHwnd &&
+          !m_winMgr.IsWindowCaptured(underCursor)) {
+        // Sprint 1 Entry 13 — walk up to the SHALLOWEST plugin-DLL
+        // owned HWND. Handles docked plugins where the legacy
+        // walk-to-top stopped at the dock frame's inner container.
+        HWND topLevel = WindowManager::ResolveCaptureSourceForClick(underCursor);
+
+        // Linux-VM live debug 2026-06-10 — clicking a child control of an
+        // ALREADY-CAPTURED window slipped past the underCursor gate above
+        // (it checks the raw hwnd, not the resolved one) and re-ran
+        // CaptureArbitraryWindow on a window we own. The drag path has this
+        // check; mirror it here.
+        if (topLevel && m_winMgr.IsWindowCaptured(topLevel)) {
+          DBG("[MaxPane] capture click: resolved %p is already captured — ignored\n",
+              (void*)topLevel);
+          topLevel = nullptr;
+        }
+
+        if (topLevel && topLevel != m_hwnd && topLevel != g_reaperMainHwnd) {
+          char title[256];
+          // Sprint 1 Entry 13 — empty-title plugins (ReaBeat, Reamix,
+          // ReaImGui scripts) get a name via the module-DLL waterfall
+          // so the capture flow doesn't drop them at the title gate.
+          WindowManager::ResolveWindowDisplayName(topLevel, title, sizeof(title));
+          // ADR-048 — allow-list gate. Rejects core REAPER main-window
+          // views (arrange / ruler / TCP) so a stray click can't tear the
+          // edit surface into a pane and blank the main window.
+          if (title[0] && !WindowManager::IsCapturableTarget(topLevel, title)) {
+            DBG("[MaxPane] capture rejected (core/unidentified main view): '%s'\n", title);
+          }
+          else if (title[0]) {
+            HWND dockFrame = nullptr;
+            HWND captureHwnd = WindowManager::ResolveDockFrameChild(
+                topLevel, title, &dockFrame);
+            int pId = m_captureMode.targetPaneId;
+            int toggleAction = LookupToggleAction(title);
+            // ADR-048 — per-window safety backstop: never reparent a
+            // modal/sheet (catastrophic brick). The poll-level
+            // IsAppModalActive() gate above already covers the common
+            // case; this guards the resolved target itself.
+            if (IsWindowSafeToCapture(captureHwnd)) {
+              // Audit M1.3 — see the Open Windows path: hide the dock
+              // frame only on a committed capture, toast on failure.
+              bool captured = m_winMgr.CaptureArbitraryWindow(
+                  pId, captureHwnd, title, m_hwnd, toggleAction);
+              if (captured && dockFrame && IsWindow(dockFrame)) {
+                ShowWindow(dockFrame, SW_HIDE);
+              }
+              if (!captured) {
+                ShowToast("Couldn't capture — pane is full or window is already captured.");
+              }
+
+              RefreshLayout();
+              SaveState();
+            }
+          }
+        }
+
+        ExitCaptureMode();  // ADR-048 — disarm + pop crosshair
+      }
+    }
+
+    // ADR-048 — Esc cancel. SWELL's GetAsyncKeyState(VK_ESCAPE) always
+    // returns 0 on macOS, so route through the CoreGraphics keycode probe.
+    // Audit M1.6 — right-click also cancels: Linux has NO key probe at
+    // all (GDK GetAsyncKeyState tracks only mouse buttons + modifiers),
+    // so without this the only way out of armed capture there was to
+    // capture something. VK_RBUTTON is tracked by both SWELLs + Win32.
+    {
+      bool escDown  = IsCaptureCancelKeyDown();
+      bool rbtnDown = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+      if (escDown || rbtnDown) {
+        DBG("[MaxPane] capture cancel: esc=%d rbtn=%d\n",
+            escDown ? 1 : 0, rbtnDown ? 1 : 0);
+        ExitCaptureMode();  // disarm + pop crosshair
+      }
+    }
+  }
+  // Handle async capture queue
+  else if (m_captureQueue->HasPending()) {
+    bool anyCaptured = m_captureQueue->Tick(m_hwnd, m_winMgr);
+    // v2.0.4 #1 — drain FX-restore failure toast (fires on miss
+    // regardless of whether any capture succeeded this tick).
+    const char* fxToast = m_captureQueue->PopFailureToast();
+    if (fxToast && fxToast[0]) {
+      ShowToast(fxToast);
+    }
+    if (anyCaptured) {
+      RefreshLayout();
+    }
+    if (!m_captureQueue->HasPending()) {
+      StopCaptureTimerIfIdle();
+      // F-40 — async captures landed in completion order; re-sort any
+      // deferred pane back to its saved order before persisting.
+      FinalizeRestoreOrder();
+      SaveState();
+      // F-H (forum v2.0.6) — force a real Cocoa layout+display once the
+      // restore finishes. RefreshLayout's InvalidateRect doesn't repaint
+      // the container's own NSView after children were reparented in
+      // (SWELL doesn't cascade setNeedsDisplay), so the tab bar + pane
+      // dividers stay blank until the user nudges a splitter to trigger a
+      // real WM_SIZE relayout. A forced layout pass paints them now.
+      RefreshLayout();
+      ForceViewLayoutAndDisplay(m_hwnd);
+    }
+  }
+  else {
+    StopCaptureTimerIfIdle();
+  }
+}
+
 INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   MaxPaneContainer* self = (MaxPaneContainer*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
@@ -1471,10 +1687,6 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_LBUTTONDOWN: {
       if (self) {
-        // Feature A — refresh the NavBar shim cache before OnNavBarClick
-        // so its NavBar::Compute(rc) call sees this instance's workspace
-        // label region (otherwise clicks on the label would miss).
-        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
 
@@ -1584,12 +1796,6 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_MOUSEMOVE: {
       if (self) {
-        // Feature A — refresh the NavBar shim cache so OnNavBarMouseMove's
-        // legacy NavBar::Compute(rc) returns a Layout that includes the
-        // workspace-name region for this instance's loaded workspace.
-        // Multi-instance safe: only the focused container processes each
-        // WM_MOUSEMOVE, so the cache always reflects the right state.
-        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
         self->OnMouseMove(x, y);
@@ -1600,7 +1806,6 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_LBUTTONUP: {
       if (self) {
-        self->RefreshNavBarLabelCache();
         int x = (short)LOWORD(lParam);
         int y = (short)HIWORD(lParam);
         self->OnLButtonUp(x, y);
@@ -1711,7 +1916,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         if (self->m_navHover != NavBar::BTN_NONE) {
           self->m_navTooltipBtn = self->m_navHover;
           RECT rc; GetClientRect(hwnd, &rc);
-          NavBar::Layout lay = NavBar::Compute(rc);
+          NavBar::Layout lay = self->ComputeNavBarLayout(rc);
           RECT dirty = lay.barRect;
           dirty.bottom += 36;
           InvalidateRect(hwnd, &dirty, FALSE);
@@ -1823,173 +2028,9 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         }
       }
       else if (self && wParam == TIMER_ID_CAPTURE) {
-        // Handle capture-by-click mode
-        if (self->m_captureMode.active) {
-          // ADR-048 — capture-by-click safety: never grab a window while an
-          // app-modal dialog (e.g. REAPER's "Save changes?" on quit) is up.
-          // Reparenting the modal freezes REAPER's modal run loop → the dialog
-          // dies and REAPER is bricked (forum v2.0.6: a user had to force-quit).
-          // Disarm; the click reaches the modal normally (GetAsyncKeyState
-          // polling doesn't consume it).
-          if (IsAppModalActive()) {
-            self->ExitCaptureMode();
-            return 0;
-          }
-          RefreshCaptureCursor();  // ADR-048 — hold the crosshair (macOS)
-          POINT pt;
-          GetCursorPos(&pt);
-
-          // ADR-048 — live hover preview: every tick, resolve the window under
-          // the cursor and stash its display name + capturability so the armed
-          // pane / launcher CTA can show "Capture: <name>" before the click.
-          // Mirrors the rising-edge resolve below (kept separate because the
-          // commit path also resolves the docked-frame child).
-          {
-            HWND uc = WindowFromPoint(pt);
-            // ADR-048 — skip ticks where the cursor sits on our own (click-
-            // through) highlight overlay: re-resolving would find the overlay,
-            // not the target, and the target can't have changed while we're
-            // still over it. The committing click hides the overlay first.
-            if (!IsCaptureHighlightWindow(uc)) {
-              char hoverName[256] = {0};
-              bool capturable = false;
-              HWND tl = nullptr;
-              if (uc && uc != self->m_hwnd && uc != g_reaperMainHwnd &&
-                  !self->m_winMgr.IsWindowCaptured(uc)) {
-                tl = WindowManager::ResolveCaptureSourceForClick(uc);
-                if (tl && tl != self->m_hwnd && tl != g_reaperMainHwnd &&
-                    IsWindowSafeToCapture(tl)) {
-                  char t[256];
-                  WindowManager::ResolveWindowDisplayName(tl, t, sizeof(t));
-                  // ADR-048 — allow-list (checked on the un-stripped title so the
-                  // " (docked)" signal survives). Core main-window views fail it.
-                  if (t[0] && WindowManager::IsCapturableTarget(tl, t)) {
-                    char* dk = strstr(t, " (docked)");
-                    if (dk) *dk = '\0';
-                    safe_strncpy(hoverName, t, sizeof(hoverName));
-                    capturable = true;
-                  }
-                }
-              }
-              if (capturable != self->m_captureMode.hoverCapturable ||
-                  strcmp(hoverName, self->m_captureMode.hoverName) != 0) {
-                self->m_captureMode.hoverCapturable = capturable;
-                safe_strncpy(self->m_captureMode.hoverName, hoverName,
-                             sizeof(self->m_captureMode.hoverName));
-                InvalidateRect(self->m_hwnd, nullptr, FALSE);
-              }
-              // Outline the resolved target (or hide when not capturable).
-              ShowCaptureHighlight(capturable ? tl : nullptr);
-            }
-          }
-
-          short mouseState = GetAsyncKeyState(VK_LBUTTON);
-          // Sprint 1 Entry 13 — rising-edge LMB detection. The previous
-          // "if (currently-down)" branch had two bugs: (a) the button
-          // click that activated capture mode triggered the first tick
-          // immediately, (b) sub-tick LMB transitions slipped past the
-          // 50ms poll. Rising-edge fires once on every true down-stroke.
-          bool lmbDown = (mouseState & 0x8000) != 0;
-          bool risingEdge = lmbDown && !self->m_captureMode.prevLmbDown;
-          self->m_captureMode.prevLmbDown = lmbDown;
-
-          if (risingEdge) {
-            // ADR-048 — drop the click-through overlay so WindowFromPoint
-            // resolves the real target under the cursor, not our highlight.
-            HideCaptureHighlight();
-            HWND underCursor = WindowFromPoint(pt);
-            if (underCursor && underCursor != self->m_hwnd &&
-                underCursor != g_reaperMainHwnd &&
-                !self->m_winMgr.IsWindowCaptured(underCursor)) {
-              // Sprint 1 Entry 13 — walk up to the SHALLOWEST plugin-DLL
-              // owned HWND. Handles docked plugins where the legacy
-              // walk-to-top stopped at the dock frame's inner container.
-              HWND topLevel = WindowManager::ResolveCaptureSourceForClick(underCursor);
-
-              if (topLevel && topLevel != self->m_hwnd && topLevel != g_reaperMainHwnd) {
-                char title[256];
-                // Sprint 1 Entry 13 — empty-title plugins (ReaBeat, Reamix,
-                // ReaImGui scripts) get a name via the module-DLL waterfall
-                // so the capture flow doesn't drop them at the title gate.
-                WindowManager::ResolveWindowDisplayName(topLevel, title, sizeof(title));
-                // ADR-048 — allow-list gate. Rejects core REAPER main-window
-                // views (arrange / ruler / TCP) so a stray click can't tear the
-                // edit surface into a pane and blank the main window.
-                if (title[0] && !WindowManager::IsCapturableTarget(topLevel, title)) {
-                  DBG("[MaxPane] capture rejected (core/unidentified main view): '%s'\n", title);
-                }
-                else if (title[0]) {
-                  HWND captureHwnd = topLevel;
-                  HWND dockFrame = nullptr;
-                  char* dockedSuffix = strstr(title, " (docked)");
-                  if (dockedSuffix) {
-                    *dockedSuffix = '\0';
-                    HWND child = WindowManager::FindChildInParent(topLevel, title);
-                    if (child) {
-                      captureHwnd = child;
-                      dockFrame = topLevel;
-                    }
-                  }
-                  int pId = self->m_captureMode.targetPaneId;
-                  int toggleAction = LookupToggleAction(title);
-                  // ADR-048 — per-window safety backstop: never reparent a
-                  // modal/sheet (catastrophic brick). The poll-level
-                  // IsAppModalActive() gate above already covers the common
-                  // case; this guards the resolved target itself.
-                  if (IsWindowSafeToCapture(captureHwnd)) {
-                    self->m_winMgr.CaptureArbitraryWindow(pId, captureHwnd, title, self->m_hwnd, toggleAction);
-
-                    if (dockFrame && IsWindow(dockFrame)) {
-                      ShowWindow(dockFrame, SW_HIDE);
-                    }
-
-                    self->RefreshLayout();
-                    self->SaveState();
-                  }
-                }
-              }
-
-              self->ExitCaptureMode();  // ADR-048 — disarm + pop crosshair
-            }
-          }
-
-          // ADR-048 — Esc cancel. SWELL's GetAsyncKeyState(VK_ESCAPE) always
-          // returns 0 on macOS, so route through the CoreGraphics keycode probe.
-          if (IsCaptureCancelKeyDown()) {
-            self->ExitCaptureMode();  // disarm + pop crosshair
-          }
-        }
-        // Handle async capture queue
-        else if (self->m_captureQueue->HasPending()) {
-          bool anyCaptured = self->m_captureQueue->Tick(self->m_hwnd, self->m_winMgr);
-          // v2.0.4 #1 — drain FX-restore failure toast (fires on miss
-          // regardless of whether any capture succeeded this tick).
-          const char* fxToast = self->m_captureQueue->PopFxFailureToast();
-          if (fxToast && fxToast[0]) {
-            self->ShowToast(fxToast);
-          }
-          if (anyCaptured) {
-            self->RefreshLayout();
-          }
-          if (!self->m_captureQueue->HasPending()) {
-            self->StopCaptureTimerIfIdle();
-            // F-40 — async captures landed in completion order; re-sort any
-            // deferred pane back to its saved order before persisting.
-            self->FinalizeRestoreOrder();
-            self->SaveState();
-            // F-H (forum v2.0.6) — force a real Cocoa layout+display once the
-            // restore finishes. RefreshLayout's InvalidateRect doesn't repaint
-            // the container's own NSView after children were reparented in
-            // (SWELL doesn't cascade setNeedsDisplay), so the tab bar + pane
-            // dividers stay blank until the user nudges a splitter to trigger a
-            // real WM_SIZE relayout. A forced layout pass paints them now.
-            self->RefreshLayout();
-            ForceViewLayoutAndDisplay(self->m_hwnd);
-          }
-        }
-        else {
-          self->StopCaptureTimerIfIdle();
-        }
+        // Audit M2.3 — capture-by-click poll + async-queue drain live in
+        // OnCaptureTimerTick() now; this case is dispatch only.
+        self->OnCaptureTimerTick();
       }
       return 0;
     }

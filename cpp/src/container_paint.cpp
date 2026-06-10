@@ -28,6 +28,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
   NavBar::State navState{};
   if (m_navBarVisible) {
     navState.hoverButton    = m_navHover;
+    navState.collapsed      = m_navBarCollapsed;
     navState.dragModeArmed  = (m_drag.mode != DragDock::IDLE);
     navState.homeActive     = m_homeOverlay;
     navState.workspaceName  = m_currentWorkspaceName[0] ? m_currentWorkspaceName : nullptr;
@@ -131,10 +132,11 @@ void MaxPaneContainer::OnPaint(HDC hdc)
         // ADR-048 — live preview of the resolved target before the user clicks.
         if (m_captureMode.hoverName[0]) {
           snprintf(headerText, sizeof(headerText),
-                   " Capture: %s   (Esc to cancel)", m_captureMode.hoverName);
+                   " Capture: %s   (%s)", m_captureMode.hoverName,
+                   CAPTURE_CANCEL_HINT);
         } else {
           snprintf(headerText, sizeof(headerText),
-                   " Click a window to capture...   (Esc to cancel)");
+                   " Click a window to capture...   (%s)", CAPTURE_CANCEL_HINT);
         }
       } else {
         // Show sequential visual index (1-based position in leaf list)
@@ -264,10 +266,28 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
   if (!ps || ps->tabCount == 0) return;
 
   int tabBarTop = paneRect.top;
-  int tabBarBottom = tabBarTop + TAB_BAR_HEIGHT;
+  const int hdrH = m_winMgr.PaneHeaderHeight(paneId);
+  int tabBarBottom = tabBarTop + hdrH;
 
   RECT barRect = { paneRect.left, tabBarTop, paneRect.right, tabBarBottom };
   if (m_brushTabBarBg) FillRect(hdc, &barRect, m_brushTabBarBg);
+
+  // ADR-055 — collapsed sliver: a flat strip in the (single) tab's color —
+  // the pane keeps its identity cue without text, close button or icons.
+  // Hit-testing maps the whole strip to tab 0 (TabHitTest), so the strip is
+  // still the pane's right-click + drag surface.
+  if (hdrH < TAB_BAR_HEIGHT) {
+    int ci = ps->tabs[0].colorIndex;
+    if (ci > 0 && ci < TAB_COLOR_COUNT) {
+      const TabColor& tc = TAB_COLORS[ci];
+      HBRUSH b = CreateSolidBrush(RGB(tc.r, tc.g, tc.b));
+      FillRect(hdc, &barRect, b);
+      DeleteObject(b);
+    } else if (m_brushTabActive) {
+      FillRect(hdc, &barRect, m_brushTabActive);
+    }
+    return;
+  }
 
   TabBarLayout lay = CalcTabBarLayout(paneId);
 

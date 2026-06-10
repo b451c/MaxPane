@@ -1,12 +1,20 @@
 #pragma once
 #include "config.h"  // for HWND via SWELL
+#include <cstdio>    // snprintf/popen (Linux OpenUrlPlatform/IsSystemDarkMode)
+#include <cstdlib>   // system (Linux OpenUrlPlatform)
+#include <cstring>   // strstr (Linux IsSystemDarkMode)
 
 // Force full Cocoa layout + display pass on an HWND and all its subviews.
 // On macOS/SWELL, SetParent does NOT trigger setNeedsLayout: or display.
 // Call this after reparenting to ensure child controls lay out correctly.
 #ifdef __APPLE__
+#include <string>
 void ForceViewLayoutAndDisplay(HWND hwnd);
 bool IsSystemDarkMode();
+// Synchronous HTTPS GET via NSURLSession (updater). Blocks the calling
+// thread up to timeoutSec; returns "" on any failure. Responses over 1 MB
+// are rejected. (Audit M3.4 — was re-declared ad hoc in updater.cpp.)
+std::string FetchUrlSyncMacOS(const char* url, int timeoutSec);
 // Force-hide a window at the Cocoa level — orderOut: on the NSWindow plus
 // setHidden:YES on the NSView. Use when SWELL's ShowWindow(SW_HIDE) doesn't
 // reliably hide top-level windows after SetParent transitions on macOS.
@@ -200,17 +208,91 @@ inline void SetCaptureCursorActive(bool) {}
 inline void RefreshCaptureCursor() {}
 // Win32 GetAsyncKeyState(VK_ESCAPE) works natively.
 inline bool IsCaptureCancelKeyDown() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }
-// Hover-highlight overlay not yet implemented on Win32 (would need a layered window).
-inline void ShowCaptureHighlight(HWND) {}
-inline void HideCaptureHighlight() {}
-inline bool IsCaptureHighlightWindow(HWND) { return false; }
+// ADR-060 — capture hover outline via the 4-strip overlay frame
+// (overlay_frame.cpp; shared with the Linux branch below).
+void ShowCaptureHighlight(HWND target);
+void HideCaptureHighlight();
+bool IsCaptureHighlightWindow(HWND hwnd);
 #else
 inline void ForceViewLayoutAndDisplay(HWND) {}
-inline bool IsSystemDarkMode() { return false; }
+// Audit M2.5 — was `return false`, so dark-mode "Auto" always rendered
+// light on Linux (where REAPER users overwhelmingly run dark themes).
+// GNOME/GTK-desktop probe via gsettings, cached for the session (manual
+// override in Settings still wins — see config.cpp). KDE and exotic
+// desktops fall back to light: a registered gap, not a silent one.
+inline bool IsSystemDarkMode()
+{
+  static int cached = -1;
+  if (cached < 0) {
+    cached = 0;
+    FILE* p = popen(
+        "gsettings get org.gnome.desktop.interface color-scheme 2>/dev/null", "r");
+    if (p) {
+      char buf[64] = {};
+      if (fgets(buf, sizeof(buf), p) && strstr(buf, "dark")) cached = 1;
+      pclose(p);
+    }
+  }
+  return cached == 1;
+}
 inline void ForceHideWindow(HWND) {}
-inline void ApplyFloatingWindowChrome(HWND, const char*) {}
-inline void ClampRectToVisibleScreen(RECT*) {}
-inline void OpenUrlPlatform(const char*) {}
+// Audit M2.5 — was an empty stub. DoCapture strips WS_CAPTION|WS_THICKFRAME|
+// WS_SYSMENU at capture (window_manager.cpp), and this is the only restore
+// path — so on Linux a released/detached window came back as a borderless,
+// unmovable, uncloseable GTK window. SWELL-generic decorates from the style
+// bits (swell_oswindow_manage), so restoring them + SWP_FRAMECHANGED is the
+// whole job. Runtime verification on a Linux VM pending.
+inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
+{
+  if (!hwnd) return;
+  // LONG_PTR end-to-end — SWELL's GetWindowLong returns LONG_PTR, and the
+  // narrowing LONG copy tripped -Wconversion (CI runs -Werror; ADR-060
+  // session catch — the gate had never seen this header on Linux).
+  LONG_PTR style = GetWindowLong(hwnd, GWL_STYLE);
+  style &= ~(LONG_PTR)WS_CHILD;
+  style |= WS_CAPTION | WS_THICKFRAME | WS_SYSMENU;
+  SetWindowLong(hwnd, GWL_STYLE, style);
+  if (title && title[0]) SetWindowText(hwnd, title);
+  SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+               SWP_FRAMECHANGED);
+}
+// Audit M2.5 — was an empty stub: geometry saved on a since-disconnected
+// monitor restored off-screen with no rescue. SWELL_GetViewPort is exported
+// by REAPER's SWELL on Linux (same API the Win32 branch mirrors).
+inline void ClampRectToVisibleScreen(RECT* rect)
+{
+  if (!rect) return;
+  RECT vp;
+  SWELL_GetViewPort(&vp, rect, true);
+  int w = rect->right - rect->left;
+  int h = rect->bottom - rect->top;
+  int vpW = vp.right - vp.left, vpH = vp.bottom - vp.top;
+  if (w > vpW) w = vpW;
+  if (h > vpH) h = vpH;
+  if (rect->left < vp.left) rect->left = vp.left;
+  if (rect->top  < vp.top)  rect->top  = vp.top;
+  if (rect->left + w > vp.right)  rect->left = vp.right - w;
+  if (rect->top  + h > vp.bottom) rect->top  = vp.bottom - h;
+  rect->right  = rect->left + w;
+  rect->bottom = rect->top + h;
+}
+// Audit M1.7 — this was an empty stub while the doc comment above claims
+// "xdg-open on Linux": the updater's [Open Releases] button and every
+// Settings/nav-bar support link silently did nothing. All call sites pass
+// string literals (no user input reaches the shell); the trailing '&'
+// keeps the UI from blocking on the launcher.
+inline void OpenUrlPlatform(const char* url)
+{
+  if (!url || !*url) return;
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "xdg-open '%s' >/dev/null 2>&1 &", url);
+  int rc = system(cmd);
+  (void)rc;
+}
+// REGISTERED GAP (audit M2.5): SWELL-generic exposes no portable topmost
+// API — the floating-mode "always on top" checkbox is a no-op on Linux.
+// Revisit if SWELL grows SetWindowLevel-equivalent support.
 inline void SetWindowAlwaysOnTop(HWND, bool) {}
 inline void EnableContainerMouseTracking(HWND) {}
 // ADR-048 — capture-by-click safety. Generic SWELL_DialogBox disables all
@@ -229,7 +311,9 @@ inline bool IsWindowSafeToCapture(HWND hwnd)
 inline void SetCaptureCursorActive(bool) {}
 inline void RefreshCaptureCursor() {}
 inline bool IsCaptureCancelKeyDown() { return (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0; }
-inline void ShowCaptureHighlight(HWND) {}
-inline void HideCaptureHighlight() {}
-inline bool IsCaptureHighlightWindow(HWND) { return false; }
+// ADR-060 — capture hover outline via the 4-strip overlay frame
+// (overlay_frame.cpp; shared with the Win32 branch above).
+void ShowCaptureHighlight(HWND target);
+void HideCaptureHighlight();
+bool IsCaptureHighlightWindow(HWND hwnd);
 #endif

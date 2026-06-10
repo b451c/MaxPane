@@ -19,6 +19,35 @@ remembers your layouts.
 
 ---
 
+## What's new in 2.2
+
+- **Windows and Linux reach interaction parity.** Capture-by-click and
+  drag-to-dock work end-to-end and were verified in live debug sessions on
+  Windows 11 and Ubuntu — including docked windows, floating script windows,
+  quick taps, and windows stacked over the main window.
+- **Live visual feedback on every platform.** Arming click-capture outlines
+  the window under the cursor with a blue frame; drag-to-dock frames the
+  exact drop zone — even over panes already occupied by a captured window.
+  The drop always lands where the frame shows.
+- **Natural title-bar drags.** When the cursor isn't over a pane but the
+  dragged window's body hangs over one, that pane is targeted as
+  "Add as tab" — so dragging a window by its title bar just works.
+- **MIDI toolbars are first-class.** All 16 MIDI toolbars + the piano-roll
+  toolbar capture cleanly and survive save/restore; the toolbar action table
+  was repaired (Toolbars 9–16 fired wrong actions, 17–32 now supported) and
+  REAPER's Main toolbar is excluded from capture (it used to leave a floating
+  ghost at every startup — existing ghosts self-heal).
+- **Quality-of-life:** collapsible navigation bar (chevron → thin strip);
+  single-window panes can auto-hide their tab bar; right-click cancels
+  capture mode everywhere; failures (failed capture, full workspace slots,
+  corrupt layout) now say so instead of doing nothing.
+
+**Platform note:** on Linux/X11 a bare title-bar click can't always be
+attributed to its window (the title bar belongs to the window manager) —
+clicking window content always works.
+
+Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
+
 ## What's new in 2.1
 
 - **Screenset integration** — MaxPane's layout now round-trips through REAPER
@@ -214,9 +243,14 @@ Full per-bug detail in [CHANGELOG.md](CHANGELOG.md).
   to have focus first.
 
 ### Platform
-- **macOS arm64 + x86_64** — stable, fully functional.
-- **Windows x64** — stable as of v2.0.1 (closes [#8](https://github.com/b451c/MaxPane/issues/8) Windows mouse input).
-- **Linux x86_64 + aarch64** — stable as of v2.0.2 ([#9](https://github.com/b451c/MaxPane/issues/9) FX Browser close crash no longer reproduces on REAPER 7.69).
+- **macOS arm64 + x86_64** — primary platform, actively tested on every release.
+- **Windows x64** — supported and CI-built; runtime-verified less frequently
+  than macOS ([#8](https://github.com/b451c/MaxPane/issues/8) Windows mouse
+  input closed in v2.0.1). Community reports welcome.
+- **Linux x86_64 + aarch64** — supported and CI-built; runtime-verified less
+  frequently than macOS ([#9](https://github.com/b451c/MaxPane/issues/9)
+  FX Browser close crash no longer reproduces on REAPER 7.69). Community
+  reports welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -250,10 +284,16 @@ ReaPack will notify you of future updates automatically.
 
 ### Manual install
 
-1. Download the macOS binary from the [Releases](../../releases) page
-   (`reaper_maxpane-arm64.dylib` for Apple Silicon,
-   `reaper_maxpane-x86_64.dylib` for Intel).
-2. Copy it to `~/Library/Application Support/REAPER/UserPlugins/`.
+1. Download the binary for your platform from the
+   [Releases](../../releases) page:
+   - **macOS** — `reaper_maxpane-arm64.dylib` (Apple Silicon) or
+     `reaper_maxpane-x86_64.dylib` (Intel) →
+     `~/Library/Application Support/REAPER/UserPlugins/`
+   - **Windows** — `reaper_maxpane-x64.dll` →
+     `%APPDATA%\REAPER\UserPlugins\`
+   - **Linux** — `reaper_maxpane-x86_64.so` (or
+     `reaper_maxpane-aarch64.so`) → `~/.config/REAPER/UserPlugins/`
+2. Copy it to the UserPlugins folder for your platform (above).
 3. Restart REAPER.
 4. Open via **Actions → MaxPane: Open Container**, or assign a keyboard
    shortcut.
@@ -310,12 +350,16 @@ close-mechanism deep-dive, and the v2.0 feature surface — see
 ## Requirements
 
 - **REAPER** 7.0+ (tested on 7.62, 7.68, 7.69, 7.73)
-- **macOS** arm64 (Apple Silicon) and x86_64 (Intel) — **stable**
-- **Windows** x64 — **stable** as of v2.0.1
-- **Linux** x86_64 and aarch64 — **stable** as of v2.0.2 (validated on
-  Ubuntu 24.04; FX Browser close crash from
+- **macOS** arm64 (Apple Silicon) and x86_64 (Intel) — primary platform,
+  actively tested on every release
+- **Windows** x64 — supported; built by CI for every release,
+  runtime-verified less frequently than macOS — community reports welcome
+- **Linux** x86_64 and aarch64 — supported; built by CI for every release,
+  runtime-verified less frequently than macOS (validated on Ubuntu 24.04;
+  FX Browser close crash from
   [#9](https://github.com/b451c/MaxPane/issues/9) no longer reproduces
-  on REAPER 7.69 — covered by an upstream WDL/SWELL fix)
+  on REAPER 7.69 — covered by an upstream WDL/SWELL fix) — community
+  reports welcome
 
 ---
 
@@ -341,6 +385,11 @@ detail is in [CHANGELOG.md → 2.0.4 → Known limitations](CHANGELOG.md#known-l
   tabs.** Legacy `arb:0:<plugin name>` entries can't resolve to a
   live FX instance. Re-capture once, re-save. Non-FX tabs (Mixer,
   toolbars, scripts) restore as before.
+- **Linux/X11: title bars belong to the window manager.** A bare click
+  on a window's title bar can't always be attributed to that window
+  (X11 reports no window at that point; MaxPane recovers most cases via
+  a decoration-band fallback). When click-capturing or drag-docking on
+  Linux, clicking the window's content always works.
 - **Plugin window scaling is plugin-side.** Most VST/AU GUIs render
   at a fixed resolution and don't dynamically resize to fit the
   MaxPane pane. The plugin sits at its native size — surrounded by

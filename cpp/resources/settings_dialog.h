@@ -9,6 +9,8 @@
 #define IDC_SET_AUTOOPEN     2010
 // ADR-026 — toggle persistent nav bar at top of every MaxPane instance.
 #define IDC_SET_SHOWNAVBAR   2011
+// ADR-055 — collapse a pane's tab bar to a sliver when it has a single tab.
+#define IDC_SET_HIDETABBAR   2012
 
 // Appearance section
 #define IDC_SET_DARK_GROUP   2020

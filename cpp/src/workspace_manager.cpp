@@ -272,39 +272,18 @@ void WorkspaceManager::ReadPaneTabsStatic(const char* section, const char* prefi
       val = state.Get(section, key);
       DBG("[MaxPane] ReadPaneTabs: %s = '%s'\n", key, val ? val : "(null)");
       if (val) {
-        if (strncmp(val, "arb:", 4) == 0) {
+        ArbSpec spec;
+        if (ParseArbSpec(val, &spec)) {
+          // Audit M2.7 — single shared parser (config.cpp); semantics
+          // unchanged, pinned by the test_state_persistence round-trips.
           panes[p].tabs[t].isArbitrary = true;
-          // Format: "arb:cmdstr:name" (cmdstr = "_RSxxx" or "12345" or "0")
-          // Legacy: "arb:name" (no command)
-          const char* afterArb = val + 4;
-          const char* secondColon = strchr(afterArb, ':');
-          if (secondColon && secondColon > afterArb) {
-            // Extract command string
-            int cmdLen = (int)(secondColon - afterArb);
-            if (cmdLen >= (int)sizeof(panes[p].tabs[t].actionCommand))
-              cmdLen = (int)sizeof(panes[p].tabs[t].actionCommand) - 1;
-            char cmdBuf[128];
-            safe_strncpy(cmdBuf, afterArb, sizeof(cmdBuf));
-            cmdBuf[cmdLen < (int)sizeof(cmdBuf) - 1 ? cmdLen : (int)sizeof(cmdBuf) - 1] = '\0';
-            safe_strncpy(panes[p].tabs[t].actionCommand, cmdBuf, sizeof(panes[p].tabs[t].actionCommand));
-            // Treat "0" as no action (legacy/empty marker)
-            if (strcmp(panes[p].tabs[t].actionCommand, "0") == 0) {
-              panes[p].tabs[t].actionCommand[0] = '\0';
-              panes[p].tabs[t].toggleAction = 0;
-            } else {
-              panes[p].tabs[t].toggleAction = ResolveActionCommand(panes[p].tabs[t].actionCommand);
-            }
-            // Name after second colon
-            safe_strncpy(panes[p].tabs[t].name, secondColon + 1, sizeof(panes[p].tabs[t].name));
-            DBG("[MaxPane] ReadPaneTabs: parsed arb cmd='%s' action=%d name='%s'\n",
-                panes[p].tabs[t].actionCommand, panes[p].tabs[t].toggleAction, secondColon + 1);
-          } else {
-            // Legacy format — no action command
-            panes[p].tabs[t].toggleAction = 0;
-            panes[p].tabs[t].actionCommand[0] = '\0';
-            safe_strncpy(panes[p].tabs[t].name, afterArb, sizeof(panes[p].tabs[t].name));
-            DBG("[MaxPane] ReadPaneTabs: parsed arb LEGACY name='%s'\n", afterArb);
-          }
+          safe_strncpy(panes[p].tabs[t].actionCommand, spec.cmd,
+                       sizeof(panes[p].tabs[t].actionCommand));
+          panes[p].tabs[t].toggleAction = spec.action;
+          safe_strncpy(panes[p].tabs[t].name, spec.name,
+                       sizeof(panes[p].tabs[t].name));
+          DBG("[MaxPane] ReadPaneTabs: parsed arb cmd='%s' action=%d name='%s'\n",
+              spec.cmd, spec.action, spec.name);
         } else {
           panes[p].tabs[t].isArbitrary = false;
           safe_strncpy(panes[p].tabs[t].name, val, sizeof(panes[p].tabs[t].name));
@@ -604,9 +583,36 @@ void WorkspaceManager::Delete(const char* name)
       m_count--;
       memset(&m_workspaces[m_count], 0, sizeof(WorkspaceEntry));
       SaveList();
+      // Audit M3.3 — the shift orphans the old tail slot's ws_<N>_* keys:
+      // invisible to readers (gated by ws_count) but permanent
+      // reaper-extstate.ini garbage until a new workspace reused the index.
+      ClearSlotPersistedKeys(m_count);
       return;
     }
   }
+}
+
+// Audit M3.3 — zero out one slot's persisted footprint (name, tree count,
+// pane/tab keys). Uses the same writers as SaveList so the key set stays in
+// lockstep with the format.
+void WorkspaceManager::ClearSlotPersistedKeys(int slot)
+{
+  if (!g_SetExtState || slot < 0 || slot >= MAX_WORKSPACES) return;
+  GlobalStateAccessor acc;
+  char key[128];
+  char prefix[32];
+  snprintf(prefix, sizeof(prefix), "ws_%d_", slot);
+
+  snprintf(key, sizeof(key), "ws_%d_name", slot);
+  acc.Set(m_listSection, key, "", true);
+  snprintf(key, sizeof(key), "ws_%d_tree_version", slot);
+  acc.Set(m_listSection, key, "", true);
+  snprintf(key, sizeof(key), "%stree_node_count", prefix);
+  acc.Set(m_listSection, key, "0", true);
+
+  static PaneSnapshot s_empty[MAX_PANES];  // static: ~50 KB, keep off the stack
+  memset(s_empty, 0, sizeof(s_empty));
+  WritePaneTabsStatic(m_listSection, prefix, s_empty, MAX_PANES, nullptr, acc);
 }
 
 bool WorkspaceManager::Rename(int index, const char* newName)

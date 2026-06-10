@@ -4,6 +4,119 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.2.0] - 2026-06-10
+
+Windows and Linux reach interaction parity: capture-by-click and
+drag-to-dock work and show live visual feedback on all three platforms,
+verified in live debug sessions on Windows 11 and Ubuntu VMs. Plus a
+hardening pass from a full-code audit: capture regressions fixed, silent
+failures surfaced, chronic background work trimmed.
+
+### Added
+
+- **Live visual feedback for capture and drag on Windows and Linux.**
+  Arming click-capture now outlines the window under the cursor with a blue
+  frame (as on macOS), and drag-to-dock draws a frame around the exact drop
+  zone — including over panes already occupied by a captured window, where
+  the painted preview was invisible. Zone changes settle briefly (~64 ms)
+  before the frame moves, so the preview never flickers and the drop always
+  lands exactly where the frame shows.
+- **Natural title-bar drags.** Drag-to-dock aiming is now hybrid: the
+  cursor keeps priority (precision aiming for splits), but when it isn't
+  over any pane and the dragged window's body hangs over one — typical when
+  dragging a window by its OS title bar — that pane is targeted as
+  "Add as tab" (Shift = replace). All platforms.
+- **MIDI toolbars are first-class capturable windows.** All 16 MIDI
+  toolbars and the MIDI piano-roll toolbar now resolve to their real toggle
+  actions, capture cleanly by click or menu, and survive save/restore.
+- **Collapsible navigation bar.** A new chevron at the right end of the nav
+  bar folds it down to a thin strip, giving your panes the space back; click
+  the strip to expand it again. The state persists across restarts. The
+  Settings "Show navigation bar" full-hide is unchanged.
+- **Single-window panes can hide their tab bar.** New Settings checkbox
+  "Collapse tab bar when a pane has a single window": the bar shrinks to a
+  thin colored strip and the captured window gets the space. The strip stays
+  interactive — right-click opens the tab menu, dragging it moves the tab —
+  and the full bar returns automatically when a second tab arrives.
+  (Requested by poydepzaj1616 on the forum.)
+- **Right-click now cancels capture mode on all platforms.** On Linux there
+  was previously **no way to cancel** an armed click-capture — Esc isn't
+  detectable there, so the only way out was to capture something. The
+  "capture a window" hints now advertise the right gesture per platform
+  ("Esc or right-click to cancel"; "right-click to cancel" on Linux).
+
+### Changed
+
+- **Failures are no longer silent.** A failed capture, a window that can't be
+  re-captured when a workspace or project loads, a corrupt saved layout
+  (now: "layout reset" message instead of a wordless empty launcher), and
+  saving when all 32 workspace slots are full (previously dropped the save
+  while still reporting "Saved") now show a message instead of doing nothing.
+  A failed capture also no longer makes the original window disappear — it
+  stays where it was.
+- **Less chronic background work.** Saved cleanup entries for windows that no
+  longer exist (e.g. an uninstalled script or removed toolbar) used to be
+  re-probed at every future startup, forever — they are now dropped once the
+  startup cleanup window closes. A tab whose window went away (e.g. a closed
+  MIDI editor) used to pay a full window-tree scan twice a second forever; it
+  now backs off after repeated misses and recovers instantly on re-capture.
+- **Internal:** the stale-list and saved-capture parsers — previously
+  hand-rolled in several places with mismatched buffer sizes — are unified
+  into single unit-tested modules; CI now builds with a warning gate
+  (`-Werror`), and the release workflow runs the test suite before packaging
+  binaries.
+
+### Fixed
+
+- **Windows: capture-by-click and drag-to-dock work again.** Both were
+  effectively dead since the v2.1.0 capture redesign (which was only
+  compile-verified on Windows): the click resolver accepted only an
+  allow-list of known windows, and quick taps fell entirely between input
+  polls. Verified live on a Windows 11 VM. (ADR-058)
+- **Linux: docked windows capture by click, floating script windows
+  resolve, and clicks respect visual stacking.** SWELL's hit-testing walks
+  windows in list order, not stacking order, so a floating window hovering
+  over the main window was previously unreachable by click or drag; clicks
+  on X11 title bars (which belong to the window manager, not the window)
+  now resolve via a decoration-band fallback. (ADR-059)
+- **The Main-toolbar ghost cycle is terminally closed.** The exclusion
+  shipped earlier in this cycle left one path alive (a workspace slot-merge
+  could re-adopt the toolbar), and the startup cleanup now also closes an
+  existing ghost window outright. (ADR-056)
+- **Capturing a MIDI toolbar from a docker no longer freezes all clicks**
+  (a stuck mouse capture in the toolbar click filter). (ADR-057)
+- **The Main toolbar can no longer be captured.** Capturing REAPER's main
+  toolbar produced a floating duplicate ("ghost") at every startup that
+  MaxPane's cleanup couldn't see. It is now excluded from every capture path
+  (menus, click-capture, drag-to-dock), and an already-floating Main-toolbar
+  ghost left by an earlier version self-heals at the next startup. The
+  toolbar action table was also repaired: "Toolbar 9" through "Toolbar 16"
+  fired the wrong actions (including MIDI toolbars), and Toolbars 17–32
+  (added in REAPER 7) are now supported. (ADR-052)
+- **Capture-by-click works again for floating ReaImGui / script windows on
+  Windows and Linux** (e.g. TK Patchbay). A v2.1.0 regression misclassified
+  any floating window owned by REAPER's main window as "embedded in the main
+  window" and silently rejected the click. (ADR-053)
+- **Esc now cancels tab-drag and drag-to-dock on macOS** — it only ever
+  worked on Windows.
+- **Linux:** the support and update links now open in the browser
+  (`xdg-open` — they previously did nothing); released / detached windows get
+  their title bar and frame back instead of coming back borderless and
+  unmovable; dark-mode "Auto" follows the GNOME/GTK setting instead of always
+  rendering light (KDE still falls back to light); window geometry saved on a
+  since-disconnected monitor is clamped back on-screen.
+- **Updater hardening:** quitting REAPER during a slow update check can no
+  longer crash at exit (the background check is now cleanly stopped at
+  unload), and update-check responses are capped at 1 MB.
+- **Windows:** the Quick Switcher's favorite-entry marker no longer renders
+  as mojibake.
+
+*Capture, drag and their visual feedback were verified live on Windows 11
+and Ubuntu VMs for this release; macOS is the daily-driver platform. Known
+platform quirk: on Linux/X11 a bare title-bar click can't always be
+attributed to its window (the title bar belongs to the window manager) —
+clicking window content always works.*
+
 ## [2.1.1] - 2026-06-08
 
 **Quick fix** for a regression in v2.1.0.

@@ -95,8 +95,13 @@ inline void safe_strncpy(char* dst, const char* src, size_t dst_size)
 {
   if (!dst || dst_size == 0) return;
   if (!src) { dst[0] = '\0'; return; }
-  strncpy(dst, src, dst_size - 1);
-  dst[dst_size - 1] = '\0';
+  // strlen+memcpy instead of strncpy: truncation is this helper's contract,
+  // but GCC's -Wstringop-truncation flags every inlined strncpy call site
+  // for it under the CI -Werror gate (ADR-060 session catch).
+  size_t len = strlen(src);
+  if (len > dst_size - 1) len = dst_size - 1;
+  memcpy(dst, src, len);
+  dst[len] = '\0';
 }
 
 // Safe integer parsing with clamping (replaces raw atoi)
@@ -167,12 +172,17 @@ inline const char* GetActionCommandString(int actionId, char* buf, int bufSize)
   return buf;
 }
 
+// Audit M3.4 — the global ExtState section name. Canonical definition in
+// config.cpp; declared here too because globals.h deliberately doesn't pull
+// in config.h (a typo'd hand-typed literal silently forks the namespace).
+extern const char* const EXT_SECTION;
+
 // Auto-open helpers — canonical logic in one place
 // Default is ON unless explicitly set to "0"
 inline bool IsAutoOpenEnabled()
 {
   if (!g_GetExtState) return true;
-  const char* val = g_GetExtState("MaxPane_cpp", "auto_open");
+  const char* val = g_GetExtState(EXT_SECTION, "auto_open");
   if (val && val[0] == '0') return false;
   return true;
 }
@@ -180,7 +190,7 @@ inline bool IsAutoOpenEnabled()
 inline void SetAutoOpenEnabled(bool enabled)
 {
   if (g_SetExtState) {
-    g_SetExtState("MaxPane_cpp", "auto_open", enabled ? "1" : "0", true);
+    g_SetExtState(EXT_SECTION, "auto_open", enabled ? "1" : "0", true);
   }
 }
 
@@ -189,7 +199,7 @@ inline void SetAutoOpenEnabled(bool enabled)
 inline bool IsAutoUpdateEnabled()
 {
   if (!g_GetExtState) return true;
-  const char* val = g_GetExtState("MaxPane_cpp", "auto_update_check");
+  const char* val = g_GetExtState(EXT_SECTION, "auto_update_check");
   if (val && val[0] == '0') return false;
   return true;
 }
@@ -197,6 +207,6 @@ inline bool IsAutoUpdateEnabled()
 inline void SetAutoUpdateEnabled(bool enabled)
 {
   if (g_SetExtState) {
-    g_SetExtState("MaxPane_cpp", "auto_update_check", enabled ? "1" : "0", true);
+    g_SetExtState(EXT_SECTION, "auto_update_check", enabled ? "1" : "0", true);
   }
 }

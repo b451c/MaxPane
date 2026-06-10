@@ -12,8 +12,7 @@
 #include <thread>
 
 #ifdef __APPLE__
-// FetchUrlSync declared in swell_cocoa_helpers.h, implemented in .mm.
-extern std::string FetchUrlSyncMacOS(const char* url, int timeoutSec);
+// FetchUrlSyncMacOS comes from swell_cocoa_helpers.h (implemented in .mm).
 #elif defined(_WIN32)
 #include <windows.h>
 #include <winhttp.h>
@@ -108,6 +107,9 @@ std::string HttpGetSync(const char* url)
       if (!WinHttpReadData(hRequest, &chunk[0], avail, &read)) break;
       chunk.resize(read);
       result += chunk;
+      // 1 MB cap (audit M1.5) — the manifest is a few KB; don't let an
+      // oversized response balloon memory in the worker thread.
+      if (result.size() > 1024 * 1024) { result.clear(); break; }
     } while (avail > 0);
   }
 
@@ -131,6 +133,8 @@ std::string HttpGetSync(const char* url)
   size_t n;
   while ((n = std::fread(buf, 1, sizeof(buf), pipe)) > 0) {
     result.append(buf, n);
+    // 1 MB cap (audit M1.5) — see the WinHTTP branch.
+    if (result.size() > 1024 * 1024) { result.clear(); break; }
   }
   pclose(pipe);
   return result;
@@ -210,6 +214,18 @@ void CheckForUpdatesNow(HWND parent, bool showIfUpToDate)
 static std::atomic<AsyncResult> g_asyncState{AsyncResult::NotStarted};
 static std::atomic<bool> g_modalShown{false};
 static char g_latestVersion[64] = {};
+// Audit M1.5 — the worker used to be detached: REAPER could dlclose the
+// extension while the thread still executed code from it (crash at exit if
+// the user quit within the ~10s network-timeout window). Keep the handle
+// and join it in ShutdownAsyncCheck() from the plugin-unload path. All HTTP
+// branches have hard 10s timeouts, so the join is bounded; in the typical
+// case the check completed minutes earlier and the join is instant.
+static std::thread g_asyncWorker;
+
+void ShutdownAsyncCheck()
+{
+  if (g_asyncWorker.joinable()) g_asyncWorker.join();
+}
 
 void StartAsyncCheck()
 {
@@ -222,7 +238,7 @@ void StartAsyncCheck()
     return;
   }
 
-  std::thread([]() {
+  g_asyncWorker = std::thread([]() {
     const std::string xml = HttpGetSync(kIndexUrl);
     if (xml.empty()) {
       g_asyncState.store(AsyncResult::NetworkError, std::memory_order_release);
@@ -251,7 +267,7 @@ void StartAsyncCheck()
     } else {
       g_asyncState.store(AsyncResult::NoUpdate, std::memory_order_release);
     }
-  }).detach();
+  });
 }
 
 AsyncResult PollAsyncResult()

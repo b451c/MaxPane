@@ -437,7 +437,9 @@ std::string FetchUrlSyncMacOS(const char* url, int timeoutSec)
                                   completionHandler:^(NSData* data,
                                                        NSURLResponse* /*resp*/,
                                                        NSError* err) {
-    if (!err && data && data.length > 0) {
+    // 1 MB cap (audit M1.5) — the manifest is a few KB; an oversized
+    // response (CDN compromise / captive portal) must not balloon memory.
+    if (!err && data && data.length > 0 && data.length <= 1024 * 1024) {
       result.assign((const char*)data.bytes, data.length);
     }
     dispatch_semaphore_signal(sem);
@@ -448,5 +450,8 @@ std::string FetchUrlSyncMacOS(const char* url, int timeoutSec)
       (int64_t)timeoutSec * NSEC_PER_SEC + (int64_t)NSEC_PER_SEC);
   dispatch_semaphore_wait(sem, deadline);
   dispatch_release(sem);
+  // Sessions leak until invalidated (Apple docs); tasks in flight (timeout
+  // path) finish or cancel on their own, then the session is released.
+  [session finishTasksAndInvalidate];
   return result;
 }

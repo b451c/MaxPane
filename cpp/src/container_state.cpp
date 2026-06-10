@@ -2,6 +2,7 @@
 // (SaveState, LoadState, ApplyPaneState, workspace save/load/delete)
 #include "container.h"
 #include "config.h"
+#include "action_list.h"
 #include "globals.h"
 #include "debug.h"
 #include "capture_queue.h"
@@ -9,22 +10,13 @@
 #include "workspace_manager.h"
 #include "project_state.h"
 #include "state_accessor.h"
-#include "nav_bar.h"      // Feature A — Set/ResetActiveWorkspaceLabel
+#include "nav_bar.h"      // Feature A — NavBar::NAV_BAR_HEIGHT (bar-strip repaints)
 #include <cstring>
 #include <cstdio>
 
 // =========================================================================
 // Feature A — workspace-name nav bar label
 // =========================================================================
-
-void MaxPaneContainer::RefreshNavBarLabelCache()
-{
-  if (m_currentWorkspaceName[0]) {
-    NavBar::SetActiveWorkspaceLabel(m_currentWorkspaceName, m_workspaceDirty);
-  } else {
-    NavBar::ResetActiveWorkspaceLabel();
-  }
-}
 
 void MaxPaneContainer::PersistWorkspaceLabel()
 {
@@ -41,7 +33,6 @@ void MaxPaneContainer::SetCurrentWorkspace(const char* name)
   safe_strncpy(m_currentWorkspaceName, name, sizeof(m_currentWorkspaceName));
   m_workspaceDirty = false;
   PersistWorkspaceLabel();
-  RefreshNavBarLabelCache();
   if (m_hwnd) {
     // Repaint just the bar strip — InvalidateRect for the whole bar so the
     // new label appears even when nothing else changed visually.
@@ -57,7 +48,6 @@ void MaxPaneContainer::ClearCurrentWorkspace()
   m_currentWorkspaceName[0] = '\0';
   m_workspaceDirty = false;
   PersistWorkspaceLabel();
-  RefreshNavBarLabelCache();
   if (m_hwnd) {
     RECT cr; GetClientRect(m_hwnd, &cr);
     RECT bar = cr; bar.bottom = bar.top + NavBar::NAV_BAR_HEIGHT + 36;
@@ -73,7 +63,6 @@ void MaxPaneContainer::MarkWorkspaceDirty()
   if (m_workspaceDirty) return;
   m_workspaceDirty = true;
   PersistWorkspaceLabel();
-  RefreshNavBarLabelCache();
   if (m_hwnd) {
     RECT cr; GetClientRect(m_hwnd, &cr);
     RECT bar = cr; bar.bottom = bar.top + NavBar::NAV_BAR_HEIGHT;
@@ -96,8 +85,10 @@ void MaxPaneContainer::LoadFloatingState()
   auto readInt = [&](const char* key, int defaultVal) -> int {
     const char* s = g_GetExtState(m_extSection, key);
     if (!s || !s[0]) return defaultVal;
-    int v = atoi(s);
-    return v;
+    // Audit M3.4 — last persisted-input reader still on raw atoi. Clamp to
+    // sane screen-coordinate space like every other parse site (negative is
+    // legal: multi-monitor layouts extend left/up of the primary).
+    return safe_atoi_clamped(s, -32000, 32000);
   };
   m_floatX = readInt("float_x", m_floatX);
   m_floatY = readInt("float_y", m_floatY);
@@ -189,7 +180,8 @@ void MaxPaneContainer::SaveState()
 //   state > 0  → single toggle (REAPER says open, action will close)
 //   state == 0 → if window exists despite state=0 (wnd_vis quirk), double-toggle
 //                to resync (open then close, properly updating wnd_vis)
-//   state ==-1 → skip entirely (script / ReaImGui — toggle would START it)
+//   state ==-1 → WM_CLOSE + hide when visible, defer when not (Sprint 1
+//                Entry 8 — a toggle would START the script, so never toggle)
 // Returns true if a non-empty stale list was found.
 bool ProcessStaleActionsForSection(const char* section)
 {
@@ -200,23 +192,11 @@ bool ProcessStaleActionsForSection(const char* section)
 
   DBG("[MaxPane] StaleCleanup[%s]: stale actions: %s\n", section, staleStr);
 
-  // Parse comma-separated action IDs
-  int staleArr[256];
-  int staleCnt = 0;
-  {
-    const char* cur = staleStr;
-    while (*cur && staleCnt < 256) {
-      int a = 0;
-      while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
-      if (a > 0) staleArr[staleCnt++] = a;
-      if (*cur == ',') cur++;
-      else break;
-    }
-  }
+  int staleArr[ACTION_LIST_MAX];
+  int staleCnt = ParseActionList(staleStr, staleArr, ACTION_LIST_MAX);
 
-  bool anyRemaining = false;
-  char remaining[2048] = {};
-  int rLen = 0;
+  int deferred[ACTION_LIST_MAX];
+  int deferredCnt = 0;
   for (int i = 0; i < staleCnt; i++) {
     int state = g_GetToggleCommandState ? g_GetToggleCommandState(staleArr[i]) : -1;
     DBG("[MaxPane] StaleCleanup[%s]: action=%d state=%d\n", section, staleArr[i], state);
@@ -227,9 +207,19 @@ bool ProcessStaleActionsForSection(const char* section)
       if (GetSearchTitleForAction(staleArr[i], searchTitle1, sizeof(searchTitle1))) {
         HWND h1 = WindowManager::FindReaperWindow(searchTitle1);
         bool still1 = (h1 && IsWindow(h1) && IsWindowVisible(h1));
-        if (still1) ShowWindow(h1, SW_HIDE);
-        DBG("[MaxPane] StaleCleanup[%s]: toggled off action=%d stillVis=%d\n",
-            section, staleArr[i], still1);
+        if (still1) {
+          // ADR-052 follow-up (B16 pattern) — the toggle can no-op on a
+          // window REAPER restored from cached wnd_vis (main-toolbar ghost:
+          // stillVis=1 at three consecutive startups in the smoke log).
+          // WM_CLOSE runs REAPER's own close handler so wnd_vis actually
+          // updates and the ghost stops re-spawning at the next startup.
+          // SW_HIDE stays as the visual fallback, same as the state==-1
+          // branch below.
+          SendMessage(h1, WM_CLOSE, 0, 0);
+          if (IsWindow(h1) && IsWindowVisible(h1)) ShowWindow(h1, SW_HIDE);
+        }
+        DBG("[MaxPane] StaleCleanup[%s]: toggled off action=%d stillVis=%d%s\n",
+            section, staleArr[i], still1, still1 ? " (WM_CLOSE+hide)" : "");
       } else {
         DBG("[MaxPane] StaleCleanup[%s]: toggled off action=%d (no reverse lookup)\n",
             section, staleArr[i]);
@@ -255,10 +245,7 @@ bool ProcessStaleActionsForSection(const char* section)
         }
       }
       if (!handledN1) {
-        int n = snprintf(remaining + rLen, sizeof(remaining) - (size_t)rLen,
-                         "%s%d", rLen > 0 ? "," : "", staleArr[i]);
-        if (n > 0) rLen += n;
-        anyRemaining = true;
+        AppendUniqueAction(deferred, &deferredCnt, ACTION_LIST_MAX, staleArr[i]);
         DBG("[MaxPane] StaleCleanup[%s]: state=-1 action=%d deferred (not visible)\n",
             section, staleArr[i]);
       }
@@ -283,15 +270,14 @@ bool ProcessStaleActionsForSection(const char* section)
         }
       }
       if (!handled) {
-        int n = snprintf(remaining + rLen, sizeof(remaining) - (size_t)rLen,
-                         "%s%d", rLen > 0 ? "," : "", staleArr[i]);
-        if (n > 0) rLen += n;
-        anyRemaining = true;
+        AppendUniqueAction(deferred, &deferredCnt, ACTION_LIST_MAX, staleArr[i]);
       }
     }
   }
 
-  if (anyRemaining) {
+  if (deferredCnt > 0) {
+    char remaining[ACTION_LIST_BUF];
+    SerializeActionList(deferred, deferredCnt, remaining, sizeof(remaining));
     g_SetExtState(section, "stale_toggle_actions", remaining, true);
     DBG("[MaxPane] StaleCleanup[%s]: deferred remaining: %s\n", section, remaining);
   } else {
@@ -309,24 +295,18 @@ void MergeCapturesIntoStaleListForSection(const char* section, const WindowManag
 {
   if (!section || !g_GetExtState || !g_SetExtState) return;
 
-  int merged[512];
+  int merged[ACTION_LIST_MAX];
   int cnt = 0;
   auto addUnique = [&](int act) {
-    if (act <= 0 || cnt >= 512) return;
-    for (int i = 0; i < cnt; i++) if (merged[i] == act) return;
-    merged[cnt++] = act;
+    AppendUniqueAction(merged, &cnt, ACTION_LIST_MAX, act);
   };
 
   // 1) Existing stale entries (e.g. from a prior workspace switch).
   const char* prev = g_GetExtState(section, "stale_toggle_actions");
   if (prev && prev[0]) {
-    const char* cur = prev;
-    while (*cur) {
-      int a = 0;
-      while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
-      if (a > 0) addUnique(a);
-      if (*cur == ',') cur++; else break;
-    }
+    int prevArr[ACTION_LIST_MAX];
+    int prevCnt = ParseActionList(prev, prevArr, ACTION_LIST_MAX);
+    for (int i = 0; i < prevCnt; i++) addUnique(prevArr[i]);
   }
   // 2) Currently captured tabs across all panes.
   for (int p = 0; p < MAX_PANES; p++) {
@@ -349,33 +329,25 @@ void MergeCapturesIntoStaleListForSection(const char* section, const WindowManag
           snprintf(key, sizeof(key), "ws_%d_pane_%d_tab_%d", ws, p, t);
           const char* v = g_GetExtState(EXT_SECTION, key);
           if (!v || !v[0]) continue;
+          // Audit M2.7 — shared "arb:" parser (config.cpp) instead of the
+          // second hand-rolled copy of the format.
           int actionId = 0;
-          if (strncmp(v, "arb:", 4) == 0) {
-            // "arb:<cmdstr>:<name>" — cmdstr is "_RSxxx" or numeric or "0".
-            const char* p2 = strchr(v + 4, ':');
-            if (p2 && p2 > v + 4) {
-              char cmd[128] = {};
-              size_t cmdLen = (size_t)(p2 - (v + 4));
-              if (cmdLen >= sizeof(cmd)) cmdLen = sizeof(cmd) - 1;
-              memcpy(cmd, v + 4, cmdLen);
-              actionId = ResolveActionCommand(cmd);
-            }
-          } else {
-            actionId = LookupToggleAction(v);
-          }
+          ArbSpec spec;
+          if (ParseArbSpec(v, &spec)) actionId = spec.action;
+          else                        actionId = LookupToggleAction(v);
+          // ADR-052 follow-up — slots saved before the Main-toolbar capture
+          // exclusion can still hold 'arb:41651:*'. Re-arming it here kept
+          // the startup ghost cycle alive forever (the cleanup toggle no-ops
+          // on the window, so wnd_vis re-caches open at every quit).
+          if (actionId == MAIN_TOOLBAR_ACTION) continue;
           addUnique(actionId);
         }
       }
     }
   }
   // 3) Write merged list.
-  char buf[4096] = {};
-  int len = 0;
-  for (int i = 0; i < cnt; i++) {
-    int n = snprintf(buf + len, sizeof(buf) - (size_t)len,
-                     "%s%d", len > 0 ? "," : "", merged[i]);
-    if (n > 0) len += n;
-  }
+  char buf[ACTION_LIST_BUF];
+  SerializeActionList(merged, cnt, buf, sizeof(buf));
   g_SetExtState(section, "stale_toggle_actions", buf, true);
   DBG("[MaxPane] StaleListMerge[%s]: '%s'\n", section, buf);
 }
@@ -391,31 +363,14 @@ void AppendActionToStaleListForSection(const char* section, int action)
   if (!section || action <= 0 || !g_GetExtState || !g_SetExtState) return;
 
   // Read existing list, dedupe.
-  int existing[512];
+  int existing[ACTION_LIST_MAX];
   int cnt = 0;
   const char* prev = g_GetExtState(section, "stale_toggle_actions");
-  if (prev && prev[0]) {
-    const char* cur = prev;
-    while (*cur && cnt < 512) {
-      int a = 0;
-      while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
-      if (a > 0) {
-        if (a == action) return;  // already present
-        existing[cnt++] = a;
-      }
-      if (*cur == ',') cur++; else break;
-    }
-  }
-  if (cnt >= 512) return;
-  existing[cnt++] = action;
+  if (prev && prev[0]) cnt = ParseActionList(prev, existing, ACTION_LIST_MAX);
+  if (!AppendUniqueAction(existing, &cnt, ACTION_LIST_MAX, action)) return;
 
-  char buf[4096] = {};
-  int len = 0;
-  for (int i = 0; i < cnt; i++) {
-    int n = snprintf(buf + len, sizeof(buf) - (size_t)len,
-                     "%s%d", len > 0 ? "," : "", existing[i]);
-    if (n > 0) len += n;
-  }
+  char buf[ACTION_LIST_BUF];
+  SerializeActionList(existing, cnt, buf, sizeof(buf));
   g_SetExtState(section, "stale_toggle_actions", buf, true);
   DBG("[MaxPane] StaleAppend[%s]: +%d → '%s'\n", section, action, buf);
 }
@@ -474,6 +429,9 @@ void MaxPaneContainer::LoadState()
       DBG("[MaxPane] LoadState: corrupt tree in project state, resetting to empty\n");
       m_tree.Reset();
       memset(panes, 0, sizeof(panes));
+      // Audit M1.2 — this used to be Release-silent: the user opened a
+      // project and found MaxPane empty with no explanation and no log.
+      ShowToast("MaxPane layout reset — saved state in this project couldn't be read.");
     }
   } else {
     // No RPP / no project state → empty launcher (ADR-013)
@@ -709,6 +667,17 @@ void MaxPaneContainer::FinalizeRestoreOrder()
 void MaxPaneContainer::SaveWorkspace(const char* name)
 {
   if (!name || !name[0]) return;
+  // Audit M1.2 — the 32-slot cap used to be enforced silently deep in
+  // CommitSnapshotToSlot while the completion toast still said "Saved '<X>'".
+  // Refuse up front with an honest toast instead.
+  if (!m_wsMgr->Find(name) && m_wsMgr->GetCount() >= MAX_WORKSPACES) {
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "Workspace list is full (%d) — delete one to save '%s'.",
+             MAX_WORKSPACES, name);
+    ShowToast(msg);
+    return;
+  }
   // Feature B — async save: determine "Saved" vs "Replaced" wording NOW
   // while pre-save state is still visible; EnqueueSave commits to the slot;
   // OnWorkspaceFlushTick fires the completion toast off the click frame.
@@ -783,20 +752,13 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
   }
 
   // Read existing stale list from ext state (accumulated from prior switches).
-  int staleActions[256];
+  int staleActions[ACTION_LIST_MAX];
   int staleCount = 0;
   if (g_GetExtState) {
     const char* s = g_GetExtState(m_extSection, "stale_toggle_actions");
     if (s && s[0]) {
       DBG("[MaxPane] LW: existing stale ext state: '%s'\n", s);
-      const char* cur = s;
-      while (*cur && staleCount < 256) {
-        int a = 0;
-        while (*cur >= '0' && *cur <= '9') { a = a * 10 + (*cur - '0'); cur++; }
-        if (a > 0) staleActions[staleCount++] = a;
-        if (*cur == ',') cur++;
-        else break;
-      }
+      staleCount = ParseActionList(s, staleActions, ACTION_LIST_MAX);
     }
   }
 
@@ -822,12 +784,7 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
             i, t, ps->tabs[t].name, act);
         continue;
       }
-      bool already = false;
-      for (int s = 0; s < staleCount; s++) {
-        if (staleActions[s] == act) { already = true; break; }
-      }
-      if (!already && staleCount < 256) {
-        staleActions[staleCount++] = act;
+      if (AppendUniqueAction(staleActions, &staleCount, ACTION_LIST_MAX, act)) {
         DBG("[MaxPane] LW: STALE pane %d tab %d '%s' action=%d — added to stale list\n",
             i, t, ps->tabs[t].name, act);
       }
@@ -859,13 +816,8 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
   // Instead, at next startup REAPER properly opens stale windows from wnd_vis,
   // and our deferred cleanup toggles them off with reliable toggle state.
   if (g_SetExtState) {
-    char buf[2048] = {};
-    int len = 0;
-    for (int s = 0; s < staleCount; s++) {
-      int n = snprintf(buf + len, sizeof(buf) - (size_t)len,
-                       "%s%d", len > 0 ? "," : "", staleActions[s]);
-      if (n > 0) len += n;
-    }
+    char buf[ACTION_LIST_BUF];
+    SerializeActionList(staleActions, staleCount, buf, sizeof(buf));
     g_SetExtState(m_extSection, "stale_toggle_actions", buf, true);
     DBG("[MaxPane] LW: saved stale list to ExtState: '%s'\n", buf);
   }
@@ -1000,7 +952,7 @@ bool MaxPaneContainer::ReopenLastClosedTab()
   if (found) {
     char foundTitle[512];
     GetWindowText(found, foundTitle, sizeof(foundTitle));
-    bool isDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
+    bool isDockFrame = (strstr(foundTitle, DOCKED_TITLE_SUFFIX) != nullptr);
     if (snap.isArbitrary && !isDockFrame) {
       m_captureQueue->EnqueueArbitrary(paneId, snap.searchTitle,
                                         snap.toggleAction, snap.actionCmd);
@@ -1100,7 +1052,7 @@ void MaxPaneContainer::ActivateFavorite(int favIdx, int paneId)
   if (found && !fav.isKnown) {
     char foundTitle[512];
     GetWindowText(found, foundTitle, sizeof(foundTitle));
-    bool isDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
+    bool isDockFrame = (strstr(foundTitle, DOCKED_TITLE_SUFFIX) != nullptr);
     if (isDockFrame) {
       m_winMgr.CaptureArbitraryWindow(paneId, found, fav.name, m_hwnd,
                                        fav.toggleAction, fav.actionCommand);

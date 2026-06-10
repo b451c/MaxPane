@@ -127,7 +127,14 @@ void BuildIndex(QSState& st)
     IndexEntry e = {};
     e.type = EntryType::Favorite;
     e.favIdx = i;
+#ifdef _WIN32
+    // Audit M3.4 — the list goes through ANSI LB_ADDSTRING in a non-UNICODE
+    // build, so the UTF-8 ★ rendered as mojibake ("â˜…"). Plain ASCII marker
+    // on Win32; macOS/Linux SWELL listboxes take UTF-8 fine.
+    snprintf(e.label, sizeof(e.label), "* %s", f.name);
+#else
     snprintf(e.label, sizeof(e.label), "%s %s", "\xe2\x98\x85" /* ★ */, f.name);
+#endif
     st.entries.push_back(e);
   }
 }

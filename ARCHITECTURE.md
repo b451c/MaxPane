@@ -93,7 +93,7 @@ All paths are relative to `cpp/src/`. Files marked `(.mm)` are Objective-C++
 | `platform.h` | `#ifdef _WIN32` switch between native `<windows.h>` and SWELL. Provides `CreateMaxPaneDialog` cross-platform wrapper and `GWLP_USERDATA → GWL_USERDATA` aliases for SWELL. |
 | `config.h/cpp` | Compile-time constants (`MAX_PANES`, `MAX_TABS_PER_PANE`, `MAX_WORKSPACES = 32`, `MAX_FAVORITES = 32`, `MAX_INSTANCES = 8`, colors, geometry, timing). `KNOWN_WINDOWS` array (the 15 one-click capture targets + their REAPER toggle action IDs). `MaxPaneIsDarkMode()` + cache invalidation. |
 | `debug.h` | `DBG(...)` macro — writes to `/tmp/maxpane_debug.log` in Debug builds; no-op in Release. |
-| `swell_cocoa_helpers.h/.mm` | macOS-only Cocoa helpers: `ForceViewLayoutAndDisplay`, `ForceHideWindow`, `ApplyFloatingWindowChrome`, `OpenUrlPlatform`, `MonitorBoundsForRect`, dark-mode detection. |
+| `swell_cocoa_helpers.h/.mm` | Cross-platform window helpers: `ForceViewLayoutAndDisplay`, `ForceHideWindow`, `ApplyFloatingWindowChrome`, `ClampRectToVisibleScreen`, `OpenUrlPlatform`, dark-mode detection, capture-by-click safety probes + crosshair/highlight overlay (ADR-048). macOS implementations live in the `.mm`; Win32 and Linux get inline native implementations in the header. The remaining per-platform stubs are documented in-header as registered gaps — see §15. |
 | `swell_modstub.cpp` | Linux-only SWELL loader stub (macOS uses `swell-modstub.mm` from WDL). |
 
 ### Layout engine
@@ -111,7 +111,7 @@ same `MaxPaneContainer*` via `this->`.
 | File | Role |
 |------|------|
 | `container.h` | Class declaration. `MaxPaneContainer` holds `m_tree`, `m_winMgr`, `m_captureQueue`, `m_favMgr`, `m_wsMgr`, plus per-instance ExtState section / dock ident / RPP chunk tag strings, floating-mode geometry, nav-bar / drag / Home-overlay state, recently-closed-tab ring buffer, toast bar state, brushes/pens. |
-| `container.cpp` | Lifecycle (`Create`, `Shutdown`, `Toggle`), `DlgProc` (message dispatch), `OnTimer` (capture queue tick, CheckAlive tick, drag-mode tick, startup polling). Context menu construction sits in `context_menu.cpp`; menu command dispatch sits here in `HandleTabMenuCommand` / `HandlePaneMenuCommand`. |
+| `container.cpp` | Lifecycle (`Create`, `Shutdown`, `Toggle`), `DlgProc` (message dispatch), two timer paths: `TIMER_ID_CHECK` (500 ms — CheckAlive tick, RPP-state poll) and `OnCaptureTimerTick` on `TIMER_ID_CAPTURE` (50 ms — capture-by-click state machine + capture-queue drain; extracted from the DlgProc in the 2026-06 audit). Context menu construction sits in `context_menu.cpp`; menu command dispatch sits here in `HandleTabMenuCommand` / `HandlePaneMenuCommand`. |
 | `container_paint.cpp` | `OnPaint`, `DrawTabBar`, `PaintToast`. Reads dark/light palette from `MaxPaneIsDarkMode()`. Paints nav bar, pane grid, drag-to-dock preview, Home overlay, tooltips, toast in that z-order. |
 | `container_input.cpp` | `OnMouseMove`, `OnLButtonUp`, `CalcTabBarLayout`, `GetTabRect`, `TabHitTest`, `IsOnTabCloseButton`, tab drag/drop state machine. |
 | `container_state.cpp` | `SaveState` / `LoadState` (ExtState round-trip), `ApplyPaneState` (deferred capture queue enqueue), `SaveWorkspace` / `LoadWorkspace` / `DeleteWorkspace`, stale-list helpers (`ProcessStaleActionsForSection`, `MergeCapturesIntoStaleListForSection`, `AppendActionToStaleListForSection`). |
@@ -122,7 +122,8 @@ same `MaxPaneContainer*` via `this->`.
 | File | Role |
 |------|------|
 | `window_manager.h/cpp` | The heart of capture. `TabEntry` is the per-window record (name, searchTitle, action, HWND, originalParent, originalRect, captured flag, pinned flag, …). `PaneState[MAX_PANES]` holds the per-pane tab arrays. `DoCapture` / `DoRelease` perform the SetParent dance. `CheckAlive` is the per-tick liveness scan. `FindReaperWindow` walks the REAPER window tree by title (with the dock-frame priority described in §6 of this doc). |
-| `capture_queue.h/cpp` | Async retry queue. `EnqueueKnown` / `EnqueueArbitrary` queue a target; `Tick` polls `FindReaperWindow` until either the window appears (≤30 retries for known, ≤200 for arbitrary) or we give up. Handles the dock-frame wait for ReaImGui scripts (`"Title (docked)"` precedence) and the script-action guard (`alreadyOpen` check before firing the toggle). |
+| `capture_queue.h/cpp` | Async retry queue. `EnqueueKnown` / `EnqueueArbitrary` queue a target; `Tick` polls `FindReaperWindow` until either the window appears (≤30 retries for known, ≤200 for arbitrary) or we give up. Handles the dock-frame wait for ReaImGui scripts (`"Title (docked)"` precedence) and the script-action guard (`alreadyOpen` check before firing the toggle). Failures (retry exhaustion, pane full, already captured) surface to the user via `PopFailureToast` — see §7. |
+| `fx_capture.h/cpp` | v2.0.4 (ADR-037) — AU/VST/JSFX plugin-window capture identity. Persists the same `(track GUID, FX GUID)` pair REAPER itself stores in RPP `FXID {…}` blocks (`fx@…` / `takefx@…` encodings inside the `arb:` envelope; `master` sentinel for master-track FX), so a captured plugin UI survives FX reorder, rename, and restart. Resolve / show / hide via `TrackFX_Show`. Pure REAPER SDK — zero platform `#ifdef`s. |
 | `context_menu.h/cpp` | Pane- and tab-context menu construction. `MenuIds` namespace centralizes command IDs. `EnumOpenWindowsProc` builds the "Open Windows" submenu by enumerating top-level windows. Capture submenus, Workspace submenus, Favorites submenus, Color submenu, Close submenu (ADR-030). |
 
 ### Persistence
@@ -134,6 +135,8 @@ same `MaxPaneContainer*` via `this->`.
 | `favorites_manager.h/cpp` | Shared favorites list (always `EXT_SECTION` per ADR-009). `Add` / `Remove` / `Get`, persisted to ExtState. |
 | `project_state.h/cpp` | `project_config_extension_t` callbacks. `OnProcessExtensionLine` parses `<MAXPANE_STATE[_N]>` chunks line-by-line into the per-instance `g_pendingProjectState[N]` buffer. `OnSaveExtensionConfig` serializes via `RppWriteAccessor`. The actual apply is deferred to a one-shot timer in container.cpp so the container is already created when we replay state. |
 | `state_limits.h` | Compile-time caps for serialization buffers (`RPP_MAX_LINES`, `RPP_MAX_LINE_LEN`, `RPP_KV_MAX`, …). |
+| `screenset.h/cpp` | v2.1.0 (ADR-050) — REAPER "Window sets" (screenset) integration via `screenset_registerNew`, one id per instance slot. `SAVE_STATE` serializes the same tree+tabs blob as the RPP `<MAXPANE_STATE>` chunk; `LOAD_STATE` drives the existing restore funnel and defers to an in-flight project-load restore so the two never fight. |
+| `action_list.h/cpp` | 2026-06 audit — single source of truth for parsing / serializing the comma-separated `stale_toggle_actions` action-ID list (`ParseActionList` / `AppendUniqueAction` / `SerializeActionList`, one shared capacity). Previously hand-rolled four times in `container_state.cpp` with divergent reader/writer capacities — a legally-written list could be silently truncated on the next startup. Pure logic, unit-tested in `tests/test_action_list.cpp`. |
 
 ### Multi-instance
 
@@ -152,7 +155,8 @@ same `MaxPaneContainer*` via `this->`.
 | `save_workspace_dialog.h/cpp` | Sprint 3.3 custom Save dialog. Name input + clickable listbox of existing workspaces + dynamic status label ("Will replace…" / "Will save as new…"). |
 | `settings_dialog.h/cpp` | ADR-019/022 Settings dialog. Single page, SWELL macro-only widgets, cycle-button for tristate dark-mode (Auto / Force dark / Force light). v2.0.3 added an About section (version, MIT license, support links) + manual "Check for updates" button. |
 | `nav_icons.h/cpp` + `cpp/resources/icons/` | v2.0.2 unified Phosphor PNG icon set for the nav bar. Replaced the previous Unicode-glyph path on all three platforms (the glyph fonts on Linux Noto Sans were missing the codepoints — tofu boxes). 7 SVG sources, generator Python script (PyGI/Rsvg + macOS rsvg-convert/Pillow fallback), 24 KB raw alpha tables emitted to `cpp/resources/nav_icons.gen.cpp`. Per-platform blit paths: Linux `StretchBltFromMem`, Win32 `StretchDIBits` (HALFTONE in v2.0.3 for smooth downscale), macOS `BlitBGRABitmapMacOS` in `swell_cocoa_helpers.mm` (CGImage + CGContextDrawImage with high interpolation). |
-| `updater.h/cpp` | v2.0.3 manual "Check for updates". Synchronous HTTPS GET against the project's ReaPack manifest on github.com, parses the first `<version name="vX.Y.Z">` tag, compares against `MAXPANE_VERSION_STRING` from `config.h`, shows a `MessageBox(MB_YESNO)` if newer. Per-platform HTTPS: macOS `FetchUrlSyncMacOS` (NSURLSession + dispatch_semaphore), Win32 WinHttp chunked read, Linux `popen("curl …")`. Auto-on-startup deferred to a follow-up release — needs thread-safe main-loop dispatch for Cocoa's NSAlert main-thread-only rule. |
+| `updater.h/cpp` | "Check for updates" against the project's ReaPack manifest: parses the first `<version name="vX.Y.Z">` tag, compares against `MAXPANE_VERSION_STRING` from `config.h`. Two paths: **async startup check** (v2.0.4 — `StartAsyncCheck` spawns a worker thread; the result lands in an atomic enum polled by container `OnTimer`, which fires the modal on the main thread per Cocoa's NSAlert rule) and **manual synchronous check** from Settings (v2.0.3). Per-platform HTTPS: macOS `FetchUrlSyncMacOS` (NSURLSession), Win32 WinHttp chunked read, Linux `popen("curl …")` — all with 10 s timeouts and a 1 MB response cap. The worker is joined at plugin unload via `ShutdownAsyncCheck` (audit M1.5) so quitting REAPER mid-check can't execute unmapped code. |
+| `hotkey_helper.h` | v2.0.4 (ADR-038) — wraps REAPER's native `DoActionShortcutDialog` so every right-click "Bind hotkey" entry opens a keystroke-capture modal scoped to one specific command ID (instead of sending the user to the full Actions list). Implementation lives in `main.cpp` where the slot tables are file-local. |
 
 ### Build artifacts
 
@@ -398,85 +402,84 @@ WindowManager::DoCapture(TabEntry& tab, HWND target, HWND container)
 
 ### 6.3 `DoRelease` — giving a captured window back
 
-This is the most-debugged routine in the codebase. The implementation lives
-in `window_manager.cpp:DoRelease`; the conceptual sequence:
+This is the most-debugged routine in the codebase — and the project's known
+regression magnet. The implementation lives in `window_manager.cpp:DoRelease`:
 
 ```
-WindowManager::DoRelease(TabEntry& tab, bool toggleOff)
-  │
-  ├─ preState = g_GetToggleCommandState(tab.toggleAction)   // B13 — read BEFORE
-  │                                                          //   any reparent;
-  │                                                          //   SWELL's
-  │                                                          //   SetParent(nullptr)
-  │                                                          //   races wnd_vis
-  │                                                          //   tracking
-  │
-  ├─ UnsubclassToolbar(tab.hwnd)                            // B6 — every branch
-  │                                                          //   below must
-  │                                                          //   unsubclass
-  │
-  ├─ SetParent(tab.hwnd, nullptr)                           // Path B
-  ├─ VerifySetParent(...)
-  │
-  ├─ if tab.toggleAction == 0  (no toggle known — arbitrary):
-  │     SetWindowPos(tab.hwnd, ..., tab.originalRect, …)    // B27 — orphan pos
-  │     ApplyFloatingWindowChrome(tab.hwnd)                  // B27 — restore frame
-  │     SendMessage(tab.hwnd, WM_CLOSE, 0, 0)                // try clean close
-  │     SW_HIDE + ForceHideWindow(tab.hwnd) if still visible
-  │     → frameless ReaImGui plugins now re-fire with their original chrome
-  │       and at the original screen position; see B27 notes below
-  │
-  ├─ else if preState == 1:
-  │     SendMessage(tab.hwnd, WM_CLOSE, 0, 0)               // B16 — WM_CLOSE
-  │                                                          //   primary;
-  │                                                          //   REAPER's
-  │                                                          //   native window
-  │                                                          //   handler
-  │                                                          //   updates
-  │                                                          //   wnd_vis
-  │                                                          //   correctly
-  │     postState = g_GetToggleCommandState(action)
-  │     if postState == 1:
-  │       g_Main_OnCommand(toggleAction)                     // B16 fallback —
-  │                                                          //   for actions
-  │                                                          //   that ignore
-  │                                                          //   WM_CLOSE
-  │     SW_HIDE
-  │     ForceHideWindow(tab.hwnd) iff [contentView]==view    // B14, B19 —
-  │                                                          //   orderOut only
-  │                                                          //   on owned
-  │                                                          //   NSWindows
-  │
-  ├─ else if preState == -1:        (script — ReaImGui etc.)
-  │     g_Main_OnCommand(toggleAction)                       // can't WM_CLOSE
-  │                                                          //   a script
-  │                                                          //   reliably
-  │
-  ├─ else  (preState == 0 — already off?):
-  │     SW_HIDE
-  │
-  └─ SetParent(tab.hwnd, tab.originalParent) if !toggleOff   // workspace switch:
-                                                              //   reparent + hide
-                                                              //   only,
-                                                              //   no toggle —
-                                                              //   we want
-                                                              //   REAPER's
-                                                              //   wnd_vis to
-                                                              //   stay "open"
-                                                              //   so the next
-                                                              //   workspace
-                                                              //   load can
-                                                              //   recapture
-                                                              //   without a
-                                                              //   round-trip
+WindowManager::DoRelease(TabEntry& tab, bool toggleOff = true,
+                         bool returnVisible = false)
 ```
 
-The reason for so many branches: each captured window's REAPER-side action
+Two orthogonal modes select the *outcome*:
+
+- **Close path** (`returnVisible == false`, the default) — the captured
+  window is closed/hidden and REAPER's `wnd_vis` tracking is re-synced. Used
+  by "Close Tab", `Toggle()` teardown, and workspace switches
+  (`toggleOff == false` variant: reparent + hide only, no toggle, so the next
+  workspace load can recapture without a round-trip).
+- **Release-Window path** (`returnVisible == true`, ADR-046) — the window is
+  *detached and left visible* as a floating REAPER window: the toggle /
+  `WM_CLOSE` dispatch is deliberately skipped (REAPER's toggle state stays 1,
+  FX showFlag stays 3), the original screen rect is restored and clamped
+  on-screen, and — critically — **no stale-list entry is written**, so the
+  startup ghost-cleanup (§6.4) leaves the deliberately-open window alone.
+  "Release Window" in the tab menu uses this; "Close Tab" remains the
+  destructive action.
+
+Three *protocols* then handle the actual detach, selected by what we know
+about the window. All three funnel into a shared tail (this was a
+`goto fx_done` until the 2026-06 audit removed the label; the protocol
+bodies were kept byte-identical — see audit M2.2):
+
+```
+  ├─ Protocol 1 — FX identity (FxCapture::IsFxIdentity(tab.actionCmd)):
+  │     close path:    FxCapture::Hide → TrackFX_Show(hide); REAPER's own
+  │                    tracker updates cleanly (ADR-037)
+  │     returnVisible: skip the hide — the FX UI stays floating
+  │     both:          DetachToTopLevel + restore originalRect (clamped
+  │                    on-screen for returnVisible). No chrome restore —
+  │                    REAPER manages FX-window chrome itself.
+  │
+  ├─ Protocol 2 — toggle-known (toggleOff && tab.toggleAction > 0):
+  │     preState read BEFORE any reparent (B13 — SetParent(nullptr) races
+  │     wnd_vis tracking)
+  │     close path:    fire the toggle while still WS_CHILD; WM_CLOSE as
+  │                    fallback if the toggle no-ops; pre-detach hide (F-G —
+  │                    manager windows like Routing Matrix ignore both while
+  │                    they are our child and would re-float as ghosts);
+  │                    detach; post-detach toggle RETRY if state is still 1
+  │                    (F-G); restore originalRect; chrome for arbitrary
+  │                    non-toolbars
+  │     returnVisible: skip toggle/WM_CLOSE entirely; detach; clamp rect
+  │                    on-screen (toolbars keep their own geometry — their
+  │                    captured rect is the degenerate docked 42x42, B24)
+  │
+  ├─ Protocol 3 — no action known (else; arbitrary / ReaImGui):
+  │     if toggle state == -1 (live ReaImGui script): fire the script's own
+  │       action even on workspace switch — detaching behind ImGui Docker's
+  │       back leaves a stale pointer and crashes in Docker::moveTo
+  │     else, close path: WM_CLOSE while WS_CHILD (B27 v7 sequence)
+  │     both: detach → ApplyFloatingWindowChrome on the fresh orphan →
+  │       restore originalRect (see §6.5 for why this order is load-bearing)
+  │
+  └─ Shared tail (all three protocols):
+        UnsubclassToolbar          // F-D — after the toggle/reparent has
+                                   //   finished pumping messages; earlier
+                                   //   unsubclassing let the release click
+                                   //   fire a toolbar button
+        returnVisible ? SW_SHOW + ForceViewLayoutAndDisplay
+                      : SW_HIDE + ForceHideWindow   // B14 — orderOut: direct
+```
+
+The reason for the protocol split: each captured window's REAPER-side action
 behaves slightly differently. Some toggle correctly off after a reparent
-(Mixer); some refuse to update `wnd_vis` after our reparent (Actions, Media
-Explorer); some have no action at all (arbitrary captures with
-`toggleAction == 0` — ReaImGui scripts captured by click); some are scripts
-where firing the action *starts* the script (state `-1`).
+(Mixer); some refuse to update `wnd_vis` while reparented (Actions, Media
+Explorer, the manager windows); FX UIs have a dedicated SDK close
+(`TrackFX_Show`); some windows have no action at all (arbitrary captures
+with `toggleAction == 0`); and ReaImGui scripts (state `-1`) must tear their
+own window down. The B27 diagnostic `GetWindowRect` probes in this routine
+compile only in Debug builds since the audit (their only consumers are `DBG`
+calls, which are no-ops in Release).
 
 ### 6.4 Stale-list defense-in-depth
 
@@ -488,11 +491,19 @@ section) is the safety net for everything else. Three writers, one reader:
 | `Toggle()` | User closes container mid-session | Captured tabs may not have closed cleanly. |
 | `LoadWorkspace()` | User switches workspace | Tabs in the old workspace are reparented out with `toggleOff=false`. We need REAPER to close them at *next* startup if it restores them from wnd_vis. |
 | `onAtExit` | REAPER quitting | Cmd+Q bypasses some destruction paths on macOS. Defense-in-depth. |
-| `AppendActionToStaleListForSection` | Per-tab close (X button, RELEASE menu) | Catch the case where mid-session DoRelease succeeded but REAPER caches an out-of-date wnd_vis. |
+| `AppendActionToStaleListForSection` | Per-tab **close** (X button, "Close Tab", replace-on-drop) | Catch the case where mid-session DoRelease succeeded but REAPER caches an out-of-date wnd_vis. Note: the "Release Window" path (`returnVisible`, ADR-046) deliberately does **not** write an entry — the window is meant to stay open, and a stale entry would make startup cleanup close it. |
 
 | Reader | When | Action |
 |--------|------|--------|
-| `ProcessStaleActionsForSection` (called from `startupTimerFunc`) | Every tick during startup polling | For each cached action: if `state==1` → toggle off + verify hide; if `state==0` but window visible → double-toggle to resync; if `state==-1` → skip (script). |
+| `ProcessStaleActionsForSection` (called from `startupTimerFunc`) | Every tick during startup polling | For each cached action: if `state==1` → toggle off + force-hide via reverse title lookup; if `state==0` but window visible → double-toggle to resync (defer if not found yet); if `state==-1` (fire-and-show actions like Region Render Matrix, ReaImGui scripts) → `WM_CLOSE` + hide when the window is currently visible, defer to a later tick when it isn't (Sprint 1 Entry 8 — the original hard "skip" left these as floating ghosts after restart). |
+
+Entries still deferred when the startup poll window closes (~75 ticks) are
+**pruned** (2026-06 audit, M3.3): they reference windows REAPER did not
+restore this session — typically an uninstalled script or a removed toolbar —
+and used to survive forever, re-running the full probe loop at every future
+startup. Nothing else reads the list until the next startup, so dropping the
+remainder is behaviorally equivalent; `LoadWorkspace` re-arms fresh entries
+mid-session unaffected.
 
 The mechanism survived being deleted once (ADR-013 initial pass) and was
 restored after a regression (ADR-013-A correction). Future maintainers: do
@@ -555,8 +566,11 @@ the timing is tricky:
   `ReverseNamedCommandLookup` to resolve to a stable string and
   `NamedCommandLookup` to resolve back to a (possibly new) numeric ID.
 
-`CaptureQueue::Tick` (called from `MaxPaneContainer::OnTimer`) iterates the
-pending queue every 50 ms:
+`CaptureQueue::Tick` runs on the dedicated 50 ms capture timer — it is called
+from `MaxPaneContainer::OnCaptureTimerTick` (`TIMER_ID_CAPTURE`,
+`TIMER_CAPTURE_INTERVAL = 50 ms`), **not** from the 500 ms `TIMER_ID_CHECK`
+tick that drives `CheckAlive` and the RPP-state poll. It iterates the pending
+queue:
 
 ```
 for each PendingCapture in m_queue:
@@ -582,6 +596,13 @@ Two retry budgets:
   predictably; if they're not there in 1.5 s, something's wrong.
 - `MAX_RETRIES_ARBITRARY = 200` (~10 s) for arbitrary captures. ReaImGui
   scripts can take a few seconds to register their HWNDs.
+
+Failures are no longer silent (2026-06 audit): retry exhaustion, a full pane,
+and already-captured targets stage a message that the container polls via
+`CaptureQueue::PopFailureToast()` after each Tick and shows as a toast
+(generalized from the earlier FX-only `PopFxFailureToast` side-channel).
+Previously these paths logged only to the Debug-build file — a Release user
+saw "nothing happened".
 
 B12 / B18 fix: arbitrary captures now respect an `alreadyOpen` guard before
 firing the toggle, mirroring the known-window path. Without this, loading a
@@ -876,7 +897,7 @@ both the container itself and any captured child windows route correctly.
 
 ---
 
-## 14. v2.0 feature surface (one-liners)
+## 14. Feature surface, v2.0–v2.1 (one-liners)
 
 For each feature: where it lives + what ADR justifies it. Detail lives in
 `docs/v2/V2_DECISIONS.md` (local-only).
@@ -889,7 +910,6 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 | F6 hotkey slots (32 ws + 32 fav) | `main.cpp` action registry + `ResolveSlotTargetInstance` | — |
 | C1 reopen last closed tab | `container.h` ring buffer + dispatch | ADR-027 |
 | C2 pinned tabs | `TabEntry::pinned`, stable-partition in `WindowManager` | ADR-027 |
-| C3 close-family submenu | `context_menu.cpp`, tab menu | ADR-027 + ADR-030 |
 | C4 workspace pickup | `MaxPane_WsPickup` action + `GetUserInputs` | ADR-027 |
 | C5 always-on-top floating | NSWindow setLevel: + ExtState | ADR-027 |
 | Nav bar + Home overlay + drag-to-dock | `nav_bar.{h,cpp}`, `drag_dock.{h,cpp}`, `container_nav.cpp` | ADR-026 |
@@ -900,6 +920,13 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 | Capture menu flattening | `context_menu.cpp` | ADR-020/030 |
 | MAX_WORKSPACES 32 | `config.h` | ADR-020 |
 | Accelerator hook | `main.cpp` `g_accelReg` | ADR-029 |
+| FX-identity capture (AU/VST/JSFX save+restore) | `fx_capture.{h,cpp}` | ADR-037 |
+| Inline hotkey binding | `hotkey_helper.h` + `main.cpp` | ADR-038 |
+| Capture-by-click (modal/core-window guards, crosshair, hover preview + outline) | `container.cpp` `OnCaptureTimerTick`, `window_manager.cpp` `IsCapturableTarget`, `swell_cocoa_helpers.{h,mm}` | ADR-048; ADR-053 — the Win32/Linux "embedded in main" test requires a real `WS_CHILD` link (`GetParent` returns the *owner* for popups, so v2.1.0 silently rejected floating script windows there) |
+| "Release Window" floating return | `window_manager.cpp` `DoRelease(returnVisible)` — see §6.3 | ADR-046 |
+| Screenset ("Window sets") integration | `screenset.{h,cpp}` | ADR-050 |
+| ReaImGui size-guard (dock min-clamp + pane floor-hide), scoped to `isReaImGui` hosts only | `window_manager.{h,cpp}`, `container.cpp` | ADR-045 + ADR-051 (v2.1.1 narrowing — docked toolbars/FX are never floor-hidden) |
+| Main-toolbar capture exclusion + corrected toolbar action table (`TOOLBAR_ACTION_RANGES`, Toolbars 17–32) | `config.{h,cpp}`, exclusion checks in the capture entry points | ADR-052 |
 
 ---
 
@@ -936,18 +963,46 @@ Architectural rules to keep cross-platform parity:
    widget syntax that overlaps SWELL's macro vocabulary is portable (see
    ADR-022).
 
+### Known platform gaps (registered)
+
+These are *documented stubs*, not silent ones — each is an inline
+implementation (or explicit no-op) in `swell_cocoa_helpers.h` with a comment
+explaining the gap and the revisit condition. The 2026-06 audit converted
+the last silent stubs into either working implementations or registered gaps.
+
+**Linux:**
+- `SetWindowAlwaysOnTop` is a no-op — SWELL-generic exposes no portable
+  topmost API, so the floating-mode "always on top" checkbox does nothing.
+- Esc-cancel is unavailable during capture-by-click and drags — generic
+  SWELL's `GetAsyncKeyState` tracks only mouse buttons + modifiers, never
+  Escape. Right-click cancels instead, and `CAPTURE_CANCEL_HINT` (config.h)
+  advertises the right gesture per platform.
+- Dark-mode "Auto" follows GNOME/GTK only (`gsettings` `color-scheme` probe,
+  cached per session); KDE and other desktops fall back to light. The manual
+  Settings override always wins.
+- No crosshair cursor and no hover-outline overlay during capture-by-click
+  (`SetCaptureCursorActive` / `ShowCaptureHighlight` are no-ops).
+
+**Win32:**
+- No crosshair cursor and no hover-outline overlay during capture-by-click
+  (cursor is managed per `WM_SETCURSOR`; the overlay would need a layered
+  window). Esc-cancel works natively.
+
 ---
 
 ## 16. Test infrastructure (ADR-018)
 
 `cpp/tests/` holds Catch2 v2.13.10 single-header (vendored under
-`tests/catch2/catch.hpp`) and four test TUs:
+`tests/catch2/catch.hpp`) and these test TUs:
 
 | Test TU | Covers |
 |---------|--------|
 | `test_split_tree.cpp` | `SplitTree::SplitLeaf` / `MergeNode` / `Recalculate` / `SaveSnapshot` / `LoadSnapshot` round-trip, paneId allocation, hit-testing. |
 | `test_workspace_manager.cpp` | `WorkspaceManager::WriteTreeNodesStatic` / `ReadTreeNodesStatic` / `WritePaneTabsStatic` / `ReadPaneTabsStatic` round-trip via an in-memory `StateAccessor` stub. |
 | `test_globals.cpp` | `safe_strncpy`, `clamp_i`, `clamp_f`, `ResolveActionCommand`. |
+| `test_config.cpp` | ADR-052 toolbar title↔action mapping (`GetToolbarToggleAction` / `GetSearchTitleForAction`, incl. the "Toolbar 9 ≠ 41687" MIDI-toolbar pin), `ParseArbSpec`. |
+| `test_action_list.cpp` | `ParseActionList` / `AppendUniqueAction` / `SerializeActionList` — truncation safety, overflow-guarded parsing, dedupe (2026-06 audit). |
+| `test_state_persistence.cpp` | `ReadPaneTabsStatic` / `WritePaneTabsStatic` round-trip (`arb:` records incl. legacy + hostile inputs) and the `RppWrite → lines → RppRead` chunk path. |
 | `test_stubs.cpp` | Test-only stubs for symbols pulled in by config.cpp (e.g. `IsSystemDarkMode`). |
 
 Test target compiles with relaxed warnings (`-Wno-shadow -Wno-conversion`)
@@ -964,15 +1019,19 @@ ctest --output-on-failure
 ./tests/maxpane_tests
 ```
 
-Currently 14 tests pass. The intent is to grow coverage of pure-logic TUs
-(everything that doesn't require a live SWELL window or REAPER process).
-Anything that needs `SetParent` / `EnumWindows` / `DockWindowAddEx` belongs
-in the manual smoke checklist, not in `maxpane_tests`.
+Currently 27 test cases (273 assertions) pass. The intent is to grow coverage
+of pure-logic TUs (everything that doesn't require a live SWELL window or
+REAPER process). Anything that needs `SetParent` / `EnumWindows` /
+`DockWindowAddEx` belongs in the manual smoke checklist, not in
+`maxpane_tests`.
 
 CI matrix (`.github/workflows/ci.yml`, ADR-018) runs `cmake + build + ctest`
-on macOS arm64, macOS x86_64 (cross-compile, Rosetta), Ubuntu, and Windows
-for every push to `v2` or `main` and every PR. `fail-fast: false` so all
-four results land in the GitHub UI even if one platform breaks.
+on five targets — macOS arm64, macOS x86_64, Linux x86_64, Linux aarch64, and
+Windows x64 — for every push to `v2` or `main` and every PR, with the
+`MAXPANE_WERROR` warning gate enabled (clang/gcc `-Werror`, MSVC `/W4 /WX`;
+OFF by default locally so a stray new-toolchain warning can't brick a release
+build). `fail-fast: false` so all five results land in the GitHub UI even if
+one platform breaks.
 
 ---
 
@@ -1000,8 +1059,10 @@ copy Release\reaper_maxpane.dll "%APPDATA%\REAPER\UserPlugins\"
 
 ### Release artifacts
 
-Built by `.github/workflows/build.yml` on push of a `v*` tag — uploads
-`.dylib` (arm64 + x86_64), `.dll`, `.so` to the GitHub Release. ReaPack picks
+Built by `.github/workflows/build.yml` on push of a `v*` tag — runs `ctest`
+before packaging (2026-06 audit: a tag can no longer ship binaries that never
+ran the unit suite), then uploads all five binaries (`.dylib` arm64 + x86_64,
+`.dll` x64, `.so` x86_64 + aarch64) to the GitHub Release. ReaPack picks
 up the new version via `index.xml` once that file is updated on `main`.
 
 CMake project version is the source of truth (`project(reaper_maxpane VERSION

@@ -16,6 +16,7 @@
 #include "swell_cocoa_helpers.h"
 #include "nav_bar.h"
 #include "drag_dock.h"
+#include "overlay_frame.h"
 #include "launcher.h"
 #include <cstdio>
 #include <cstring>
@@ -33,6 +34,14 @@ void MaxPaneContainer::LoadNavBarPref()
   // so the Settings dialog (which has no per-instance awareness) DTRT.
   const char* val = g_GetExtState(EXT_SECTION, "show_nav_bar");
   if (val && val[0] == '0' && val[1] == '\0') m_navBarVisible = false;
+  // Collapse chevron state (user request 2026-06-10) — global like the
+  // visibility pref, default expanded.
+  const char* col = g_GetExtState(EXT_SECTION, "nav_bar_collapsed");
+  m_navBarCollapsed = (col && col[0] == '1' && col[1] == '\0');
+  // ADR-055 — single-tab tab-bar collapse (Settings checkbox, default OFF).
+  // Pushed into WindowManager: layout/paint/hit-testing consult it there.
+  const char* hst = g_GetExtState(EXT_SECTION, "hide_single_tab_bar");
+  m_winMgr.SetHideSingleTabBar(hst && hst[0] == '1' && hst[1] == '\0');
 }
 
 void MaxPaneContainer::SaveNavBarPref()
@@ -40,6 +49,23 @@ void MaxPaneContainer::SaveNavBarPref()
   if (!g_SetExtState) return;
   g_SetExtState(EXT_SECTION, "show_nav_bar",
                 m_navBarVisible ? "1" : "0", true);
+  g_SetExtState(EXT_SECTION, "nav_bar_collapsed",
+                m_navBarCollapsed ? "1" : "0", true);
+}
+
+void MaxPaneContainer::ToggleNavBarCollapsed()
+{
+  m_navBarCollapsed = !m_navBarCollapsed;
+  SaveNavBarPref();
+  m_navHover = NavBar::BTN_NONE;
+  KillTimer(m_hwnd, TIMER_ID_NAVBAR_TIP);
+  if (m_hwnd) {
+    // Pane grid reclaims (or yields back) the bar strip — same re-origin
+    // dance as SetNavBarVisible.
+    m_tree.SetOrigin(0, NavBarReservedHeight());
+    RefreshLayout();
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+  }
 }
 
 void MaxPaneContainer::SetNavBarVisible(bool v)
@@ -58,13 +84,28 @@ void MaxPaneContainer::SetNavBarVisible(bool v)
 // Nav bar mouse handling
 // =========================================================================
 
+// Audit M3.6 — hit-test-side layout. Same label source as the paint path
+// (m_currentWorkspaceName + m_workspaceDirty, see OnPaint in
+// container_paint.cpp); no HDC, so the workspace-label width uses the
+// char-count heuristic in nav_bar.cpp — exactly what the deleted
+// single-arg Compute(rect) shim produced.
+NavBar::Layout MaxPaneContainer::ComputeNavBarLayout(const RECT& rc) const
+{
+  NavBar::State s{};
+  s.hoverButton    = NavBar::BTN_NONE;
+  s.collapsed      = m_navBarCollapsed;
+  s.workspaceName  = m_currentWorkspaceName[0] ? m_currentWorkspaceName : nullptr;
+  s.workspaceDirty = m_workspaceDirty;
+  return NavBar::Compute(rc, s, nullptr);
+}
+
 bool MaxPaneContainer::OnNavBarMouseMove(int x, int y)
 {
   if (!m_navBarVisible) return false;
 
   RECT rc;
   GetClientRect(m_hwnd, &rc);
-  NavBar::Layout lay = NavBar::Compute(rc);
+  NavBar::Layout lay = ComputeNavBarLayout(rc);
   if (!lay.visible) return false;
 
   // Only consume the event if cursor is actually over the bar; otherwise
@@ -102,7 +143,7 @@ bool MaxPaneContainer::OnNavBarClick(int x, int y)
 
   RECT rc;
   GetClientRect(m_hwnd, &rc);
-  NavBar::Layout lay = NavBar::Compute(rc);
+  NavBar::Layout lay = ComputeNavBarLayout(rc);
   if (!lay.visible) return false;
   // Outside the bar strip — not for us.
   if (y < lay.barRect.top || y >= lay.barRect.bottom) return false;
@@ -121,6 +162,10 @@ bool MaxPaneContainer::OnNavBarClick(int x, int y)
 void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
 {
   switch (buttonId) {
+    case NavBar::BTN_COLLAPSE:
+      ToggleNavBarCollapsed();
+      break;
+
     case NavBar::BTN_HOME:
       if (m_homeOverlay) CloseHomeOverlay();
       else               OpenHomeOverlay();
@@ -157,13 +202,17 @@ void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
       OpenSettingsDialog(m_hwnd);
       // dark mode override may have changed — repaint container.
       InvalidateRect(m_hwnd, nullptr, FALSE);
-      // Settings may toggle "show_nav_bar"; re-read so live state stays
-      // in sync without requiring a restart.
+      // Settings may toggle "show_nav_bar" or "hide_single_tab_bar" (ADR-055);
+      // re-read so live state stays in sync without requiring a restart.
       {
         bool wasVisible = m_navBarVisible;
+        bool wasHideTab = m_winMgr.GetHideSingleTabBar();
         LoadNavBarPref();
         if (wasVisible != m_navBarVisible) {
           m_tree.SetOrigin(0, NavBarReservedHeight());
+          RefreshLayout();
+        } else if (wasHideTab != m_winMgr.GetHideSingleTabBar()) {
+          // Pane header heights changed — reposition captured windows.
           RefreshLayout();
         }
       }
@@ -230,7 +279,7 @@ void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
 
       RECT rc;
       GetClientRect(m_hwnd, &rc);
-      NavBar::Layout nav = NavBar::Compute(rc);
+      NavBar::Layout nav = ComputeNavBarLayout(rc);
       POINT pt;
       if (nav.visible) {
         pt.x = nav.buttons[NavBar::BTN_SUPPORT].left;
@@ -467,6 +516,7 @@ void MaxPaneContainer::ExitDragMode()
   if (m_drag.mode == DragDock::IDLE) return;
   KillTimer(m_hwnd, TIMER_ID_DRAG_DOCK);
   DragDock::Reset(m_drag);
+  OverlayFrame::Hide();  // ADR-060 — drop the zone frame (Win/Linux)
   InvalidateRect(m_hwnd, nullptr, FALSE);
   DBG("[MaxPane] ExitDragMode[%s]\n", m_extSection);
 }
@@ -478,8 +528,11 @@ void MaxPaneContainer::DragModeTick()
     return;
   }
 
-  // Esc cancels at any time.
-  if (GetAsyncKeyState(VK_ESCAPE) & 0x8000) {
+  // Esc cancels at any time. Audit M1.6 — raw GetAsyncKeyState(VK_ESCAPE)
+  // is always 0 under both SWELLs, so this only ever worked on Windows;
+  // route through the ADR-048 helper (fixes macOS too).
+  if (IsCaptureCancelKeyDown()) {
+    DBG("[MaxPane] DragDock: cancel key down — exiting drag mode\n");
     ExitDragMode();
     return;
   }
@@ -495,7 +548,9 @@ void MaxPaneContainer::DragModeTick()
   if (m_drag.mode == DragDock::ARMED) {
     // Transition btn-up → btn-down outside MaxPane → start tracking.
     if (!m_drag.lastBtnDown && btnDown) {
-      HWND target = WindowFromPoint(screenPt);
+      HWND target = WindowManager::WindowFromPointForCapture(screenPt);
+      DBG("[MaxPane] DragDock: ARMED rising edge at (%ld,%ld) target=%p\n",
+          (long)screenPt.x, (long)screenPt.y, (void*)target);
       // Skip clicks on the MaxPane container itself (nav bar release etc.)
       HWND walk = target;
       bool overSelf = false;
@@ -508,38 +563,51 @@ void MaxPaneContainer::DragModeTick()
         return;
       }
 
-      // Walk up to a sensible top-level (skip own dock frames).
-      HWND topLevel = target;
-      HWND parent = GetParent(topLevel);
-      while (parent && parent != g_reaperMainHwnd) {
-        topLevel = parent;
-        parent = GetParent(topLevel);
-      }
-      if (!topLevel || topLevel == m_hwnd || topLevel == g_reaperMainHwnd) {
+      // Audit M2.4 — resolve the source EXACTLY like capture-by-click.
+      // The old bare GetParent walk + hard non-empty-title requirement
+      // diverged from the click path on Win32: empty-title plugins
+      // (ReaBeat, Reamix — the windows Entries 12/13 added fallbacks for)
+      // were silently un-drag-dockable, and docked plugins could resolve
+      // to the dock-frame inner container (the Entry 13 click bug).
+      HWND topLevel = WindowManager::ResolveCaptureSourceForClick(target);
+      if (!topLevel || topLevel == m_hwnd) {
         // Not a window we can capture; ignore this click, stay armed.
+        DBG("[MaxPane] DragDock: reject — ResolveCaptureSourceForClick=%p\n",
+            (void*)topLevel);
         m_drag.lastBtnDown = btnDown;
         return;
       }
       if (m_winMgr.IsWindowCaptured(topLevel)) {
         // Already captured — refuse.
+        DBG("[MaxPane] DragDock: reject — already captured %p\n", (void*)topLevel);
         m_drag.lastBtnDown = btnDown;
         return;
       }
 
       char title[256];
-      GetWindowText(topLevel, title, sizeof(title));
+      WindowManager::ResolveWindowDisplayName(topLevel, title, sizeof(title));
       if (!title[0]) {
+        DBG("[MaxPane] DragDock: reject — empty display name for %p\n",
+            (void*)topLevel);
         m_drag.lastBtnDown = btnDown;
         return;
       }
-      // Track potential dock-frame split (mirrors capture-by-click logic).
-      HWND captureHwnd = topLevel;
-      char* dockedSuffix = strstr(title, " (docked)");
-      if (dockedSuffix) {
-        *dockedSuffix = '\0';
-        HWND child = WindowManager::FindChildInParent(topLevel, title);
-        if (child) captureHwnd = child;
+      // Same gate as the click path (ADR-048/052/053): core main-window
+      // views and the Main toolbar can't be drag-docked. Also prevents
+      // CommitDrop's ZONE_REPLACE from closing the active tab before a
+      // capture that CaptureArbitraryWindow would reject anyway.
+      if (!WindowManager::IsCapturableTarget(topLevel, title)) {
+        DBG("[MaxPane] DragDock: reject — not capturable: '%s'\n", title);
+        m_drag.lastBtnDown = btnDown;
+        return;
       }
+      // Dock-frame split — same shared helper as capture-by-click (M2.7).
+      // Drags don't hide the frame (CommitDrop has no hide path), so the
+      // out-param is discarded.
+      HWND dragDockFrame = nullptr;
+      HWND captureHwnd =
+          WindowManager::ResolveDockFrameChild(topLevel, title, &dragDockFrame);
+      (void)dragDockFrame;
 
       m_drag.mode = DragDock::TRACKING;
       m_drag.sourceHwnd = captureHwnd;
@@ -598,8 +666,110 @@ void MaxPaneContainer::RefreshDragPreview()
     }
   }
 
+  // ADR-060 hybrid aiming — a titlebar grab parks the CURSOR 20-50px above
+  // the window body (on X11 the titlebar is WM decoration), so the dragged
+  // window can hang over a pane while the cursor sits on the nav bar or
+  // outside the container (Linux-VM round 2: Project Bay at cursor y=364,
+  // panes from y=411 — zone never fired). Cursor keeps priority (precision
+  // aiming for splits); only when it resolves nothing and the dragged
+  // window's CENTER lies over a pane, aim with that instead — forgiving
+  // interior semantics (add-as-tab / Shift = replace), never splits.
+  if (newPane < 0 && m_drag.sourceHwnd && IsWindow(m_drag.sourceHwnd)) {
+    RECT wr = {};
+    GetWindowRect(m_drag.sourceHwnd, &wr);
+    // Aim with the CURSOR CLAMPED into the dragged window's rect — NOT the
+    // window center (macOS smoke: aiming a tall window's top edge at the
+    // top pane docked it in the bottom pane, because the center hung
+    // lower; same mirrored for left/right). The cursor sits on the title
+    // bar just above the window, so the clamped point lands right under
+    // the user's aim. min/max per axis: SWELL-mac screen rects can come
+    // back y-flipped.
+    POINT wc = m_drag.cursorScreenPos;
+    const LONG xL = (wr.left < wr.right) ? wr.left : wr.right;
+    const LONG xR = (wr.left < wr.right) ? wr.right : wr.left;
+    const LONG yT = (wr.top < wr.bottom) ? wr.top : wr.bottom;
+    const LONG yB = (wr.top < wr.bottom) ? wr.bottom : wr.top;
+    if (wc.x < xL) wc.x = xL;
+    if (wc.x > xR) wc.x = xR;
+    if (wc.y < yT) wc.y = yT;
+    if (wc.y > yB) wc.y = yB;
+    ScreenToClient(m_hwnd, &wc);
+    if (wc.x >= rc.left && wc.x < rc.right &&
+        wc.y >= rc.top + NavBarReservedHeight() && wc.y < rc.bottom) {
+      int leafIdx = m_tree.LeafAtPoint(wc.x, wc.y);
+      if (leafIdx >= 0) {
+        int paneId = m_tree.GetPaneId(leafIdx);
+        if (paneId >= 0) {
+          newPane = paneId;
+          newZone = m_drag.shiftHeld ? DragDock::ZONE_REPLACE
+                                     : DragDock::ZONE_BODY_CENTER;
+        }
+      }
+    }
+  }
+
+  // ADR-060 — zone debounce. Win-VM live debug: with a titlebar grab the
+  // cursor rides the pane's top boundary, so the raw zone oscillated every
+  // tick between the cursor resolution (SPLIT_TOP) and the hybrid center
+  // fallback (BODY_CENTER) — the frame flickered badly and the commit took
+  // whichever flip was live at release ("aimed top, landed elsewhere").
+  // Adopt a changed (pane, zone) only after DRAG_ZONE_STABLE_TICKS identical
+  // raw ticks; the frame and CommitDrop both read the adopted value, so what
+  // is shown is always what drops. The very first resolution adopts
+  // instantly (no startup lag).
+  {
+    const bool sameAsAdopted =
+        (newPane == m_drag.targetPaneId && newZone == m_drag.zone);
+    if (sameAsAdopted) {
+      m_drag.pendingTicks = 0;
+    } else if (m_drag.targetPaneId < 0 && m_drag.zone == DragDock::ZONE_NONE) {
+      // nothing adopted yet — take it now
+      m_drag.pendingTicks = 0;
+    } else if (newPane == m_drag.pendingPane &&
+               newZone == m_drag.pendingZone &&
+               ++m_drag.pendingTicks >= DRAG_ZONE_STABLE_TICKS) {
+      m_drag.pendingTicks = 0;  // stable long enough — adopt below
+    } else {
+      if (newPane != m_drag.pendingPane || newZone != m_drag.pendingZone) {
+        m_drag.pendingPane = newPane;
+        m_drag.pendingZone = newZone;
+        m_drag.pendingTicks = 1;
+      }
+      newPane = m_drag.targetPaneId;  // hold the adopted zone this tick
+      newZone = m_drag.zone;
+    }
+  }
+
   m_drag.targetPaneId = newPane;
   m_drag.zone = newZone;
+
+  // Transitions only — pairs with the OverlayFrame placement log so a
+  // frozen/stale frame is distinguishable from a stale zone (ADR-060
+  // Linux-VM debug: the two diverged under a WM move grab).
+  if (prevPane != newPane || prevZone != newZone) {
+    DBG("[MaxPane] DragDock: zone pane=%d->%d zone=%d->%d\n",
+        prevPane, newPane, (int)prevZone, (int)newZone);
+  }
+
+  // ADR-060 — zone frame on Win32/Linux. The painted preview below goes
+  // through the container DC, which a captured child window covers — over
+  // an occupied pane the user saw NO feedback at all. The 4-strip overlay
+  // sits above the children. No-op on macOS (painted preview only).
+  {
+    RECT zr;
+    if (newPane >= 0 && m_tree.IsPaneIdUsed(newPane) &&
+        DragDock::ZoneRect(m_tree.GetPaneRect(newPane), newZone, &zr)) {
+      POINT tl = { zr.left, zr.top };
+      POINT br = { zr.right, zr.bottom };
+      ClientToScreen(m_hwnd, &tl);
+      ClientToScreen(m_hwnd, &br);
+      const RECT sr = { tl.x, tl.y, br.x, br.y };
+      OverlayFrame::ShowRect(sr,
+          DragDock::ZoneAccentColor(newZone, MaxPaneIsDarkMode()));
+    } else {
+      OverlayFrame::Hide();
+    }
+  }
 
   // Invalidate prev + current target rects so preview redraws.
   RECT dirty = {};
@@ -631,6 +801,7 @@ void MaxPaneContainer::CommitDrop()
   // Reset state up front so any failure leaves us IDLE.
   KillTimer(m_hwnd, TIMER_ID_DRAG_DOCK);
   DragDock::Reset(m_drag);
+  OverlayFrame::Hide();  // ADR-060 — drop the zone frame (Win/Linux)
 
   if (!sourceHwnd || !IsWindow(sourceHwnd) || paneId < 0) {
     InvalidateRect(m_hwnd, nullptr, FALSE);

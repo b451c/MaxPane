@@ -1,0 +1,14 @@
+# MaxPane house style (audit M3.5). Mirrors the existing code; intended for
+# NEW/changed code via clang-format-diff — do NOT bulk-reformat the tree
+# (history/blame preservation > uniformity).
+BasedOnStyle: LLVM
+IndentWidth: 2
+ColumnLimit: 100
+PointerAlignment: Left
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: WithoutElse
+SpacesBeforeTrailingComments: 2
+AlignConsecutiveAssignments: false
+AlignTrailingComments: true
+SortIncludes: false

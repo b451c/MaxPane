@@ -2,6 +2,8 @@
 #include "swell_cocoa_helpers.h"
 #include "globals.h"
 #include <cstring>
+#include <cstdio>   // snprintf (GetSearchTitleForAction)
+#include <cstdlib>  // atoi (GetToolbarToggleAction)
 
 // Cached effective dark mode — invalidated when Settings dialog changes
 // the user override (see InvalidateMaxPaneDarkModeCache).
@@ -12,7 +14,7 @@ bool MaxPaneIsDarkMode()
 {
   if (!g_darkModeChecked) {
     // ExtState override: "dark"/"light" force; "auto" or absent falls back.
-    const char* mode = g_GetExtState ? g_GetExtState("MaxPane_cpp", "dark_mode") : nullptr;
+    const char* mode = g_GetExtState ? g_GetExtState(EXT_SECTION, "dark_mode") : nullptr;
     if (mode && std::strcmp(mode, "dark") == 0) {
       g_darkModeActive = true;
     } else if (mode && std::strcmp(mode, "light") == 0) {
@@ -89,3 +91,134 @@ const WindowDef KNOWN_WINDOWS[] = {
 };
 
 const int NUM_KNOWN_WINDOWS = sizeof(KNOWN_WINDOWS) / sizeof(KNOWN_WINDOWS[0]);
+
+// =========================================================================
+// Title ↔ toggle-action mapping (moved from window_manager.cpp in v2.1.2 /
+// ADR-052 — pure logic, no SWELL, so the unit-test target covers the table).
+// =========================================================================
+
+// Single parser for the persisted "arb:<cmdstr>:<name>" tab value (audit
+// M2.7). Mirrors the historical ReadPaneTabsStatic semantics exactly:
+// cmd "0" is the legacy no-action marker and clears to empty; the legacy
+// "arb:<name>" form (no second colon) yields no command.
+bool ParseArbSpec(const char* value, ArbSpec* out)
+{
+  if (!value || !out || strncmp(value, "arb:", 4) != 0) return false;
+  out->cmd[0] = '\0';
+  out->name[0] = '\0';
+  out->action = 0;
+
+  const char* afterArb = value + 4;
+  const char* secondColon = strchr(afterArb, ':');
+  if (secondColon && secondColon > afterArb) {
+    size_t cmdLen = (size_t)(secondColon - afterArb);
+    if (cmdLen >= sizeof(out->cmd)) cmdLen = sizeof(out->cmd) - 1;
+    memcpy(out->cmd, afterArb, cmdLen);
+    out->cmd[cmdLen] = '\0';
+    if (strcmp(out->cmd, "0") == 0) {
+      out->cmd[0] = '\0';
+    } else {
+      out->action = ResolveActionCommand(out->cmd);
+    }
+    safe_strncpy(out->name, secondColon + 1, sizeof(out->name));
+  } else {
+    safe_strncpy(out->name, afterArb, sizeof(out->name));
+  }
+  return true;
+}
+
+// Detect REAPER toggle action for toolbar windows by title.
+// Returns action ID or 0 if not a toolbar.
+// NOTE: deliberately returns 0 for "Main toolbar" — the main window's top
+// chrome is excluded from capture (ADR-052); cleanup knows it via
+// GetSearchTitleForAction(MAIN_TOOLBAR_ACTION) instead.
+int GetToolbarToggleAction(const char* title)
+{
+  if (!title) return 0;
+  if (strcmp(title, "Toolbar Docker") == 0) return TOOLBAR_DOCKER_ACTION;
+  if (strncmp(title, "Toolbar ", 8) == 0) {
+    int n = atoi(title + 8);
+    for (int i = 0; i < NUM_TOOLBAR_ACTION_RANGES; i++) {
+      const ToolbarActionRange& r = TOOLBAR_ACTION_RANGES[i];
+      if (n >= r.firstToolbar && n <= r.lastToolbar)
+        return r.baseAction + (n - r.firstToolbar);
+    }
+  }
+  // MIDI toolbars (ADR-052 follow-up) — floating windows are titled "MIDI N".
+  if (strcmp(title, "MIDI piano roll toolbar") == 0)
+    return MIDI_PIANO_ROLL_TOOLBAR_ACTION;
+  if (strncmp(title, "MIDI ", 5) == 0) {
+    int n = atoi(title + 5);
+    for (int i = 0; i < NUM_MIDI_TOOLBAR_ACTION_RANGES; i++) {
+      const ToolbarActionRange& r = MIDI_TOOLBAR_ACTION_RANGES[i];
+      if (n >= r.firstToolbar && n <= r.lastToolbar)
+        return r.baseAction + (n - r.firstToolbar);
+    }
+  }
+  return 0;
+}
+
+// Look up REAPER toggle action for any window title.
+// Checks toolbars first, then KNOWN_WINDOWS by searchTitle/altSearchTitle prefix.
+int LookupToggleAction(const char* title)
+{
+  if (!title) return 0;
+  int a = GetToolbarToggleAction(title);
+  if (a > 0) return a;
+  for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+    if (strstr(title, KNOWN_WINDOWS[i].searchTitle) == title)
+      return KNOWN_WINDOWS[i].toggleActionId;
+    if (KNOWN_WINDOWS[i].altSearchTitle &&
+        strstr(title, KNOWN_WINDOWS[i].altSearchTitle) == title)
+      return KNOWN_WINDOWS[i].toggleActionId;
+  }
+  return 0;
+}
+
+bool GetSearchTitleForAction(int action, char* buf, int bufSize)
+{
+  if (action <= 0 || !buf || bufSize <= 0) return false;
+  // Toolbars: three non-contiguous ranges → "Toolbar 1".."Toolbar 32"
+  for (int i = 0; i < NUM_TOOLBAR_ACTION_RANGES; i++) {
+    const ToolbarActionRange& r = TOOLBAR_ACTION_RANGES[i];
+    if (action >= r.baseAction &&
+        action <= r.baseAction + (r.lastToolbar - r.firstToolbar)) {
+      snprintf(buf, bufSize, "Toolbar %d",
+               r.firstToolbar + (action - r.baseAction));
+      return true;
+    }
+  }
+  // MIDI toolbars: three non-contiguous ranges → "MIDI 1".."MIDI 16"
+  for (int i = 0; i < NUM_MIDI_TOOLBAR_ACTION_RANGES; i++) {
+    const ToolbarActionRange& r = MIDI_TOOLBAR_ACTION_RANGES[i];
+    if (action >= r.baseAction &&
+        action <= r.baseAction + (r.lastToolbar - r.firstToolbar)) {
+      snprintf(buf, bufSize, "MIDI %d",
+               r.firstToolbar + (action - r.baseAction));
+      return true;
+    }
+  }
+  if (action == MIDI_PIANO_ROLL_TOOLBAR_ACTION) {
+    safe_strncpy(buf, "MIDI piano roll toolbar", bufSize);
+    return true;
+  }
+  if (action == TOOLBAR_DOCKER_ACTION) {
+    safe_strncpy(buf, "Toolbar Docker", bufSize);
+    return true;
+  }
+  // Main toolbar: capture is blocked (ADR-052) but startup ghost-cleanup
+  // needs the reverse lookup so its FindReaperWindow + SW_HIDE force-hide
+  // fallback can neutralize an already-floating ghost (self-heal).
+  if (action == MAIN_TOOLBAR_ACTION) {
+    safe_strncpy(buf, "Main toolbar", bufSize);
+    return true;
+  }
+  // Known windows
+  for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+    if (KNOWN_WINDOWS[i].toggleActionId == action) {
+      safe_strncpy(buf, KNOWN_WINDOWS[i].searchTitle, bufSize);
+      return true;
+    }
+  }
+  return false;
+}

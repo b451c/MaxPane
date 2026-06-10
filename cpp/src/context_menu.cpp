@@ -103,6 +103,10 @@ static BOOL CALLBACK EnumOpenWindowsProc(HWND hwnd, LPARAM lParam)
   if (strlen(buf) < 3) return TRUE;
 #endif
 
+  // ADR-052 — Main toolbar (main-window top chrome) is not capturable;
+  // don't offer it in the menu (CaptureArbitraryWindow would reject it).
+  if (strcmp(buf, "Main toolbar") == 0) return TRUE;
+
   g_openWindows[g_openWindowCount].hwnd = hwnd;
   safe_strncpy(g_openWindows[g_openWindowCount].title, buf, sizeof(g_openWindows[g_openWindowCount].title));
   g_openWindowCount++;

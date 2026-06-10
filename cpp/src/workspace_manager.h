@@ -93,6 +93,9 @@ public:
   // List access (for menu building)
   void LoadList();
   void SaveList();
+  // Audit M3.3 — zero one slot's persisted ws_<N>_* footprint (Delete()
+  // shift-orphans the tail slot's keys otherwise).
+  void ClearSlotPersistedKeys(int slot);
   int GetCount() const { return m_count; }
   const WorkspaceEntry& Get(int index) const;
 

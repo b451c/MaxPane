@@ -196,8 +196,16 @@ public:
 
   // ADR-026 — persistent navigation bar height, 0 when hidden. Used by the
   // tree to reserve vertical space at the top of the client area.
-  int NavBarReservedHeight() const { return m_navBarVisible ? NavBar::NAV_BAR_HEIGHT : 0; }
+  int NavBarReservedHeight() const {
+    if (!m_navBarVisible) return 0;
+    // Collapsed (user request 2026-06-10): the chevron sliver still reserves
+    // its strip — it must stay clickable (no overlay above captured panes is
+    // possible on macOS, ADR-026), but panes reclaim the other 20 px.
+    return m_navBarCollapsed ? NavBar::NAV_BAR_COLLAPSED_HEIGHT
+                             : NavBar::NAV_BAR_HEIGHT;
+  }
   bool IsNavBarVisible() const { return m_navBarVisible; }
+  void ToggleNavBarCollapsed();
   void SetNavBarVisible(bool v);
 
   // ADR-026 — Home overlay state (non-destructive workspace picker over
@@ -260,6 +268,7 @@ private:
 
   // ADR-026 — persistent navigation bar.
   bool m_navBarVisible = true;        // read from ExtState in Create; default ON
+  bool m_navBarCollapsed = false;     // chevron sliver mode; persisted globally
   int  m_navHover = NavBar::BTN_NONE; // which nav button under cursor (-1 = none)
   int  m_navTooltipBtn = NavBar::BTN_NONE; // which nav button's tooltip is shown
   // Feature A — name of the most recently loaded workspace (empty = none).
@@ -289,23 +298,28 @@ private:
   //
   // SetCurrentWorkspace: success path from LoadWorkspace — copies the name
   // into m_currentWorkspaceName, clears m_workspaceDirty, persists, and
-  // refreshes the NavBar shim cache so hover hit-tests in
-  // container_nav.cpp pick up the new label.
+  // repaints the bar strip so the new label shows.
   // ClearCurrentWorkspace: name unset (e.g. Toggle close, workspace
-  // delete, ApplyPreset). Persists empty strings and clears the shim cache.
+  // delete, ApplyPreset). Persists empty strings.
   // MarkWorkspaceDirty: any mutation that changes the captured/layout
   // state vs. the loaded workspace (capture, release, split, merge, tab
   // move, color change, pin/unpin). No-op if no workspace is loaded —
   // dirty has no meaning when there's no name to compare against.
   // PersistWorkspaceLabel: writes current_workspace_name + workspace_dirty
   // ExtState. Called from the other helpers + load/save paths.
-  // RefreshNavBarLabelCache: pushes the current label into the NavBar
-  // module-level cache used by the legacy single-arg Compute(rect) shim.
   void SetCurrentWorkspace(const char* name);
   void ClearCurrentWorkspace();
   void MarkWorkspaceDirty();
   void PersistWorkspaceLabel();
-  void RefreshNavBarLabelCache();
+
+  // Hit-test/layout-side NavBar::Compute wrapper (audit M3.6). Builds the
+  // NavBar::State from this instance's m_currentWorkspaceName +
+  // m_workspaceDirty — the same label source the paint path uses — and
+  // passes no HDC, so the workspace-label width comes from the char-count
+  // heuristic (the label region is re-measured pixel-accurately during
+  // WM_PAINT anyway). Replaces the former module-level label cache in
+  // nav_bar.cpp + the legacy single-arg Compute(rect) shim.
+  NavBar::Layout ComputeNavBarLayout(const RECT& rc) const;
 
   // Nav bar input dispatch — returns true if the click/move was consumed
   // (caller skips the pane-grid pathways).
@@ -435,6 +449,9 @@ private:
   void OnMouseMove(int x, int y);
   void OnLButtonUp(int x, int y);
   void OnTimer();
+  // Audit M2.3 — TIMER_ID_CAPTURE pipeline (capture-by-click poll + async
+  // queue drain), extracted from the DlgProc WM_TIMER case.
+  void OnCaptureTimerTick();
   void OnContextMenu(int x, int y);
   void DrawTabBar(HDC hdc, int paneId, const RECT& paneRect);
 

@@ -296,10 +296,13 @@ void DrawCaptureButton(HDC hdc, const RECT& btnRect, bool hover,
   char armedBuf[280];
   const char* label;
   if (armed && hoverName && hoverName[0]) {
-    snprintf(armedBuf, sizeof(armedBuf), "Capture: %s   (Esc to cancel)", hoverName);
+    snprintf(armedBuf, sizeof(armedBuf), "Capture: %s   (%s)", hoverName,
+             CAPTURE_CANCEL_HINT);
     label = armedBuf;
   } else if (armed) {
-    label = "Click a window to capture...  (Esc to cancel)";
+    snprintf(armedBuf, sizeof(armedBuf),
+             "Click a window to capture...  (%s)", CAPTURE_CANCEL_HINT);
+    label = armedBuf;
   } else {
     label = hasWorkspaces ? "+  Capture a window"
                           : "+  Capture your first window";
@@ -662,9 +665,12 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
                   tipRect.right - TIP_PAD_X, lineY + TIP_LINE_H };
       bool isOverflow = (i == TIP_MAX_LINES && lineCount == TIP_MAX_LINES + 1);
       SetTextColor(hdc, isOverflow ? tipMuted : tipBody);
-      // Prefix with bullet
+      // Prefix with bullet. %.150s bounds the line so the result provably
+      // fits buf (3-byte bullet + 2 spaces + 150 + NUL ≤ 160) — truncation
+      // is fine, DT_END_ELLIPSIS clips the paint anyway, and GCC's
+      // -Werror=format-truncation wants the proof (ADR-060 session catch).
       char buf[160];
-      snprintf(buf, sizeof(buf), "%s  %s",
+      snprintf(buf, sizeof(buf), "%s  %.150s",
                 isOverflow ? " " : "\xe2\x80\xa2",  // • or space for overflow
                 lines[i]);
       DrawTextUtf8(hdc, buf, -1, &lr,

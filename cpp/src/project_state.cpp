@@ -11,10 +11,8 @@
 
 PendingProjectState g_pendingProjectState[MaxPaneContainer::MAX_INSTANCES] = {};
 
-// Forward declarations — defined in main.cpp
-extern MaxPaneContainer* GetContainer();
-extern void OnRppStateReady();
-extern void OnProjectLoadMaybeOpen();  // F-39 — force-open from ProjExtState
+// Main.cpp hooks are declared in project_state.h (audit M3.4) so signature
+// drift is a compile error, not a link-time surprise.
 
 // =========================================================================
 // BeginLoadProjectState — reset buffers before loading

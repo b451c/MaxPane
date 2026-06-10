@@ -75,6 +75,14 @@ jobs:
         working-directory: cpp/build
         run: cmake --build . --config Release
 
+      # Release gate (audit M0.2): a tag must not ship binaries that never
+      # ran the unit suite. Tests are already compiled (MAXPANE_BUILD_TESTS
+      # defaults ON); -C Release is required for MSVC, ignored elsewhere.
+      - name: Test
+        working-directory: cpp/build
+        shell: bash
+        run: ctest --output-on-failure -C Release
+
       - name: Rename artifact
         working-directory: cpp/build
         shell: bash

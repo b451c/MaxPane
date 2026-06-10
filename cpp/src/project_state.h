@@ -21,6 +21,13 @@ extern PendingProjectState g_pendingProjectState[MaxPaneContainer::MAX_INSTANCES
 // main.cpp). The screenset LOAD path defers to it so a project restore wins.
 extern bool g_projOpenTimerActive;
 
+// Audit M3.4 — main.cpp hooks consumed by project_state.cpp. Declared here
+// (instead of ad-hoc extern lines in the .cpp) so a signature change in
+// main.cpp fails to compile rather than failing at link or silently.
+MaxPaneContainer* GetContainer();
+void OnRppStateReady();
+void OnProjectLoadMaybeOpen();  // F-39 — force-open from ProjExtState
+
 // Serialize a container's tree + pane tabs into a StateAccessor (KEY=VALUE).
 // Shared by the RPP <MAXPANE_STATE> chunk path (OnSaveExtensionConfig) and the
 // screenset SAVE_STATE path so the blob format has a single source of truth.

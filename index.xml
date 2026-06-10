@@ -44,6 +44,35 @@
 ]]></description>
       </metadata>
 
+      <version name="2.2.0" author="b451c" time="2026-06-10T22:00:00Z">
+        <changelog><![CDATA[Windows and Linux reach interaction parity - capture-by-click and drag-to-dock work and show live visual feedback on all three platforms, verified in live debug sessions on Windows 11 and Ubuntu VMs. Plus a hardening pass from a full-code audit.
+
+Added:
+- Live visual feedback for capture and drag on Windows and Linux: a blue frame outlines the window under the cursor when click-capture is armed, and drag-to-dock frames the exact drop zone - including over panes already occupied by a captured window. The drop always lands where the frame shows.
+- Natural title-bar drags: when the cursor isn't over a pane but the dragged window's body hangs over one, that pane is targeted as "Add as tab" (all platforms).
+- MIDI toolbars (all 16 + the piano-roll toolbar) are first-class capturable windows with save/restore.
+- Collapsible navigation bar (chevron folds it to a thin strip).
+- Single-window panes can auto-hide their tab bar (new Settings checkbox).
+- Right-click cancels capture mode on all platforms (on Linux there was previously no way to cancel).
+
+Fixed:
+- Windows: capture-by-click and drag-to-dock work again (dead since the v2.1.0 redesign).
+- Linux: docked windows capture by click, floating script windows resolve, clicks respect visual stacking, X11 title-bar clicks resolve via a decoration-band fallback.
+- Main toolbar can no longer be captured; the startup ghost it used to leave self-heals; toolbar action table repaired (Toolbars 9-16 fired wrong actions, 17-32 now supported).
+- Capturing a MIDI toolbar from a docker no longer freezes clicks.
+- Capture failures are no longer silent; failed captures leave the window where it was.
+- Linux: support/update links open in the browser, released windows get their frame back, dark-mode "Auto" follows the GNOME setting, off-screen geometry is clamped back.
+- Updater no longer can crash at exit; update responses capped at 1 MB.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.2.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.2.0/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.2.0/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.2.0/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.2.0/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.1.1" author="b451c" time="2026-06-08T12:00:00Z">
         <changelog><![CDATA[Quick fix for a v2.1.0 regression.
 

@@ -55,6 +55,17 @@ struct State {
   int   targetPaneId;           // pane under cursor, -1 if none
   DropZone zone;
   bool shiftHeld;
+
+  // ADR-060 — zone debounce (Win-VM live debug). A titlebar grab parks the
+  // cursor at a pane's top boundary, so the raw zone oscillates every tick
+  // between the cursor resolution and the hybrid window-center fallback —
+  // the frame flickered and the commit took whichever flip was live at
+  // release. A changed zone is adopted only after DRAG_ZONE_STABLE_TICKS
+  // consecutive identical raw resolutions; targetPaneId/zone above always
+  // hold the ADOPTED value (frame and CommitDrop read only those).
+  int   pendingPane;
+  DropZone pendingZone;
+  int   pendingTicks;
 };
 
 // Initialize state to IDLE — call from container constructor.
@@ -63,6 +74,16 @@ void Reset(State& s);
 // Compute the drop zone for a cursor point (x, y) inside a pane rect.
 // Returns ZONE_NONE if cursor is outside the rect.
 DropZone ComputeZone(const RECT& paneRect, int x, int y, bool shiftHeld);
+
+// Geometry of the zone preview rect inside paneRect — shared by
+// PaintPreview (container-DC fill) and the ADR-060 overlay frame (visible
+// over occupied panes, where captured children cover the container DC).
+// Returns false for ZONE_NONE / degenerate panes.
+bool ZoneRect(const RECT& paneRect, DropZone zone, RECT* out);
+
+// Accent (border) color for a zone — replace-orange vs split/tab-blue.
+// Used by the ADR-060 overlay frame; PaintPreview keeps its own palette.
+COLORREF ZoneAccentColor(DropZone zone, bool darkMode);
 
 // Paint the live drop preview overlay for the active target pane. No-op
 // if zone is ZONE_NONE. Drawn by the container's OnPaint after the

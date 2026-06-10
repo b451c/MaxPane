@@ -105,8 +105,8 @@ int FormatWorkspaceLabel(const char* name, bool dirty, char* outBuf, int outCap)
 // Approximate rendered width of `text` in the workspace-label font.
 //
 // When a real HDC is provided (paint path), uses DT_CALCRECT for accurate
-// measurement. When no HDC is available (hit-test path from
-// container_nav.cpp's legacy NavBar::Compute(rect) shim), falls back to a
+// measurement. When no HDC is available (hit-test path —
+// MaxPaneContainer::ComputeNavBarLayout passes nullptr), falls back to a
 // char-count heuristic — close enough for sizing the hit-test rectangle.
 // The label is re-measured during WM_PAINT anyway, so the rendered output
 // is always pixel-accurate; the heuristic only sets the hover region.
@@ -176,6 +176,26 @@ void DrawButton(HDC hdc, const RECT& r, int buttonId, bool hover,
   NavIcons::DrawIcon(hdc, buttonId, iconRect, bgColor, iconColor);
 }
 
+// Collapse/expand chevron, centered in r. Pen lines instead of a ▾/▴ font
+// glyph — DejaVu Sans on Linux renders those as tofu (v2.0.0 R7 lesson).
+void DrawChevron(HDC hdc, const RECT& r, bool pointUp, COLORREF color)
+{
+  const int cx = (r.left + r.right) / 2;
+  const int cy = (r.top + r.bottom) / 2;
+  const int halfW = 4;
+  const int halfH = 2;
+  const int apexY  = pointUp ? cy - halfH : cy + halfH;
+  const int baseY  = pointUp ? cy + halfH : cy - halfH;
+
+  HPEN pen = CreatePen(PS_SOLID, 2, color);
+  HPEN old = (HPEN)SelectObject(hdc, pen);
+  MoveToEx(hdc, cx - halfW, baseY, nullptr);
+  LineTo(hdc, cx, apexY);
+  LineTo(hdc, cx + halfW + 1, baseY + (pointUp ? 1 : -1));
+  SelectObject(hdc, old);
+  DeleteObject(pen);
+}
+
 } // namespace (anon)
 
 // ============================================================================
@@ -196,6 +216,18 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
   lay.barRect.top    = containerRect.top;
   lay.barRect.right  = containerRect.right;
   lay.barRect.bottom = containerRect.top + NAV_BAR_HEIGHT;
+
+  // Collapsed mode (user request 2026-06-10): the bar is a thin sliver whose
+  // entire surface is the expand chevron. No width gate — the sliver fits any
+  // container, and it must stay clickable or the user can't get the bar back
+  // (no overlay above captured panes is possible on macOS, ADR-026).
+  if (state.collapsed) {
+    lay.visible = true;
+    lay.collapsed = true;
+    lay.barRect.bottom = lay.barRect.top + NAV_BAR_COLLAPSED_HEIGHT;
+    lay.buttons[BTN_COLLAPSE] = lay.barRect;
+    return lay;
+  }
 
   const int W = containerRect.right - containerRect.left;
   if (W < MIN_VISIBLE_W) {
@@ -228,8 +260,11 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
     if (i < (int)(sizeof(captureBtns) / sizeof(captureBtns[0])) - 1) x += BUTTON_GAP;
   }
 
-  // Utility group right-aligned: Settings, Support
+  // Utility group right-aligned: Settings, Support, then the slim collapse
+  // chevron pinned to the very edge.
   int rightX = lay.barRect.right - BAR_PADDING_X;
+  lay.buttons[BTN_COLLAPSE] = { rightX - COLLAPSE_BTN_W, btnY, rightX, btnBottom };
+  rightX -= COLLAPSE_BTN_W + BUTTON_GAP;
   lay.buttons[BTN_SUPPORT] = { rightX - BUTTON_SIZE, btnY, rightX, btnBottom };
   rightX -= BUTTON_SIZE + BUTTON_GAP;
   lay.buttons[BTN_SETTINGS] = { rightX - BUTTON_SIZE, btnY, rightX, btnBottom };
@@ -292,61 +327,6 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
   return lay;
 }
 
-// ---- Active-state cache (Feature A shim plumbing) ----------------------
-//
-// Container files that drive paint/state changes (container.cpp,
-// container_paint.cpp, container_state.cpp) push the current workspace
-// label into this cache. The legacy single-arg Compute(rect) shim reads
-// it so callers that have not been switched to the State-aware overload
-// (container_nav.cpp + container_input.cpp, frozen for this PR) still
-// produce a Layout with the workspace-name region populated. That is
-// what enables hover detection of BTN_WORKSPACE_NAME without touching the
-// frozen mouse-handling files.
-namespace {
-struct ActiveLabel {
-  bool present;
-  bool dirty;
-  char name[MAX_WORKSPACE_NAME];
-};
-ActiveLabel g_activeLabel{};
-} // namespace
-
-void SetActiveWorkspaceLabel(const char* name, bool dirty)
-{
-  if (!name || !name[0]) {
-    g_activeLabel.present = false;
-    g_activeLabel.dirty   = false;
-    g_activeLabel.name[0] = '\0';
-    return;
-  }
-  g_activeLabel.present = true;
-  g_activeLabel.dirty   = dirty;
-  size_t n = strlen(name);
-  if (n >= sizeof(g_activeLabel.name)) n = sizeof(g_activeLabel.name) - 1;
-  memcpy(g_activeLabel.name, name, n);
-  g_activeLabel.name[n] = '\0';
-}
-
-void ResetActiveWorkspaceLabel()
-{
-  g_activeLabel.present = false;
-  g_activeLabel.dirty   = false;
-  g_activeLabel.name[0] = '\0';
-}
-
-// Backward-compat shim — used by callers that haven't been switched to the
-// State-aware overload yet. Picks up the cached workspace label so hover
-// hit-testing still returns BTN_WORKSPACE_NAME when the cursor is over the
-// label region.
-Layout Compute(const RECT& containerRect)
-{
-  State s{};
-  s.hoverButton  = BTN_NONE;
-  s.workspaceName  = g_activeLabel.present ? g_activeLabel.name : nullptr;
-  s.workspaceDirty = g_activeLabel.dirty;
-  return Compute(containerRect, s, nullptr);
-}
-
 // ============================================================================
 // Paint
 // ============================================================================
@@ -371,6 +351,22 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
   FillRect(hdc, &edge, edgeBrush);
   DeleteObject(edgeBrush);
 
+  // Collapsed sliver: hover feedback over the whole strip + a centered
+  // downward chevron (the expand affordance). Drawn with pen lines, not a
+  // font glyph — Linux fonts render U+25BE as tofu (v2.0.0 R7 lesson).
+  if (lay.collapsed) {
+    if (state.hoverButton == BTN_COLLAPSE) {
+      HBRUSH hov = CreateSolidBrush(pal.btnHoverBg);
+      RECT hr = lay.barRect;
+      hr.bottom -= 1;  // keep the shadow line visible
+      FillRect(hdc, &hr, hov);
+      DeleteObject(hov);
+    }
+    DrawChevron(hdc, lay.barRect, /*pointUp=*/false,
+                state.hoverButton == BTN_COLLAPSE ? pal.glyphHover : pal.glyph);
+    return;
+  }
+
   // Too narrow to lay out buttons / dividers / workspace label — the filled
   // strip is the whole bar in this state. Done.
   if (!lay.visible) return;
@@ -389,6 +385,9 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
   for (int i = 0; i < BUTTON_COUNT; i++) {
     const RECT& r = lay.buttons[i];
     if (r.right <= r.left) continue;
+    // The collapse chevron has no Phosphor icon (NavIcons is indexed by the
+    // pre-collapse button ids) — drawn vector-style below.
+    if (i == BTN_COLLAPSE) continue;
     bool hover = (state.hoverButton == i);
     bool active = false;
     bool armed = false;
@@ -399,6 +398,20 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
       active = true;
     }
     DrawButton(hdc, r, i, hover, active, armed, pal);
+  }
+
+  // Collapse chevron (points up = "fold the bar away").
+  {
+    const RECT& r = lay.buttons[BTN_COLLAPSE];
+    if (r.right > r.left) {
+      bool hover = (state.hoverButton == BTN_COLLAPSE);
+      if (hover) {
+        HBRUSH hov = CreateSolidBrush(pal.btnHoverBg);
+        FillRect(hdc, (RECT*)&r, hov);
+        DeleteObject(hov);
+      }
+      DrawChevron(hdc, r, /*pointUp=*/true, hover ? pal.glyphHover : pal.glyph);
+    }
   }
 
   // Feature A — workspace-name label. Drawn last (after dividers + buttons)
@@ -452,6 +465,9 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
   } else if (buttonId >= 0 && buttonId < BUTTON_COUNT) {
     anchor = lay.buttons[buttonId];
     text = ButtonTooltip(buttonId, false);
+    if (buttonId == BTN_COLLAPSE && state.collapsed) {
+      text = "Expand navigation bar";
+    }
   } else {
     return;
   }
@@ -567,6 +583,7 @@ const char* ButtonTooltip(int buttonId, bool dragArmed)
     case BTN_LOAD:     return "Load workspace";
     case BTN_SETTINGS: return "Settings";
     case BTN_SUPPORT:  return "Support development";
+    case BTN_COLLAPSE: return "Collapse navigation bar";
     default:           return "";
   }
 }

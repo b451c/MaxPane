@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.15)
 
 if(APPLE)
-  project(reaper_maxpane VERSION 2.1.1 LANGUAGES CXX OBJCXX)
+  project(reaper_maxpane VERSION 2.2.0 LANGUAGES CXX OBJCXX)
 else()
-  project(reaper_maxpane VERSION 2.1.1 LANGUAGES CXX)
+  project(reaper_maxpane VERSION 2.2.0 LANGUAGES CXX)
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -25,6 +25,7 @@ add_library(reaper_maxpane SHARED
   src/main.cpp
   src/globals.cpp
   src/config.cpp
+  src/action_list.cpp
   src/container.cpp
   src/container_paint.cpp
   src/container_input.cpp
@@ -48,6 +49,7 @@ add_library(reaper_maxpane SHARED
   src/nav_icons.cpp
   resources/nav_icons.gen.cpp
   src/drag_dock.cpp
+  src/overlay_frame.cpp
   src/updater.cpp
 )
 
@@ -96,10 +98,18 @@ elseif(WIN32)
   )
 endif()
 
-target_include_directories(reaper_maxpane PRIVATE
+# Vendored headers (REAPER SDK + WDL/SWELL) are SYSTEM includes: not ours to
+# fix, so they must sit below the MAXPANE_WERROR gate. On GCC/clang SYSTEM
+# silences their warnings outright; on MSVC it maps to /external:I, which
+# needs the /external:W0 pairing added with the warning flags below
+# (ADR-060 session catch — /W4 /WX died inside reaper_plugin.h C4100s
+# before reaching our code; the M2.6 gate had never run on MSVC).
+target_include_directories(reaper_maxpane SYSTEM PRIVATE
   ${REAPER_SDK_DIR}
   ${WDL_DIR}
   ${WDL_DIR}/swell
+)
+target_include_directories(reaper_maxpane PRIVATE
   src
   resources
 )
@@ -107,16 +117,28 @@ target_include_directories(reaper_maxpane PRIVATE
 target_compile_definitions(reaper_maxpane PRIVATE
   $<$<NOT:$<PLATFORM_ID:Windows>>:SWELL_PROVIDED_BY_APP>
   $<$<CONFIG:Debug>:MAXPANE_DEBUG>
-  $<$<PLATFORM_ID:Windows>:NOMINMAX>
+  # _CRT_SECURE_NO_WARNINGS: portable CRT calls (sscanf, fopen, ...) are
+  # deliberate — C4996 would fail the /WX gate (updater.cpp sscanf).
+  $<$<PLATFORM_ID:Windows>:NOMINMAX _CRT_SECURE_NO_WARNINGS>
 )
 
+# Audit M2.6 — CI warning gate. OFF by default so a stray new-toolchain
+# warning can't brick a release/tag build; ci.yml turns it ON for every
+# push/PR, which is where warning rot gets caught.
+option(MAXPANE_WERROR "Treat compiler warnings as errors" OFF)
+
 if(MSVC)
-  target_compile_options(reaper_maxpane PRIVATE /W3)
+  # /wd4100 mirrors the GCC side's -Wno-unused-parameter. /external:W0
+  # pairs with the SYSTEM include dirs above (CMake emits /external:I for
+  # them on MSVC) so vendored SDK/WDL headers stay below the gate.
+  target_compile_options(reaper_maxpane PRIVATE
+    $<IF:$<BOOL:${MAXPANE_WERROR}>,/W4 /WX /wd4100 /external:W0,/W3>)
 else()
   target_compile_options(reaper_maxpane PRIVATE
     -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
     -Wshadow
     -Wconversion -Wno-sign-conversion
+    $<$<BOOL:${MAXPANE_WERROR}>:-Werror>
   )
 endif()
 
@@ -136,6 +158,15 @@ if(APPLE)
     ${WDL_DIR}/swell/swell-modstub.mm
     src/swell_cocoa_helpers.mm
   )
+  # Vendored WDL source — not ours to fix; exclude from the warning gate
+  # (it trips -Wsign-compare and AppKit deprecation notes under -Werror).
+  set_source_files_properties(${WDL_DIR}/swell/swell-modstub.mm
+    PROPERTIES COMPILE_OPTIONS "-w")
+  # swell_cocoa_helpers.mm includes the vendored swell-internal.h, whose
+  # NSOpenGLContext fields are deprecated since macOS 10.14 — keep the note
+  # visible but below the -Werror gate for this one TU.
+  set_source_files_properties(src/swell_cocoa_helpers.mm
+    PROPERTIES COMPILE_OPTIONS "-Wno-error=deprecated-declarations")
 elseif(WIN32)
   set_target_properties(reaper_maxpane PROPERTIES
     SUFFIX ".dll"

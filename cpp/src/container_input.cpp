@@ -6,6 +6,7 @@
 #include "workspace_manager.h"
 #include "split_tree.h"
 #include "window_manager.h"
+#include "swell_cocoa_helpers.h"  // IsCaptureCancelKeyDown (audit M1.6)
 
 // =========================================================================
 // Helpers
@@ -45,7 +46,7 @@ RECT MaxPaneContainer::GetTabRect(int paneId, int tabIdx) const
 {
   const RECT& r = m_tree.GetPaneRect(paneId);
   int tabBarTop = r.top;
-  int tabBarBottom = tabBarTop + TAB_BAR_HEIGHT;
+  int tabBarBottom = tabBarTop + m_winMgr.PaneHeaderHeight(paneId);
   TabBarLayout lay = CalcTabBarLayout(paneId);
 
   int tabLeft  = lay.tabAreaLeft + tabIdx * lay.tabWidth;
@@ -68,13 +69,20 @@ int MaxPaneContainer::TabHitTest(int paneId, int x, int y) const
 
   const RECT& paneRect = m_tree.GetPaneRect(paneId);
   int tabBarTop = paneRect.top;
-  int tabBarBottom = tabBarTop + TAB_BAR_HEIGHT;
+  const int hdrH = m_winMgr.PaneHeaderHeight(paneId);
+  int tabBarBottom = tabBarTop + hdrH;
 
   if (y < tabBarTop || y >= tabBarBottom) return -1;
   if (x < paneRect.left || x >= paneRect.right) return -1;
 
   // Menu button (rightmost PANE_MENU_BTN_WIDTH pixels)
   if (x >= paneRect.right - PANE_MENU_BTN_WIDTH) return -2;
+
+  // ADR-055 — collapsed sliver: the whole strip (minus the menu-button zone
+  // above) is the single tab, so right-click = tab menu and a press-drag
+  // starts the tab drag exactly like a normal tab. tabWidth math would cap
+  // the hit zone at TAB_MAX_WIDTH and dead-zone the rest of the strip.
+  if (hdrH < TAB_BAR_HEIGHT) return 0;
 
   TabBarLayout lay = CalcTabBarLayout(paneId);
 
@@ -90,6 +98,9 @@ bool MaxPaneContainer::IsOnTabCloseButton(int paneId, int tabIndex, int x, int y
 {
   const PaneState* ps = m_winMgr.GetPaneState(paneId);
   if (!ps || tabIndex < 0 || tabIndex >= ps->tabCount) return false;
+
+  // ADR-055 — no close button on a collapsed sliver (nothing is drawn there).
+  if (m_winMgr.PaneHeaderHeight(paneId) < TAB_BAR_HEIGHT) return false;
 
   // Close button hidden when tabs are narrow (matches DrawTabBar) (B9)
   TabBarLayout lay = CalcTabBarLayout(paneId);
@@ -178,8 +189,12 @@ void MaxPaneContainer::UpdateTabDrag(int x, int y)
     else InvalidateRect(m_hwnd, nullptr, FALSE);
   }
 
-  short escState = GetAsyncKeyState(VK_ESCAPE);
-  if (escState & 0x8000) {
+  // Audit M1.6 — raw GetAsyncKeyState(VK_ESCAPE) is always 0 under both
+  // SWELLs (macOS swell-kb.mm, Linux swell-generic-gdk), so Esc never
+  // cancelled a tab drag off Windows. Route through the ADR-048 helper
+  // (CG keycode probe on macOS, native on Win32; still dead on Linux —
+  // mouse-release remains the Linux cancel).
+  if (IsCaptureCancelKeyDown()) {
     CancelTabDrag();
   }
 }
@@ -318,7 +333,7 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
       m_navTooltipBtn = NavBar::BTN_NONE;
       KillTimer(m_hwnd, TIMER_ID_NAVBAR_TIP);
       RECT rc; GetClientRect(m_hwnd, &rc);
-      NavBar::Layout lay = NavBar::Compute(rc);
+      NavBar::Layout lay = ComputeNavBarLayout(rc);
       RECT dirty = lay.barRect;
       dirty.bottom += 36;
       InvalidateRect(m_hwnd, &dirty, FALSE);

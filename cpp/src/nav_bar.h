@@ -23,19 +23,29 @@ enum ButtonId : int {
   BTN_LOAD           = 4,
   BTN_SETTINGS       = 5,
   BTN_SUPPORT        = 6,
-  BUTTON_COUNT       = 7,
+  // Collapse chevron at the far right (user request, 2026-06-10): collapses
+  // the bar to a NAV_BAR_COLLAPSED_HEIGHT sliver; in collapsed mode the
+  // whole sliver is this button (click anywhere to expand). The sliver must
+  // never shrink to zero — captured child views paint ABOVE the container
+  // view on macOS (ADR-026 lore), so a floating re-expand affordance over
+  // the panes is impossible; the sliver is the only reachable click target.
+  BTN_COLLAPSE       = 7,
+  BUTTON_COUNT       = 8,
   // Pseudo-button: center-aligned workspace-name label between the two
   // groups. Hit-tested so the standard tooltip delay mechanism reuses the
   // m_navTooltipBtn path to display the full name when truncated.
-  BTN_WORKSPACE_NAME = 7,
+  BTN_WORKSPACE_NAME = 8,
 };
 
-constexpr int NAV_BAR_HEIGHT  = 30;
+constexpr int NAV_BAR_HEIGHT           = 30;
+constexpr int NAV_BAR_COLLAPSED_HEIGHT = 10;  // chevron sliver (collapsed mode)
 constexpr int BUTTON_SIZE     = 26;    // all buttons square + identical width
+constexpr int COLLAPSE_BTN_W  = 14;    // slim chevron button (expanded mode)
 constexpr int MIN_VISIBLE_W   = 320;   // below this container width, bar hides
 
 struct Layout {
   bool visible;
+  bool collapsed;                      // sliver mode — barRect IS the sliver
   RECT barRect;                        // full nav bar strip
   RECT buttons[BUTTON_COUNT];          // empty rect = not laid out
   RECT divider1;                       // between Home and capture group
@@ -49,6 +59,7 @@ struct Layout {
 
 struct State {
   int hoverButton;     // BTN_NONE or button id under cursor
+  bool collapsed;      // bar collapsed to the chevron sliver
   bool dragModeArmed;  // true when drag-to-dock is waiting/tracking
   bool homeActive;     // true when Home overlay is showing
   // Feature A — name of the currently-loaded workspace and dirty flag.
@@ -64,11 +75,6 @@ struct State {
 // is set, the workspace-name rect is filled too (and Layout::workspaceNameTruncated
 // is set when the text wouldn't fit).
 Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc = nullptr);
-
-// Backward-compatible shim — no workspace label. Equivalent to passing
-// an empty State to the State-aware overload above. Keeps existing call
-// sites compiling when they don't yet plumb the workspace name through.
-Layout Compute(const RECT& containerRect);
 
 // Render the bar. Tooltip is painted separately via PaintTooltip below so
 // repeated hovers can flicker-free invalidate just the tooltip area.
@@ -88,25 +94,5 @@ int HitTest(const Layout& lay, int x, int y);
 // Tooltip text for the given button. Used for accessibility + dev reference.
 // For BTN_WORKSPACE_NAME the caller must use State::workspaceName directly.
 const char* ButtonTooltip(int buttonId, bool dragArmed);
-
-// Feature A — workspace-label state cache.
-//
-// The legacy single-arg Compute(rect) shim is called from container_nav.cpp
-// + container_input.cpp (both excluded from this PR's edit boundary). Those
-// files perform hover hit-testing on every WM_MOUSEMOVE — for the new
-// workspace-name pseudo-button to participate in hover, the shim must
-// produce a Layout that includes lay.workspaceNameRect.
-//
-// Mechanism: container.cpp's DlgProc primes this cache with the currently-
-// focused container's state at the top of WM_MOUSEMOVE / WM_LBUTTONUP /
-// WM_LBUTTONDOWN / WM_PAINT. The shim Compute(rect) reads the cache; the
-// State-aware Compute(rect, state, hdc) overload ignores it entirely.
-//
-// Only one container processes input at a time per thread, so a single
-// cached struct is sufficient. ResetActiveWorkspaceLabel() is called when
-// no cache is needed (cleared in DlgProc::WM_DESTROY) to avoid leaking
-// stale data into another instance.
-void SetActiveWorkspaceLabel(const char* name, bool dirty);
-void ResetActiveWorkspaceLabel();
 
 } // namespace NavBar

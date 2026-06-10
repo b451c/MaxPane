@@ -39,15 +39,16 @@ public:
   bool HasPending() const;
   void CancelAll();
 
-  // v2.0.4 #1 (ADR-037) — side-channel for FX-restore failure toast. Tick
-  // populates m_lastFxFailureToast with a user-readable string when an FX
-  // identity fails to resolve after MAX_RETRIES_ARBITRARY. Container drains
-  // it via PopFxFailureToast() after each Tick call. Buffer cleared on pop.
-  const char* PopFxFailureToast();
+  // Side-channel for capture-failure toasts (FX identity since v2.0.4 /
+  // ADR-037; generalized to ALL capture failures in the 2026-06-10 audit —
+  // retry exhaustion and pane-full used to be Release-silent). Tick fills
+  // m_lastFailureToast with a user-readable string; Container drains it via
+  // PopFailureToast() after each Tick. Cleared on pop (no re-toast loops).
+  const char* PopFailureToast();
 
 private:
   PendingCapture m_queue[MAX_PENDING];
   int m_count;
-  char m_lastFxFailureToast[256] = {};
+  char m_lastFailureToast[256] = {};
   void Remove(int idx);
 };

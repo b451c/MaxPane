@@ -49,6 +49,12 @@ int SWELL_dllMain(HINSTANCE hInst, DWORD callMode, LPVOID _GetFunc)
       *api_tab[x].func = getFunc(api_tab[x].name);
       if (!*api_tab[x].func)
       {
+        // Audit M3.4 — a missing SWELL export used to bind silently to a
+        // return-0 dummy: out-params stayed uninitialized and version skew
+        // degraded into undefined behavior with no trace. Log once per
+        // symbol so a skewed REAPER/SWELL is diagnosable from stderr.
+        fprintf(stderr, "[MaxPane] WARNING: SWELL export missing: %s "
+                        "(REAPER too old? bound to no-op)\n", api_tab[x].name);
         *api_tab[x].func = (void*)&dummyFunc;
       }
     }

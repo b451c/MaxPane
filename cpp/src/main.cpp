@@ -7,7 +7,6 @@
 
 #define REAPERAPI_WANT_DockWindowAddEx
 #define REAPERAPI_WANT_DockWindowRemove
-#define REAPERAPI_WANT_DockWindowRefresh
 #define REAPERAPI_WANT_DockIsChildOfDock
 #define REAPERAPI_WANT_screenset_registerNew
 #define REAPERAPI_WANT_screenset_unregister
@@ -65,6 +64,7 @@
 
 #include "reaper_plugin.h"
 #include "reaper_plugin_functions.h"
+#include "config.h"
 #include "globals.h"
 #include "container.h"
 #include "instance_manager.h"
@@ -73,6 +73,8 @@
 #include "screenset.h"
 #include "quick_switcher.h"
 #include "hotkey_helper.h"
+#include "overlay_frame.h"
+#include "updater.h"
 #include "debug.h"
 #include <cstdio>
 
@@ -91,7 +93,12 @@ static int g_cmdSoloToggle = 0;
 static int g_cmdWsSlot[MAX_WORKSPACES] = {0};
 static int g_cmdFavSlot[MAX_FAVORITES] = {0};
 static bool g_startupComplete = false;
-extern "C" bool g_atexitSaved = false;  // prevent Shutdown from overwriting atexit state
+// Brace form: `extern "C" bool x = ...` trips GCC's -Wextern-initialized
+// under the CI -Werror gate (ADR-060 session catch); the linkage block is
+// the same definition without the storage-class ambiguity.
+extern "C" {
+bool g_atexitSaved = false;  // prevent Shutdown from overwriting atexit state
+}
 
 // Map a command ID to instance index, or -1 if it's not an Open action.
 static int OpenCommandToInstance(int command)
@@ -246,8 +253,8 @@ static void projStateOpenTimerFunc()
   if (proj && g_GetProjExtState) {
     for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
       char sect[32];
-      if (i == 0) snprintf(sect, sizeof(sect), "MaxPane_cpp");
-      else        snprintf(sect, sizeof(sect), "MaxPane_cpp_%d", i);
+      if (i == 0) snprintf(sect, sizeof(sect), "%s", EXT_SECTION);
+      else        snprintf(sect, sizeof(sect), "%s_%d", EXT_SECTION, i);
 
       char buf[64] = {};
       g_GetProjExtState(proj, sect, "tree_version", buf, sizeof(buf));
@@ -330,12 +337,38 @@ static void startupTimerFunc()
   g_startupCounter++;
   if (!g_GetExtState) return;
 
+#ifdef MAXPANE_DEBUG
+  // ADR-052 — one-shot self-check of the hardcoded toolbar action-ID table:
+  // log what the running REAPER calls each ID so a smoke log verifies the
+  // ranges on this version (Toolbar 17-32 = 42713-42728 had one source only).
+  static bool s_toolbarTableLogged = false;
+  if (!s_toolbarTableLogged && g_kbd_getTextFromCmd) {
+    s_toolbarTableLogged = true;
+    const int probes[] = { MAIN_TOOLBAR_ACTION, TOOLBAR_DOCKER_ACTION,
+                           41679, 41686, 41936, 41943, 42713, 42728,
+                           // MIDI-toolbar mapping (ADR-052 follow-up) — live
+                           // verification before hardcoding. Candidates:
+                           // 41676 = what DiscoverActionForWindow attributed
+                           // to the floating 'MIDI 1' window (smoke log
+                           // 2026-06-10); 41687-41690 + 41944-41947 +
+                           // 42745-42752 = the community-dump MIDI ranges.
+                           41675, 41676, 41677, 41678,
+                           41687, 41690, 41694,
+                           41944, 41947, 42745, 42752 };
+    for (int i = 0; i < (int)(sizeof(probes) / sizeof(probes[0])); i++) {
+      const char* nm = g_kbd_getTextFromCmd(probes[i], nullptr);
+      DBG("[MaxPane] ToolbarTableCheck: %d = '%s'\n",
+          probes[i], (nm && nm[0]) ? nm : "(unknown)");
+    }
+  }
+#endif
+
   // STEP 1 — Aggressive ghost cleanup. Runs every tick so the window of
   // visible floaters is minimized to one tick (~30ms) instead of ~450ms.
-  ProcessStaleActionsForSection("MaxPane_cpp");
+  ProcessStaleActionsForSection(EXT_SECTION);
   for (int i = 1; i < MaxPaneContainer::MAX_INSTANCES; i++) {
     char section[32];
-    snprintf(section, sizeof(section), "MaxPane_cpp_%d", i);
+    snprintf(section, sizeof(section), "%s_%d", EXT_SECTION, i);
     ProcessStaleActionsForSection(section);
   }
 
@@ -345,7 +378,7 @@ static void startupTimerFunc()
     g_startupComplete = true;
 
     bool wasVisible = true;
-    const char* vis = g_GetExtState("MaxPane_cpp", "was_visible");
+    const char* vis = g_GetExtState(EXT_SECTION, "was_visible");
     if (vis && vis[0] == '0') wasVisible = false;
     if (IsAutoOpenEnabled() && wasVisible) {
       MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(0);
@@ -355,6 +388,28 @@ static void startupTimerFunc()
 
   // STEP 3 — Stop polling after the polling window expires.
   if (g_startupCounter > STARTUP_DELAY_TICKS + STARTUP_POLL_TICKS) {
+    // Audit M3.3 — prune what's left of the stale lists. Entries still
+    // deferred after the whole window (~75 ticks of FindReaperWindow probes)
+    // reference windows REAPER did NOT restore this session — typically an
+    // uninstalled script or a removed toolbar. They used to survive forever,
+    // re-running the probe loop at EVERY future startup. Nothing else
+    // processes the list until the next startup, so dropping it here is
+    // behaviorally equivalent for this session and ends the chronic cost.
+    // (LoadWorkspace re-arms the list mid-session for the NEXT startup —
+    // those fresh entries are unaffected.)
+    if (g_SetExtState && g_GetExtState) {
+      for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
+        char section[32];
+        if (i == 0) snprintf(section, sizeof(section), "%s", EXT_SECTION);
+        else        snprintf(section, sizeof(section), "%s_%d", EXT_SECTION, i);
+        const char* left = g_GetExtState(section, "stale_toggle_actions");
+        if (left && left[0]) {
+          DBG("[MaxPane] startup: pruning unresolvable stale entries [%s]: '%s'\n",
+              section, left);
+          g_SetExtState(section, "stale_toggle_actions", "", true);
+        }
+      }
+    }
     g_plugin_register("-timer", (void*)(void(*)())startupTimerFunc);
   }
 }
@@ -381,7 +436,7 @@ static bool hookCommandProc(int command, int /*flag*/)
     // this hook. For instance 0 only, suppress restore if was_visible=0 (user
     // explicitly closed before last exit).
     if (instId == 0 && !g_startupComplete && g_GetExtState) {
-      const char* vis = g_GetExtState("MaxPane_cpp", "was_visible");
+      const char* vis = g_GetExtState(EXT_SECTION, "was_visible");
       if (vis && vis[0] == '0') {
         return true;
       }
@@ -389,8 +444,20 @@ static bool hookCommandProc(int command, int /*flag*/)
 
     MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(instId);
     if (!c) return false;
-    if (!c->GetHwnd()) c->Create();
-    else                c->Toggle();
+    if (!c->GetHwnd()) {
+      // Audit M1.2 — Create() failure used to be swallowed: the user pressed
+      // the action and nothing happened, with no message and no Release log.
+      // This is the user-initiated entry point, so a modal is appropriate.
+      if (!c->Create()) {
+        MessageBox(g_reaperMainHwnd,
+                   "MaxPane couldn't create its window (dialog creation failed).\n"
+                   "Try restarting REAPER; if it persists, please report it at\n"
+                   "github.com/b451c/MaxPane/issues.",
+                   "MaxPane", MB_OK);
+      }
+    } else {
+      c->Toggle();
+    }
     return true;
   }
 
@@ -568,6 +635,12 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
       });
     }
     InstanceManager::Get().DestroyAll();
+    // ADR-060 — the overlay strips' WndProc lives in this module; destroy
+    // them before unload so no orphaned window can dispatch into freed code.
+    OverlayFrame::Destroy();
+    // Audit M1.5 — drain the update-check worker before REAPER frees the
+    // dylib (a detached thread surviving dlclose = crash at exit).
+    Updater::ShutdownAsyncCheck();
     return 0;
   }
 

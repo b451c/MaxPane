@@ -12,7 +12,7 @@
 // This is the screenset analogue of the project_config_extension_t hook MaxPane
 // already uses for .rpp <MAXPANE_STATE> chunks: SAVE_STATE serializes the same
 // tree+tabs blob, LOAD_STATE drives the existing restore funnel
-// (ReloadProjectState / Create → LoadState). See ADR-049.
+// (ReloadProjectState / Create → LoadState). See ADR-050.
 namespace MaxPaneScreenset {
 
 // Register one screenset id per instance slot. Call once at plugin load,

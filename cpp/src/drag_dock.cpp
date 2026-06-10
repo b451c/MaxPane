@@ -76,6 +76,9 @@ void Reset(State& s)
   s.targetPaneId = -1;
   s.zone = ZONE_NONE;
   s.shiftHeld = false;
+  s.pendingPane = -1;
+  s.pendingZone = ZONE_NONE;
+  s.pendingTicks = 0;
 }
 
 DropZone ComputeZone(const RECT& paneRect, int x, int y, bool shiftHeld)
@@ -138,48 +141,59 @@ DropZone ComputeZone(const RECT& paneRect, int x, int y, bool shiftHeld)
   return shiftHeld ? ZONE_REPLACE : ZONE_BODY_CENTER;
 }
 
-void PaintPreview(HDC hdc, const RECT& paneRect, DropZone zone, bool dark)
+bool ZoneRect(const RECT& paneRect, DropZone zone, RECT* out)
 {
-  if (zone == ZONE_NONE) return;
-  Palette pal = GetPalette(dark);
+  if (!out || zone == ZONE_NONE) return false;
 
   const int W = paneRect.right - paneRect.left;
   const int bodyTop = paneRect.top + TAB_BAR_HEIGHT;
   const int H = paneRect.bottom - bodyTop;
-  if (W <= 0 || H <= 0) return;
+  if (W <= 0 || H <= 0) return false;
   const int bandH = EdgeBand(W);
   const int bandV = EdgeBand(H);
 
-  RECT z{};
-  COLORREF fill   = pal.zoneFill;
-  COLORREF border = pal.zoneBorder;
-
   switch (zone) {
     case ZONE_TAB_BAR:
-      z = { paneRect.left, paneRect.top, paneRect.right, paneRect.top + TAB_BAR_HEIGHT };
-      break;
+      *out = { paneRect.left, paneRect.top, paneRect.right, paneRect.top + TAB_BAR_HEIGHT };
+      return true;
     case ZONE_BODY_CENTER:
-      z = { paneRect.left, bodyTop, paneRect.right, paneRect.bottom };
-      break;
-    case ZONE_SPLIT_LEFT:
-      z = { paneRect.left, bodyTop, paneRect.left + bandH, paneRect.bottom };
-      break;
-    case ZONE_SPLIT_RIGHT:
-      z = { paneRect.right - bandH, bodyTop, paneRect.right, paneRect.bottom };
-      break;
-    case ZONE_SPLIT_TOP:
-      z = { paneRect.left, bodyTop, paneRect.right, bodyTop + bandV };
-      break;
-    case ZONE_SPLIT_BOTTOM:
-      z = { paneRect.left, paneRect.bottom - bandV, paneRect.right, paneRect.bottom };
-      break;
     case ZONE_REPLACE:
-      z = { paneRect.left, bodyTop, paneRect.right, paneRect.bottom };
-      fill = pal.replaceFill;
-      border = pal.replaceBorder;
-      break;
+      *out = { paneRect.left, bodyTop, paneRect.right, paneRect.bottom };
+      return true;
+    case ZONE_SPLIT_LEFT:
+      *out = { paneRect.left, bodyTop, paneRect.left + bandH, paneRect.bottom };
+      return true;
+    case ZONE_SPLIT_RIGHT:
+      *out = { paneRect.right - bandH, bodyTop, paneRect.right, paneRect.bottom };
+      return true;
+    case ZONE_SPLIT_TOP:
+      *out = { paneRect.left, bodyTop, paneRect.right, bodyTop + bandV };
+      return true;
+    case ZONE_SPLIT_BOTTOM:
+      *out = { paneRect.left, paneRect.bottom - bandV, paneRect.right, paneRect.bottom };
+      return true;
     default:
-      return;
+      return false;
+  }
+}
+
+COLORREF ZoneAccentColor(DropZone zone, bool darkMode)
+{
+  Palette pal = GetPalette(darkMode);
+  return (zone == ZONE_REPLACE) ? pal.replaceBorder : pal.zoneBorder;
+}
+
+void PaintPreview(HDC hdc, const RECT& paneRect, DropZone zone, bool dark)
+{
+  RECT z{};
+  if (!ZoneRect(paneRect, zone, &z)) return;
+  Palette pal = GetPalette(dark);
+
+  COLORREF fill   = pal.zoneFill;
+  COLORREF border = pal.zoneBorder;
+  if (zone == ZONE_REPLACE) {
+    fill   = pal.replaceFill;
+    border = pal.replaceBorder;
   }
 
   // Fill (SWELL FillRect has no per-pixel alpha — we use a saturated tint;

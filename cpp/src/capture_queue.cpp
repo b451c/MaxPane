@@ -9,7 +9,10 @@
 CaptureQueue::CaptureQueue()
   : m_count(0)
 {
-  memset(m_queue, 0, sizeof(m_queue));
+  // m_queue elements default-construct to their NSDMI values; no memset —
+  // PendingCapture is non-trivial, so GCC's -Werror=class-memaccess flags
+  // raw memory clears (ADR-060 session catch). Value-assignment is the
+  // reset idiom throughout this TU now.
 }
 
 void CaptureQueue::EnqueueKnown(int paneId, int knownIdx, bool deferAction)
@@ -20,7 +23,7 @@ void CaptureQueue::EnqueueKnown(int paneId, int knownIdx, bool deferAction)
   const WindowDef& def = KNOWN_WINDOWS[knownIdx];
 
   PendingCapture& pc = m_queue[m_count];
-  memset(&pc, 0, sizeof(PendingCapture));
+  pc = PendingCapture{};
   pc.state = PendingCapture::WAITING;
   pc.paneId = paneId;
   pc.knownWindowIndex = knownIdx;
@@ -62,13 +65,23 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   if (m_count >= MAX_PENDING) return;
   if (!name || !name[0]) return;
 
+  // ADR-052 — Main toolbar is not capturable. A legacy workspace entry that
+  // resolved to 41651 (saved before the exclusion, e.g. 'arb:41651:...')
+  // would toggle the main toolbar open as a floating window and then burn
+  // retries on a capture that CaptureArbitraryWindow rejects. Skip outright.
+  if (toggleAction == MAIN_TOOLBAR_ACTION || strcmp(name, "Main toolbar") == 0) {
+    DBG("[MaxPane] CaptureQueue: SKIP Main toolbar '%s' (action=%d) — not capturable (ADR-052)\n",
+        name, toggleAction);
+    return;
+  }
+
   // v2.0.4 #1 (ADR-037) — FX identity short-circuits the FindReaperWindow
   // title-search path. Identity carries the (track, FX) GUID pair; restore
   // resolves to a live (track, slot) via REAPER SDK and calls TrackFX_Show
   // to obtain the HWND directly. No name-search retries needed.
   if (FxCapture::IsFxIdentity(actionCmd)) {
     PendingCapture& pc = m_queue[m_count];
-    memset(&pc, 0, sizeof(PendingCapture));
+    pc = PendingCapture{};
     pc.state = PendingCapture::WAITING;
     pc.paneId = paneId;
     pc.knownWindowIndex = -1;
@@ -104,7 +117,7 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   }
 
   PendingCapture& pc = m_queue[m_count];
-  memset(&pc, 0, sizeof(PendingCapture));
+  pc = PendingCapture{};
   pc.state = PendingCapture::WAITING;
   pc.paneId = paneId;
   pc.knownWindowIndex = -1;
@@ -207,11 +220,11 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         FxCapture::ResolveLocation(pc.fxIdentity, diagLoc, &ownerFound);
         const char* fallbackName = pc.displayName[0] ? pc.displayName : "(unknown)";
         if (ownerFound) {
-          snprintf(m_lastFxFailureToast, sizeof(m_lastFxFailureToast),
+          snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
                    "FX missing: %s — track no longer has this plugin.",
                    fallbackName);
         } else {
-          snprintf(m_lastFxFailureToast, sizeof(m_lastFxFailureToast),
+          snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
                    "FX missing: %s — owning track was deleted from the project.",
                    fallbackName);
         }
@@ -250,11 +263,11 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       // "Title (docked)", wait a few retries for the dock frame to appear.
       if (pc.isArbitrary) {
         char dockedTitle[512];
-        snprintf(dockedTitle, sizeof(dockedTitle), "%s (docked)", pc.searchTitle);
+        snprintf(dockedTitle, sizeof(dockedTitle), "%s%s", pc.searchTitle, DOCKED_TITLE_SUFFIX);
         char foundTitle[512];
         GetWindowText(found, foundTitle, sizeof(foundTitle));
 
-        bool foundIsDockFrame = (strstr(foundTitle, "(docked)") != nullptr);
+        bool foundIsDockFrame = (strstr(foundTitle, DOCKED_TITLE_SUFFIX) != nullptr);
         // Sprint 1 Entry 16 — skip dock-frame wait for window classes that
         // will never have one. Originally this also skipped Lua scripts
         // ("the wrapper never appears on Main_OnCommand restore"). On
@@ -308,11 +321,19 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       } else {
         DBG("[MaxPane] CaptureQueue: CAPTURE FAILED for '%s' hwnd=%p (already captured or pane full?)\n",
             pc.displayName, (void*)found);
+        // Audit M1.2 — surface what used to be a Release-silent failure.
+        snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
+                 "Couldn't capture '%s' — pane is full or window is already captured.",
+                 pc.displayName[0] ? pc.displayName : "(unknown)");
       }
       Remove(i);
     } else if (pc.retryCount >= pc.maxRetries) {
       DBG("[MaxPane] CaptureQueue: FAILED '%s' after %d retries\n",
           pc.displayName, pc.retryCount);
+      // Audit M1.2 — the user's workspace tab silently never appeared here.
+      snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
+               "Couldn't restore '%s' — window not found.",
+               pc.displayName[0] ? pc.displayName : "(unknown)");
       // Diagnostic: dump all window titles to help discover actual title
       WindowManager::DumpAllWindowTitles(pc.displayName);
       Remove(i);
@@ -336,18 +357,18 @@ bool CaptureQueue::HasPending() const
 void CaptureQueue::CancelAll()
 {
   m_count = 0;
-  memset(m_queue, 0, sizeof(m_queue));
+  for (int i = 0; i < MAX_PENDING; i++) m_queue[i] = PendingCapture{};
 }
 
-const char* CaptureQueue::PopFxFailureToast()
+const char* CaptureQueue::PopFailureToast()
 {
-  if (!m_lastFxFailureToast[0]) return nullptr;
+  if (!m_lastFailureToast[0]) return nullptr;
   // Return a stable pointer into the member buffer; caller copies or
   // displays before next Tick mutates the slot. We clear after one read so
   // the same failure doesn't toast on every OnTimer cycle.
   static char s_returnBuf[256];
-  safe_strncpy(s_returnBuf, m_lastFxFailureToast, sizeof(s_returnBuf));
-  m_lastFxFailureToast[0] = '\0';
+  safe_strncpy(s_returnBuf, m_lastFailureToast, sizeof(s_returnBuf));
+  m_lastFailureToast[0] = '\0';
   return s_returnBuf;
 }
 
@@ -358,5 +379,5 @@ void CaptureQueue::Remove(int idx)
     m_queue[i] = m_queue[i + 1];
   }
   m_count--;
-  memset(&m_queue[m_count], 0, sizeof(PendingCapture));
+  m_queue[m_count] = PendingCapture{};
 }

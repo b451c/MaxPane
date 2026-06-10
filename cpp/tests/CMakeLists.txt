@@ -13,7 +13,11 @@ add_executable(maxpane_tests
   test_stubs.cpp
   test_split_tree.cpp
   test_globals.cpp
+  test_config.cpp
+  test_action_list.cpp
+  test_state_persistence.cpp
   test_workspace_manager.cpp
+  ${PROJECT_SOURCE_DIR}/src/action_list.cpp
   ${PROJECT_SOURCE_DIR}/src/split_tree.cpp
   ${PROJECT_SOURCE_DIR}/src/globals.cpp
   ${PROJECT_SOURCE_DIR}/src/config.cpp
