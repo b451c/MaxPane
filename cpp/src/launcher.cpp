@@ -531,7 +531,9 @@ int CollectWorkspaceWindowNames(const WorkspaceEntry& ws,
       const char* n = ws.panes[p].tabs[t].name;
       if (!n || !n[0]) continue;
       if (total < maxLines) {
-        snprintf(linesOut[total], 128, "%s", n);
+        // %.127s: tab names are 256 bytes — truncation into the 128-byte
+        // tooltip line is intentional (GCC -Wformat-truncation, CI gate).
+        snprintf(linesOut[total], 128, "%.127s", n);
       }
       total++;
     }

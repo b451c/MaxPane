@@ -3,7 +3,10 @@
 #include <cstdlib>
 
 #ifdef MAXPANE_DEBUG
-static FILE* dbgFile()
+// inline (not static): a TU that includes debug.h but never calls DBG()
+// trips clang's -Wunused-function on a static definition under the CI
+// -Werror gate (caught on the gate's first real run, v2.2.0).
+inline FILE* dbgFile()
 {
   static FILE* f = nullptr;
   if (!f) {

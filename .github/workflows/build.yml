@@ -62,7 +62,7 @@ jobs:
       - name: Configure (Windows)
         if: runner.os == 'Windows'
         working-directory: cpp/build
-        run: cmake .. -G "Visual Studio 17 2022" -A x64
+        run: cmake .. -A x64
 
       - name: Build (macOS / Linux)
         if: runner.os != 'Windows'

@@ -219,13 +219,15 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         bool ownerFound = false;
         FxCapture::ResolveLocation(pc.fxIdentity, diagLoc, &ownerFound);
         const char* fallbackName = pc.displayName[0] ? pc.displayName : "(unknown)";
+        // %.180s: displayName is 256 bytes — newer GCC's -Wformat-truncation
+        // (ubuntu-24.04 CI gate) wants proof the suffix fits the toast buffer.
         if (ownerFound) {
           snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
-                   "FX missing: %s — track no longer has this plugin.",
+                   "FX missing: %.180s — track no longer has this plugin.",
                    fallbackName);
         } else {
           snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
-                   "FX missing: %s — owning track was deleted from the project.",
+                   "FX missing: %.180s — owning track was deleted from the project.",
                    fallbackName);
         }
         Remove(i);
@@ -323,7 +325,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
             pc.displayName, (void*)found);
         // Audit M1.2 — surface what used to be a Release-silent failure.
         snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
-                 "Couldn't capture '%s' — pane is full or window is already captured.",
+                 "Couldn't capture '%.180s' — pane is full or window is already captured.",
                  pc.displayName[0] ? pc.displayName : "(unknown)");
       }
       Remove(i);
@@ -332,7 +334,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
           pc.displayName, pc.retryCount);
       // Audit M1.2 — the user's workspace tab silently never appeared here.
       snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
-               "Couldn't restore '%s' — window not found.",
+               "Couldn't restore '%.180s' — window not found.",
                pc.displayName[0] ? pc.displayName : "(unknown)");
       // Diagnostic: dump all window titles to help discover actual title
       WindowManager::DumpAllWindowTitles(pc.displayName);
