@@ -20,8 +20,8 @@ remembers your layouts.
 ---
 
 > **Release history** lives in [CHANGELOG.md](CHANGELOG.md) — latest:
-> **v2.2.0** (Windows/Linux interaction parity, live capture/drag visual
-> feedback on all platforms, MIDI toolbar capture).
+> **v2.2.1** (Windows/Linux interaction parity, ReaImGui script windows
+> resolved per platform, MIDI toolbar capture).
 
 ## Features
 
@@ -124,8 +124,10 @@ remembers your layouts.
   verified live on Windows 11 for v2.2.0, ReaImGui script capture (TK
   Patchbay) verified live for v2.2.1. Community reports welcome.
 - **Linux x86_64 + aarch64** — supported and CI-built; capture and drag
-  interactions verified live on Ubuntu 24.04 for v2.2.0 (see Known
-  limitations for the X11 title-bar quirk). Community reports welcome.
+  interactions verified live on Ubuntu 24.04 for v2.2.0, ReaImGui script
+  capture for v2.2.1 (see Known limitations for the X11 title-bar quirk
+  and the ReaImGui software-rendering requirement). Community reports
+  welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -240,8 +242,9 @@ close-mechanism deep-dive, and the v2.0 feature surface — see
 
 ## Known limitations
 
-These are intentional design boundaries rather than bugs. The full
-detail is in [CHANGELOG.md → 2.0.4 → Known limitations](CHANGELOG.md#known-limitations).
+These are intentional design boundaries rather than bugs. Each release's
+entry in [CHANGELOG.md](CHANGELOG.md) carries the details current for
+that version.
 
 - **Plugin restore needs the matching project open.** Track GUIDs +
   FX GUIDs are project-bound (REAPER itself stores them inside
@@ -250,7 +253,7 @@ detail is in [CHANGELOG.md → 2.0.4 → Known limitations](CHANGELOG.md#known-l
   open the project first, then load the workspace. For pure project-
   bound layouts, REAPER's RPP `<MAXPANE_STATE>` chunk auto-restores
   the layout on project reopen (save the `.rpp` after capture).
-- **Container FX not supported in v2.0.4.** Capturing the UI of an FX
+- **Container FX not yet supported.** Capturing the UI of an FX
   inside a REAPER 7.06+ container chain works at the time, but the
   identity isn't encoded in the workspace yet — re-add after restart.
   Top-level track FX and recFX (input FX) are fully supported.
