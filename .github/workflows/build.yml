@@ -129,22 +129,27 @@ jobs:
             artifacts/**/*.dll
             artifacts/**/*.so
           generate_release_notes: false
+          # Per-release testing claims were hardcoded in this body until v2.3.0
+          # and went stale (they still said "Win/Linux not runtime-tested" for
+          # releases that WERE live-verified there). Keep the template
+          # release-agnostic; edit the published release notes manually
+          # (gh release edit) when a stronger per-platform claim is true.
           body: |
             ## MaxPane ${{ github.ref_name }}
 
             Native C++ extension for REAPER — tiling window manager with tabs, workspaces, and drag-and-drop.
 
-            > **Platform testing:** this release is verified on **macOS (arm64)**. The Windows and Linux binaries are built by CI but have **not yet been runtime-tested for this release** — please report any issues on the forum or [GitHub Issues](https://github.com/b451c/MaxPane/issues).
+            > **Platform testing:** all binaries are built by CI from the same source; which platforms were runtime-verified for this release is documented in the [CHANGELOG](https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md). Please report any issues on the forum or [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
             ### Downloads
 
-            | Platform | File | Status |
-            |----------|------|--------|
-            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` | ✅ Tested |
-            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` | ✅ Built (CI) |
-            | Windows x64 | `reaper_maxpane-x64.dll` | 🟡 Built, not runtime-tested this release |
-            | Linux x86_64 | `reaper_maxpane-x86_64.so` | 🟡 Built, not runtime-tested this release |
-            | Linux aarch64 | `reaper_maxpane-aarch64.so` | 🟡 Built, not runtime-tested this release |
+            | Platform | File |
+            |----------|------|
+            | macOS arm64 (Apple Silicon) | `reaper_maxpane-arm64.dylib` |
+            | macOS x86_64 (Intel) | `reaper_maxpane-x86_64.dylib` |
+            | Windows x64 | `reaper_maxpane-x64.dll` |
+            | Linux x86_64 | `reaper_maxpane-x86_64.so` |
+            | Linux aarch64 | `reaper_maxpane-aarch64.so` |
 
             ### Installation
 
