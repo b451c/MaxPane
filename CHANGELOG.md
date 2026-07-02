@@ -4,6 +4,123 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.3.0] - 2026-07-02
+
+A full sweep of the open forum reports (15 issues from the release thread),
+every fix verified live — Windows 11 and Ubuntu VMs plus macOS on real
+3-display hardware. Headliners: the startup lag is gone, floating-window
+position restore is fixed at the source on Windows, and four new features:
+clean mode, track-FX-chain capture, follow mode, and pane border colors.
+
+### Fixed
+
+- **REAPER startup lag with MaxPane installed (up to minutes on Windows)
+  is gone.** The startup cleanup of leftover window entries re-ran a full
+  window-tree search for every entry on every timer tick — and on Windows
+  additionally probed every process on the desktop. It now uses a cheap
+  exact-title probe per tick with the deep search on just three sweep
+  ticks. Measured on the same machine and saved state: cleanup work
+  8.2 s → 1.1 s, and the per-tick cost stays far below the timer
+  interval, so REAPER remains responsive while it runs.
+  (Reported by poydepzaj1616.)
+- **Windows: a floating MaxPane finally remembers its position.** The
+  restore never worked on Windows at all: geometry messages that Windows
+  fires during window creation overwrote the loaded position with the
+  dialog template's default before it was ever applied. macOS doesn't
+  fire those messages during creation, which is why the feature kept
+  verifying as "working". Covers the repeated multi-monitor reports —
+  verified on a physical 3-display setup including a monitor at negative
+  coordinates. (Reported by todoublez.)
+- **Windows: a maximized floating MaxPane restores maximized** — on the
+  monitor it was on — and un-maximizing returns it to its exact previous
+  rectangle. (Requested by mb945.) macOS/Linux keep size-only restore.
+- **A deliberately closed second MaxPane instance no longer resurrects on
+  every project load.** Project state now records whether the instance
+  was open when the project was saved; closing an instance sticks after
+  the next save. (Reported by LorenzoB.)
+- **Two instances no longer fight over the same captured window.** The
+  500 ms parent ping-pong (visible as flicker) is replaced by
+  cross-instance arbitration: the instance that owns the window keeps it,
+  the other drops its claim. (Reported by LorenzoB.)
+- **FX windows restore with far less flicker when a project loads** — the
+  capture queue no longer burns a fixed wait when the target window is
+  already resolvable. The visible floating interval dropped from ~600 ms
+  to under ~200 ms. (Reported by LorenzoB / sebsteeno.)
+- **"Open MaxPane automatically on startup" now does what it says.**
+  Previously the checkbox was silently ignored unless MaxPane was also
+  open at last quit. Ticked = always opens, unticked = never; settings
+  never touched keep the old restore-last-state behavior. An instance
+  that opens before REAPER's docker layout exists now re-docks itself
+  instead of ending up as a small window behind the main one.
+  (Reported by mb945.)
+- **Workspaces recall toolbars even when they aren't already open.**
+  Startup cleanup raced the workspace recall and toggled the toolbar
+  straight back off. (Reported by poydepzaj1616.)
+- **Releasing a captured toolbar can no longer fire one of its buttons**
+  mid-gesture. (Reported by poydepzaj1616.)
+- **Windows: left-click-dragging a captured ReaImGui window's background
+  no longer slides it out of its pane.** The move is now vetoed at the
+  source, so the window behaves like a natively docked one; input stays
+  correct. On Linux the existing snap-back (within ~0.5 s) still applies;
+  macOS unchanged. (Reported by X-Raym.)
+- **Script windows that close and reopen their own sub-windows keep their
+  pane.** A captured tab whose window disappeared used to be ejected;
+  it now waits and re-captures automatically when the script reopens the
+  window — e.g. a sampler opening per-pad FX from its own UI.
+  (Reported by mequaz.)
+- **Stale gray strips and flicker in panes are painted over.** When a
+  captured window is smaller than its pane (a window that refuses the
+  resize), the remainder of the pane is now filled instead of showing
+  stale pixels; the tab-bar strip also no longer lingers when a pane's
+  header is hidden. (Reported by poydepzaj1616.)
+- **Tooltips render at the correct size under Windows display scaling**
+  (e.g. 125%). (Reported by X-Raym.)
+
+### Added
+
+- **Capture a whole track FX chain in one click.** Pane context menu →
+  "Capture track FX chain": every FX of the last-touched track lands in
+  the pane as tabs. If the chain is longer than the pane's free tab
+  slots, MaxPane captures what fits and says so.
+  (Requested by sebsteeno.)
+- **Follow mode (experimental).** Settings → "Follow selected track's FX
+  in pane 1": pane 1 releases and re-captures the FX chain as you move
+  between tracks (debounced, so arrow-key surfing doesn't churn).
+  Follow-mode tabs are transient by design — they are never written into
+  workspaces or project files. (Requested by Rodulf and sebsteeno.)
+- **Clean mode.** Settings → "Hide pane tab bars (clean mode)": occupied
+  panes drop their tab bars entirely (on macOS an 8 px sliver remains as
+  the mouse surface), giving captured windows every pixel; empty panes
+  keep the full header and capture UI. The follow-mode pane keeps its tab
+  bar — the tabs are its switcher. (Requested by poydepzaj1616,
+  LorenzoB, and others.)
+- **Pane border color.** Settings → "Pane border": seven presets
+  (Default / Graphite / Slate blue / Teal / Amber / Crimson / Violet),
+  applied live. (Requested by poydepzaj1616.)
+- **Always-on-top is now a bindable action** — "MaxPane: Toggle
+  always-on-top (floating mode)", same toggle the floating context menu
+  has had since v2.0. (Requested by mb945.)
+- **Windows: "Hide floating MaxPane from the taskbar"** Settings option.
+  Trade-off (by Windows design): the window also leaves the Alt-Tab
+  list. (Requested by mb945.)
+
+### Known limitations
+
+- **Maximize persistence, taskbar-hide, and the ReaImGui drag-veto are
+  Windows-only.** macOS/Linux restore floating size/position without the
+  maximized flag; taskbar-hide has no portable equivalent; on Linux a
+  dragged ReaImGui window snaps back within ~0.5 s instead of being
+  vetoed, and on macOS the v2.2.1 ReaImGui known limitation still
+  applies.
+- **Linux: the always-on-top toggle is a no-op** — SWELL on Linux does
+  not implement the topmost style.
+- **Linux: HiDPI tooltip scaling is not implemented yet** (tooltips
+  assume a 1.0 scale factor).
+- The v2.2.1 limitations still stand: Linux GL ReaImGui capture requires
+  ReaImGui's "Disable hardware acceleration", and macOS ReaImGui scripts
+  that enforce a minimum window size can resize REAPER's main window
+  (see [2.2.1] below).
+
 ## [2.2.1] - 2026-06-11
 
 ReaImGui script windows (TK Patchbay and friends) get a definitive,

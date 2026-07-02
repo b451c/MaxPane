@@ -1,5 +1,6 @@
 #include "capture_queue.h"
 #include "config.h"
+#include "container.h"   // RemoveActionFromStaleLists (U1/U7 recall-vs-cleanup race)
 #include "fx_capture.h"
 #include "globals.h"
 #include "debug.h"
@@ -39,6 +40,14 @@ void CaptureQueue::EnqueueKnown(int paneId, int knownIdx, bool deferAction)
   pc.maxRetries = MAX_RETRIES;
   pc.actionDeferred = deferAction;
 
+  // U1/U7 — this action is being deliberately opened (workspace restore /
+  // favorites recall / menu); strip it from the startup stale lists so the
+  // ghost-cleanup poll doesn't see state==1 next tick and toggle the window
+  // we just opened straight back off ("toolbar not recalled unless already
+  // open", forum #65). Applies to the deferred path too: the intent to open
+  // exists from enqueue, not from when the toggle actually fires.
+  RemoveActionFromStaleLists(def.toggleActionId);
+
   // Fire the toggle action to open the window — but only if it's currently closed.
   // If deferAction is set (called from LoadState during startup), skip Main_OnCommand
   // to avoid deadlocking REAPER during project load. The action will fire on first Tick.
@@ -60,7 +69,7 @@ void CaptureQueue::EnqueueKnown(int paneId, int knownIdx, bool deferAction)
       def.name, paneId, m_count, deferAction);
 }
 
-void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleAction, const char* actionCmd, bool deferAction)
+void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleAction, const char* actionCmd, bool deferAction, bool transient)
 {
   if (m_count >= MAX_PENDING) return;
   if (!name || !name[0]) return;
@@ -95,6 +104,7 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
     pc.retryCount = 0;
     pc.maxRetries = MAX_RETRIES_ARBITRARY;
     pc.actionDeferred = deferAction;
+    pc.transient = transient;
     m_count++;
     DBG("[MaxPane] CaptureQueue: enqueued FX identity '%s' name='%s' for pane %d (count=%d)\n",
         actionCmd, name, paneId, m_count);
@@ -129,9 +139,15 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   pc.retryCount = 0;
   pc.maxRetries = (toggleAction > 0) ? MAX_RETRIES : MAX_RETRIES_ARBITRARY;
   pc.actionDeferred = deferAction;
+  pc.transient = transient;
   if (actionCmd && actionCmd[0]) {
     safe_strncpy(pc.actionCommand, actionCmd, sizeof(pc.actionCommand));
   }
+
+  // U1/U7 — deliberate open; see EnqueueKnown. Without this strip a toolbar
+  // restored by a workspace during the startup window races the stale
+  // cleanup, which closes it again and the recall fails.
+  if (toggleAction > 0) RemoveActionFromStaleLists(toggleAction);
 
   // Fire the toggle action if we have one — but only if the window isn't
   // already open. An unconditional toggle on an already-open arbitrary window
@@ -172,11 +188,28 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     pc.tickCount++;
 
     if (pc.state == PendingCapture::WAITING) {
-      if (pc.tickCount >= INITIAL_WAIT_TICKS) {
-        pc.state = PendingCapture::RETRYING;
-        pc.retryCount = 0;
+      bool promote = (pc.tickCount >= INITIAL_WAIT_TICKS);
+      // U6 (ADR-065) — REAPER re-shows previously-captured FX/plugin windows
+      // floating from its own persisted visibility ~200-300ms into a load;
+      // the fixed 10-tick WAITING burn then left them visibly detached for
+      // another ~500-600ms before the first capture attempt ("windows detach
+      // from panes on startup, with flickering", #58/#61). If the target is
+      // already resolvable, skip the rest of the wait — the wait exists for
+      // windows that need REAPER to finish loading, not for ones already on
+      // screen.
+      if (!promote) {
+        if (pc.fxIdentity[0]) {
+          HWND fxProbe = nullptr;
+          promote = FxCapture::ShowAndGetHwnd(pc.fxIdentity, fxProbe) && fxProbe;
+        } else if (pc.searchTitle[0]) {
+          HWND w = FindWindowEx(nullptr, nullptr, nullptr, pc.searchTitle);
+          promote = (w && IsWindowVisible(w));
+        }
       }
-      continue;
+      if (!promote) continue;
+      pc.state = PendingCapture::RETRYING;
+      pc.retryCount = 0;
+      pc.tickCount = RETRY_INTERVAL;  // pass the modulo gate below on this tick
     }
 
     // RETRYING state
@@ -202,7 +235,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
             pc.fxIdentity, (void*)fxHwnd);
         bool captured = winMgr.CaptureArbitraryWindow(pc.paneId, fxHwnd,
                                                      pc.displayName, containerHwnd,
-                                                     0, pc.fxIdentity);
+                                                     0, pc.fxIdentity, pc.transient);
         if (captured) {
           anyCaptured = true;
         } else {
@@ -240,7 +273,13 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       pc.actionDeferred = false;
       if (g_Main_OnCommand && pc.toggleAction > 0) {
         bool alreadyOpen = false;
-        if (!pc.isArbitrary && g_GetToggleCommandState) {
+        // U7 (ADR-065) — the already-open guard used to be skipped for
+        // arbitrary entries, but toolbars ARE arbitrary and DO have real
+        // toggle state: restoring a workspace while REAPER had re-shown the
+        // toolbar fired the toggle anyway, CLOSING it — then 30 retries
+        // hunted a window we'd just closed ("toolbars not recalled", #65).
+        // state==-1 (scripts, no toggle state) still falls through to fire.
+        if (g_GetToggleCommandState) {
           int state = g_GetToggleCommandState(pc.toggleAction);
           alreadyOpen = (state == 1);
         }
@@ -256,6 +295,17 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     HWND found = WindowManager::FindReaperWindow(pc.searchTitle, containerHwnd);
     if (!found && pc.altSearchTitle[0]) {
       found = WindowManager::FindReaperWindow(pc.altSearchTitle, containerHwnd);
+    }
+
+    // U4 (ADR-065) — a window another live instance already holds will never
+    // become capturable here; give up now instead of burning the remaining
+    // retries and surfacing a failure toast (the window IS in a MaxPane —
+    // just not this one, which is the correct converged state).
+    if (found && WindowManager::IsCapturedByAnotherInstance(found, &winMgr)) {
+      DBG("[MaxPane] CaptureQueue: '%s' hwnd=%p held by another instance — dropping entry\n",
+          pc.searchTitle, (void*)found);
+      Remove(i);
+      continue;
     }
 
     if (found) {
@@ -311,7 +361,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       bool captured = false;
       if (pc.isArbitrary) {
         captured = winMgr.CaptureArbitraryWindow(pc.paneId, found, pc.displayName, containerHwnd,
-                                                    pc.toggleAction, pc.actionCommand);
+                                                    pc.toggleAction, pc.actionCommand, pc.transient);
       } else {
         captured = winMgr.CaptureByIndex(pc.paneId, pc.knownWindowIndex, containerHwnd);
       }

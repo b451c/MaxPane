@@ -172,17 +172,27 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
       const PaneState* ps = winMgr->GetPaneState(p);
       if (!ps) continue;
 
+      // U14 (ADR-070) — transient (follow-mode) tabs are never persisted:
+      // they are rebuilt from the live selection, and freezing them into a
+      // workspace/project would pin the follow pane to one track forever.
+      int persistCount = 0;
+      for (int t = 0; t < ps->tabCount; t++)
+        if (!ps->tabs[t].transient) persistCount++;
+
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
-      snprintf(buf, sizeof(buf), "%d", ps->tabCount);
+      snprintf(buf, sizeof(buf), "%d", persistCount);
       state.Set(section, key, buf, true);
 
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
-      snprintf(buf, sizeof(buf), "%d", ps->activeTab);
+      snprintf(buf, sizeof(buf), "%d",
+               (ps->activeTab >= 0 && ps->activeTab < persistCount) ? ps->activeTab : 0);
       state.Set(section, key, buf, true);
 
+      int outIdx = 0;
       for (int t = 0; t < ps->tabCount; t++) {
-        snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
         const TabEntry& tab = ps->tabs[t];
+        if (tab.transient) continue;
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, outIdx);
         if (tab.name[0]) {
           if (tab.isArbitrary) {
             // Get stable action command string
@@ -202,17 +212,16 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
           state.Set(section, key, "", true);
         }
         // Save tab color
-        snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, outIdx);
         snprintf(buf, sizeof(buf), "%d", tab.colorIndex);
         state.Set(section, key, buf, true);
-      }
-      // Save pinned flag per tab (C2 — ADR-027)
-      for (int t = 0; t < ps->tabCount; t++) {
-        snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, t);
-        state.Set(section, key, ps->tabs[t].pinned ? "1" : "0", true);
+        // Save pinned flag per tab (C2 — ADR-027)
+        snprintf(key, sizeof(key), "%spane_%d_tab_%d_pinned", prefix, p, outIdx);
+        state.Set(section, key, tab.pinned ? "1" : "0", true);
+        outIdx++;
       }
       // Clear any leftover tabs from previous state
-      for (int t = ps->tabCount; t < MAX_TABS_PER_PANE; t++) {
+      for (int t = persistCount; t < MAX_TABS_PER_PANE; t++) {
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
         state.Set(section, key, "", true);
         snprintf(key, sizeof(key), "%spane_%d_tab_%d_color", prefix, p, t);
@@ -312,13 +321,17 @@ void WorkspaceManager::ReadPaneTabsStatic(const char* section, const char* prefi
 // =========================================================================
 
 void WorkspaceManager::SaveProjectState(ReaProject* proj, const SplitTree& tree,
-                                        const WindowManager& winMgr)
+                                        const WindowManager& winMgr, bool openAtSave)
 {
   if (!g_SetProjExtState || !proj) return;
 
   ProjectStateAccessor projState(proj);
 
   projState.Set(m_section, "tree_version", "2", true);
+  // U3 (ADR-065) — record open/closed intent. Toggle-off used to re-seed
+  // tree_version unconditionally, so a closed second instance resurrected on
+  // every subsequent load and the user could not make the close stick.
+  projState.Set(m_section, "open_at_save", openAtSave ? "1" : "0", true);
 
   NodeSnapshot snap[MAX_TREE_NODES];
   int nodeCount = 0;

@@ -73,14 +73,52 @@ bool ReadHideSingleTabBar()
   return (v && v[0] == '1' && v[1] == '\0');
 }
 
+// U12 (ADR-068) — clean mode: hide the header of every occupied pane
+// (three forum users asked for a chrome-free look). Default OFF.
+bool ReadHideAllTabBars()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "hide_tab_bars");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
+// U14 (ADR-070) — experimental follow-selected-track mode (pane 1 shows the
+// last-touched track's FX chain, updated live). Default OFF.
+bool ReadFollowTrackFx()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "follow_track_fx");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
+// U15 (ADR-069) — keep the floating MaxPane out of the Windows taskbar
+// (WS_EX_TOOLWINDOW; also leaves Alt-Tab — documented trade-off). Win-only
+// in effect; the checkbox is shown everywhere, harmless no-op on mac/Linux.
+bool ReadHideFromTaskbar()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "hide_from_taskbar");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
+// U13 (ADR-068) — pending splitter-color preset index (cycle button, same
+// pattern as the dark-mode cycle: staged here, committed on OK).
+static int g_pendingSplitterIdx = 0;
+
 void LoadValues(HWND dlg)
 {
   CheckDlgButton(dlg, IDC_SET_AUTOOPEN, IsAutoOpenEnabled() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_SHOWNAVBAR, ReadShowNavBar() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_HIDETABBAR, ReadHideSingleTabBar() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_HIDEALLTABS, ReadHideAllTabBars() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_HIDETASKBAR, ReadHideFromTaskbar() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_FOLLOWFX, ReadFollowTrackFx() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_AUTO_UPDATE, IsAutoUpdateEnabled() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
   SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
+  g_pendingSplitterIdx = GetSplitterColorPresetIndex();
+  SetDlgItemText(dlg, IDC_SET_BORDER_CYCLE,
+                 SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].name);
 
   // About section — fill version label from compile-time constant.
   char ver[128];
@@ -99,6 +137,14 @@ void CommitValues(HWND dlg)
     g_SetExtState(EXT_SECTION, "show_nav_bar", showNav ? "1" : "0", true);
     const bool hideTab = (IsDlgButtonChecked(dlg, IDC_SET_HIDETABBAR) == BST_CHECKED);
     g_SetExtState(EXT_SECTION, "hide_single_tab_bar", hideTab ? "1" : "0", true);
+    const bool hideAll = (IsDlgButtonChecked(dlg, IDC_SET_HIDEALLTABS) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "hide_tab_bars", hideAll ? "1" : "0", true);
+    const bool hideTb = (IsDlgButtonChecked(dlg, IDC_SET_HIDETASKBAR) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "hide_from_taskbar", hideTb ? "1" : "0", true);
+    const bool follow = (IsDlgButtonChecked(dlg, IDC_SET_FOLLOWFX) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "follow_track_fx", follow ? "1" : "0", true);
+    g_SetExtState(EXT_SECTION, "splitter_color",
+                  SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].key, true);
   }
 }
 
@@ -115,6 +161,15 @@ INT_PTR CALLBACK SettingsDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*
       if (id == IDC_SET_DARK_CYCLE) {
         g_pendingDarkMode = (DarkMode)((g_pendingDarkMode + 1) % DM_COUNT);
         SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
+        return 0;
+      }
+
+      if (id == IDC_SET_BORDER_CYCLE) {
+        // U13 (ADR-068) — cycle the splitter-color preset; committed on OK.
+        g_pendingSplitterIdx =
+            (g_pendingSplitterIdx + 1) % NUM_SPLITTER_COLOR_PRESETS;
+        SetDlgItemText(dlg, IDC_SET_BORDER_CYCLE,
+                       SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].name);
         return 0;
       }
 

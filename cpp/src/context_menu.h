@@ -9,6 +9,8 @@ class WorkspaceManager;
 namespace MenuIds {
   static const int RELEASE = 2000;
   static const int CAPTURE_BY_CLICK = 2001;
+  // U14 (ADR-070) — capture the selected track's whole FX chain into a pane.
+  static const int CAPTURE_FX_CHAIN = 2002;
   static const int KNOWN_BASE = 1000;
   static const int LAYOUT_BASE = 3000;
   static const int OPEN_WINDOWS_BASE = 4000;

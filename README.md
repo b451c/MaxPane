@@ -20,8 +20,8 @@ remembers your layouts.
 ---
 
 > **Release history** lives in [CHANGELOG.md](CHANGELOG.md) — latest:
-> **v2.2.1** (Windows/Linux interaction parity, ReaImGui script windows
-> resolved per platform, MIDI toolbar capture).
+> **v2.3.0** (startup lag fixed, Windows floating-position restore fixed,
+> clean mode, track-FX-chain capture, follow mode, pane border colors).
 
 ## Features
 
@@ -33,15 +33,20 @@ remembers your layouts.
   between panes, reorder within a pane. Each tab bar has a **▼ menu** for
   pane operations.
 - **Floating mode** — detach the whole container into a top-level window
-  with native chrome. Multi-monitor positions remembered; always-on-top
-  toggle for keyboard-monitor setups.
+  with native chrome. Multi-monitor positions remembered (on Windows
+  including the maximized state); always-on-top toggle for
+  keyboard-monitor setups (context menu or bindable action); optional
+  taskbar-hide on Windows.
 - **Solo / maximize** — temporarily expand any pane to fill the entire
   container; full tree restored on exit.
 - **5 layout presets** — Two Columns, Left + Right Split, Three Columns,
   2x2 Grid, Top + Bottom Split.
 - **Space savers** — the navigation bar collapses to a thin strip via its
-  chevron, and single-window panes can auto-hide their tab bar (Settings)
-  so the captured window gets every pixel.
+  chevron, single-window panes can auto-hide their tab bar (Settings),
+  and **clean mode** hides the tab bars of all occupied panes entirely
+  so the captured windows get every pixel.
+- **Pane border color** — seven presets (Default / Graphite / Slate blue /
+  Teal / Amber / Crimson / Violet) cycled from Settings, applied live.
 - **Pinned tabs** — sticky tabs sorted to the left of each pane, exempt
   from "Close Others" / "Close All".
 - **Tab colors** — color-code tabs with 8 palette colors. Reopen last
@@ -71,6 +76,12 @@ remembers your layouts.
   round-trips through workspace save/load and project reopen as long as
   the matching project is loaded. See Known limitations below for the
   project-bound and plugin-scaling caveats.
+- **Track FX chain capture** — pane menu → "Capture track FX chain" pulls
+  every FX window of the last-touched track into the pane as tabs, one
+  click instead of one capture per plugin.
+- **Follow mode (experimental)** — Settings option: pane 1 releases and
+  re-captures the FX chain as you move between tracks. Follow-mode tabs
+  are transient — never saved into workspaces or projects.
 - **Favorites** — pin frequently-used windows for instant access from any
   container's menu.
 
@@ -115,19 +126,20 @@ remembers your layouts.
   (or a captured pane) has focus — v1.x required REAPER's main window
   to have focus first.
 - **Settings + updates** — auto-open, nav bar, dark-mode override
-  (auto / light / dark), default workspace, tab-bar collapse, support
+  (auto / light / dark), default workspace, tab-bar collapse, clean
+  mode, pane border color, follow mode, taskbar-hide (Windows), support
   links; non-blocking update check on startup (toggleable).
 
 ### Platform
 - **macOS arm64 + x86_64** — primary platform, actively tested on every release.
-- **Windows x64** — supported and CI-built; capture and drag interactions
-  verified live on Windows 11 for v2.2.0, ReaImGui script capture (TK
-  Patchbay) verified live for v2.2.1. Community reports welcome.
-- **Linux x86_64 + aarch64** — supported and CI-built; capture and drag
-  interactions verified live on Ubuntu 24.04 for v2.2.0, ReaImGui script
-  capture for v2.2.1 (see Known limitations for the X11 title-bar quirk
-  and the ReaImGui software-rendering requirement). Community reports
-  welcome.
+- **Windows x64** — supported and CI-built; the v2.3.0 fix/feature batch
+  was developed and verified live on a Windows 11 VM (startup timing,
+  floating restore, ReaImGui interactions, clean mode, follow mode).
+  Community reports welcome.
+- **Linux x86_64 + aarch64** — supported and CI-built; the v2.3.0 batch
+  runtime-verified on Ubuntu 24.04 (see Known limitations for the X11
+  title-bar quirk and the ReaImGui software-rendering requirement).
+  Community reports welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -292,6 +304,14 @@ that version.
   natively in REAPER's docker, or keep the MaxPane pane at least as
   large as the script's minimum. Scripts without size constraints
   (e.g. ReaMD) are unaffected.
+- **Some v2.3.0 floating-window niceties are Windows-only.** Maximized-
+  state persistence and the taskbar-hide option have no portable
+  SWELL equivalent (macOS/Linux restore size and position only), and
+  the always-on-top toggle is a no-op on Linux. Dragging a captured
+  ReaImGui window's background is vetoed on Windows; on Linux it snaps
+  back within ~0.5 s instead.
+- **Linux: HiDPI tooltip scaling is not implemented yet** — tooltips
+  assume a 1.0 scale factor. (Windows display scaling is handled.)
 
 ---
 

@@ -89,6 +89,28 @@ bool IsFxIdentity(const char* actionCmd)
          strncmp(actionCmd, "takefx@", 7) == 0;
 }
 
+int ListTrackFxIdentities(MediaTrack* track,
+                          char (*idsOut)[kIdentityMaxLen],
+                          char (*namesOut)[256],
+                          int maxCount)
+{
+  if (!track || !idsOut || !namesOut || maxCount <= 0) return 0;
+  if (!ApiReady()) return 0;
+  const bool isMaster =
+      (g_GetMasterTrack &&
+       track == g_GetMasterTrack(g_EnumProjects(-1, nullptr, 0)));
+  const int total = g_TrackFX_GetCount(track);
+  const int take = total < maxCount ? total : maxCount;
+  for (int i = 0; i < take; i++) {
+    EmitTrackIdentity(track, i, isMaster, idsOut[i], kIdentityMaxLen);
+    namesOut[i][0] = '\0';
+    if (!g_TrackFX_GetFXName(track, i, namesOut[i], 256) || !namesOut[i][0]) {
+      snprintf(namesOut[i], 256, "FX %d", i + 1);
+    }
+  }
+  return total;
+}
+
 bool DetectFxIdentityForHwnd(HWND hwnd, char* outIdentity, int outIdentitySize)
 {
   if (!hwnd || !outIdentity || outIdentitySize <= 0) return false;

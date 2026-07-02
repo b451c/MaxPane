@@ -97,6 +97,9 @@ void MaxPaneContainer::LoadFloatingState()
   // C5 (ADR-027) — always-on-top flag.
   const char* aot = g_GetExtState(m_extSection, "float_always_on_top");
   m_floatAlwaysOnTop = (aot && aot[0] == '1');
+  // U2/mb945 (ADR-066) — zoom state (honored on Win32 in Create).
+  const char* zm = g_GetExtState(m_extSection, "float_maximized");
+  m_floatMaximized = (zm && zm[0] == '1');
   // Sanity clamp on width/height — refuse pathologic values from corrupt
   // ExtState (e.g. user-edited reaper-extstate.ini). Below 200x100 we
   // wouldn't even fit a tab bar; above 8000x8000 is multi-monitor wraparound.
@@ -104,6 +107,9 @@ void MaxPaneContainer::LoadFloatingState()
   if (m_floatH < 100)  m_floatH = 600;
   if (m_floatW > 8000) m_floatW = 800;
   if (m_floatH > 8000) m_floatH = 600;
+  DBG("[MaxPane] LoadFloatingState[%s]: floating=%d rect=(%d,%d %dx%d) maximized=%d aot=%d\n",
+      m_extSection, m_floating ? 1 : 0, m_floatX, m_floatY, m_floatW, m_floatH,
+      m_floatMaximized ? 1 : 0, m_floatAlwaysOnTop ? 1 : 0);
 }
 
 // F1a (ADR-024) — write floating-mode ExtState keys from in-memory state.
@@ -119,6 +125,8 @@ void MaxPaneContainer::SaveFloatingState()
   snprintf(buf, sizeof(buf), "%d", m_floatW); g_SetExtState(m_extSection, "float_w", buf, true);
   snprintf(buf, sizeof(buf), "%d", m_floatH); g_SetExtState(m_extSection, "float_h", buf, true);
   g_SetExtState(m_extSection, "float_always_on_top", m_floatAlwaysOnTop ? "1" : "0", true);
+  // U2/mb945 (ADR-066) — zoom state, Win32-only writer (always "0" elsewhere).
+  g_SetExtState(m_extSection, "float_maximized", m_floatMaximized ? "1" : "0", true);
 }
 
 // F1a (ADR-024) — read current top-level window rect into m_float{X,Y,W,H}.
@@ -131,6 +139,31 @@ void MaxPaneContainer::SaveFloatingState()
 void MaxPaneContainer::CaptureFloatGeometry()
 {
   if (!m_floating || !m_hwnd) return;
+#ifdef _WIN32
+  // U2/mb945 (ADR-066) — true-maximize persistence. A maximized window's
+  // GetWindowRect is just an oversized rect; restoring it produced a large
+  // but NOT maximized window, and un-maximizing had nothing to return to.
+  // Persist the zoom flag separately and keep the RESTORED geometry
+  // (rcNormalPosition) in m_float* so both states survive a restart.
+  // SWELL has no IsZoomed — mac/Linux keep the size-only behavior.
+  if (IsZoomed(m_hwnd)) {
+    WINDOWPLACEMENT wp = { sizeof(WINDOWPLACEMENT) };
+    if (GetWindowPlacement(m_hwnd, &wp)) {
+      const RECT& nr = wp.rcNormalPosition;
+      int nw = nr.right - nr.left;
+      int nh = nr.bottom - nr.top;
+      if (nw >= 200 && nh >= 100 && nw <= 8000 && nh <= 8000) {
+        m_floatX = nr.left;
+        m_floatY = nr.top;
+        m_floatW = nw;
+        m_floatH = nh;
+      }
+    }
+    m_floatMaximized = true;
+    return;
+  }
+  m_floatMaximized = false;
+#endif
   RECT r;
   if (!GetWindowRect(m_hwnd, &r)) return;
   int w = r.right - r.left;
@@ -169,7 +202,11 @@ void MaxPaneContainer::SaveState()
   if (g_EnumProjects) {
     ReaProject* proj = g_EnumProjects(-1, nullptr, 0);
     if (proj)
-      m_wsMgr->SaveProjectState(proj, m_tree, m_winMgr);
+      // U3 (ADR-065) — m_visible is still true during Toggle→Shutdown→
+      // SaveState (it flips at Shutdown's tail), so the deliberate-close
+      // paths mark themselves via m_userClosing instead.
+      m_wsMgr->SaveProjectState(proj, m_tree, m_winMgr,
+                                m_visible && !m_userClosing);
   }
 }
 
@@ -182,8 +219,49 @@ void MaxPaneContainer::SaveState()
 //                to resync (open then close, properly updating wnd_vis)
 //   state ==-1 → WM_CLOSE + hide when visible, defer when not (Sprint 1
 //                Entry 8 — a toggle would START the script, so never toggle)
+// U1 — cheap top-level ghost probe for the per-tick startup poll. Ghosts
+// REAPER restores from its wnd_vis cache come back as top-level floats with
+// their exact title (or the "(docked)" dock-frame variant), so two indexed
+// FindWindowEx lookups catch the classic case at the same one-tick latency
+// as the full FindReaperWindow walk — without the EnumWindows + recursive
+// child-walk + module-enumeration cascade that cost ~10-20ms per entry per
+// tick and stalled Windows launches for minutes (forum #47/#65).
+static HWND FindTopLevelGhost(const char* title)
+{
+  if (!title || !title[0]) return nullptr;
+  char dockedTitle[512];
+  snprintf(dockedTitle, sizeof(dockedTitle), "%s%s", title, DOCKED_TITLE_SUFFIX);
+  HWND h = FindWindowEx(nullptr, nullptr, nullptr, dockedTitle);
+  if (!h) h = FindWindowEx(nullptr, nullptr, nullptr, title);
+  return h;
+}
+
+void RemoveActionFromStaleLists(int action)
+{
+  if (action <= 0 || !g_GetExtState || !g_SetExtState) return;
+  for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
+    char section[32];
+    if (i == 0) snprintf(section, sizeof(section), "%s", EXT_SECTION);
+    else        snprintf(section, sizeof(section), "%s_%d", EXT_SECTION, i);
+    const char* staleStr = g_GetExtState(section, "stale_toggle_actions");
+    if (!staleStr || !staleStr[0]) continue;
+    int arr[ACTION_LIST_MAX];
+    int cnt = ParseActionList(staleStr, arr, ACTION_LIST_MAX);
+    int kept[ACTION_LIST_MAX];
+    int keptCnt = 0;
+    for (int j = 0; j < cnt; j++)
+      if (arr[j] != action) kept[keptCnt++] = arr[j];
+    if (keptCnt == cnt) continue;
+    char buf[ACTION_LIST_BUF];
+    SerializeActionList(kept, keptCnt, buf, sizeof(buf));
+    g_SetExtState(section, "stale_toggle_actions", buf, true);
+    DBG("[MaxPane] StaleList[%s]: removed %d (deliberate open), left '%s'\n",
+        section, action, buf);
+  }
+}
+
 // Returns true if a non-empty stale list was found.
-bool ProcessStaleActionsForSection(const char* section)
+bool ProcessStaleActionsForSection(const char* section, bool deepProbe)
 {
   if (!section || !g_GetExtState || !g_SetExtState || !g_Main_OnCommand) return false;
 
@@ -235,7 +313,8 @@ bool ProcessStaleActionsForSection(const char* section)
       char searchTitleN1[256];
       bool handledN1 = false;
       if (GetSearchTitleForAction(staleArr[i], searchTitleN1, sizeof(searchTitleN1))) {
-        HWND hN1 = WindowManager::FindReaperWindow(searchTitleN1);
+        HWND hN1 = deepProbe ? WindowManager::FindReaperWindow(searchTitleN1)
+                             : FindTopLevelGhost(searchTitleN1);
         if (hN1 && IsWindow(hN1) && IsWindowVisible(hN1)) {
           SendMessage(hN1, WM_CLOSE, 0, 0);
           if (IsWindow(hN1) && IsWindowVisible(hN1)) ShowWindow(hN1, SW_HIDE);
@@ -254,7 +333,8 @@ bool ProcessStaleActionsForSection(const char* section)
       char searchTitle[256];
       bool handled = false;
       if (GetSearchTitleForAction(staleArr[i], searchTitle, sizeof(searchTitle))) {
-        HWND h = WindowManager::FindReaperWindow(searchTitle);
+        HWND h = deepProbe ? WindowManager::FindReaperWindow(searchTitle)
+                           : FindTopLevelGhost(searchTitle);
         if (h && IsWindow(h) && IsWindowVisible(h)) {
           // Double toggle: open (0→1) then close (1→0) — sync wnd_vis
           g_Main_OnCommand(staleArr[i], 0);

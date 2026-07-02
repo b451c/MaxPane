@@ -4,6 +4,7 @@
 #include "globals.h"
 #include "debug.h"
 #include "capture_queue.h"
+#include "fx_capture.h"   // U14 (ADR-070) — ListTrackFxIdentities
 #include "favorites_manager.h"
 #include "workspace_manager.h"
 #include "context_menu.h"
@@ -28,6 +29,9 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
   : m_instanceId(instanceId)
   , m_hwnd(nullptr)
   , m_visible(false)
+  , m_userClosing(false)
+  , m_floatMaximized(false)
+  , m_inCreate(false)
   , m_captureQueue(std::make_unique<CaptureQueue>())
   , m_favMgr(std::make_unique<FavoritesManager>())
   , m_wsMgr(std::make_unique<WorkspaceManager>())
@@ -71,10 +75,33 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
   m_brushTabInactive = CreateSolidBrush(COLOR_TAB_INACTIVE_BG);
   m_brushEmptyHeader = CreateSolidBrush(COLOR_EMPTY_HEADER_BG);
   m_brushPaneBg = CreateSolidBrush(COLOR_PANE_BG);
-  m_brushSplitter = CreateSolidBrush(GetSysColor(COLOR_3DSHADOW));
-  m_brushSplitterHover = CreateSolidBrush(COLOR_SPLITTER_HIGHLIGHT);
+  RefreshChromeBrushes();  // U13 (ADR-068) — splitter (+hover) from the pref
   m_penTabSeparator = CreatePen(PS_SOLID, 1, COLOR_TAB_SEPARATOR);
   m_penGridLine = CreatePen(PS_SOLID, 1, COLOR_PANE_GRID_LINE);
+}
+
+// U13 (ADR-068) — (re)create the splitter brushes from the persisted color
+// preset. Brushes were ctor-only before; Settings can now change the color
+// live, so this runs from the ctor AND after the Settings dialog closes.
+void MaxPaneContainer::RefreshChromeBrushes()
+{
+  const SplitterColorPreset& p =
+      SPLITTER_COLOR_PRESETS[GetSplitterColorPresetIndex()];
+  COLORREF base = p.useSystem
+      ? GetSysColor(COLOR_3DSHADOW)
+      : RGB((p.rgb >> 16) & 0xFF, (p.rgb >> 8) & 0xFF, p.rgb & 0xFF);
+  SafeDeleteBrush(m_brushSplitter);
+  m_brushSplitter = CreateSolidBrush(base);
+  SafeDeleteBrush(m_brushSplitterHover);
+  if (p.useSystem) {
+    m_brushSplitterHover = CreateSolidBrush(COLOR_SPLITTER_HIGHLIGHT);
+  } else {
+    // Hover = the chosen color lightened, so the pair reads as one accent.
+    int r = (int)((p.rgb >> 16) & 0xFF) + 45; if (r > 255) r = 255;
+    int g = (int)((p.rgb >> 8) & 0xFF) + 45;  if (g > 255) g = 255;
+    int b = (int)(p.rgb & 0xFF) + 45;         if (b > 255) b = 255;
+    m_brushSplitterHover = CreateSolidBrush(RGB(r, g, b));
+  }
 }
 
 MaxPaneContainer::~MaxPaneContainer()
@@ -91,9 +118,27 @@ MaxPaneContainer::~MaxPaneContainer()
   SafeDeletePen(m_penGridLine);
 }
 
+// U15 (ADR-069) — pref: keep the floating MaxPane out of the Windows
+// taskbar (WS_EX_TOOLWINDOW; also removes it from Alt-Tab — documented).
+static bool HideFromTaskbarPref()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "hide_from_taskbar");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
 bool MaxPaneContainer::Create()
 {
   if (m_hwnd) return true;
+
+  // U2 (ADR-066) — Win32 fires WM_SIZE/WM_MOVE while the dialog is still a
+  // default-rect WS_CHILD (during CreateDialog and LoadState); the handlers'
+  // CaptureFloatGeometry then overwrote the geometry LoadFloatingState just
+  // read, so a floating MaxPane always reopened at the template rect on the
+  // primary monitor ("does not remember its position", #46/#63). SWELL/mac
+  // does not fire those during construction — which is why the owner could
+  // verify the restore as working on macOS while Windows users saw it revert.
+  m_inCreate = true;
 
   // F1a (ADR-024) — read floating-mode state BEFORE deciding dock vs float.
   // m_floating == true → skip DockWindowAddEx, make HWND top-level instead.
@@ -106,7 +151,7 @@ bool MaxPaneContainer::Create()
   m_tree.SetOrigin(0, NavBarReservedHeight());
 
   m_hwnd = CreateMaxPaneDialog(g_reaperMainHwnd, DlgProc, (LPARAM)this);
-  if (!m_hwnd) return false;
+  if (!m_hwnd) { m_inCreate = false; return false; }
 
   SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
   m_favMgr->Load();
@@ -141,7 +186,7 @@ bool MaxPaneContainer::Create()
     } else {
       snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
     }
-    ApplyFloatingWindowChrome(m_hwnd, title);
+    ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
     RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
     ClampRectToVisibleScreen(&r);
     m_floatX = r.left;
@@ -150,8 +195,23 @@ bool MaxPaneContainer::Create()
     m_floatH = r.bottom - r.top;
     SetWindowPos(m_hwnd, nullptr, m_floatX, m_floatY, m_floatW, m_floatH,
                  SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#ifdef MAXPANE_DEBUG
+    {
+      RECT chk = {};
+      GetWindowRect(m_hwnd, &chk);
+      DBG("[MaxPane] Create: floating rect applied=(%ld,%ld %ldx%ld) wanted=(%d,%d %dx%d)\n",
+          (long)chk.left, (long)chk.top, (long)(chk.right - chk.left),
+          (long)(chk.bottom - chk.top), m_floatX, m_floatY, m_floatW, m_floatH);
+    }
+#endif
     // C5 (ADR-027) — restore persisted always-on-top.
     if (m_floatAlwaysOnTop) SetWindowAlwaysOnTop(m_hwnd, true);
+#ifdef _WIN32
+    // U2/mb945 (ADR-066) — re-maximize on the monitor the restored rect
+    // lands on (Windows maximizes to the window's current monitor), so a
+    // maximized-on-2nd-monitor MaxPane comes back truly maximized there.
+    if (m_floatMaximized) ShowWindow(m_hwnd, SW_MAXIMIZE);
+#endif
   } else if (g_DockWindowAddEx) {
     g_DockWindowAddEx(m_hwnd, "MaxPane", m_dockIdent, true);
   }
@@ -178,7 +238,123 @@ bool MaxPaneContainer::Create()
     Updater::StartAsyncCheck();
   }
 
+  m_inCreate = false;
   return true;
+}
+
+void MaxPaneContainer::ToggleFloatAlwaysOnTop()
+{
+  if (!m_hwnd || !m_floating) return;  // floating-only, same as the menu item
+  m_floatAlwaysOnTop = !m_floatAlwaysOnTop;
+  SetWindowAlwaysOnTop(m_hwnd, m_floatAlwaysOnTop);
+  SaveFloatingState();
+}
+
+void MaxPaneContainer::RefreshFloatingChrome()
+{
+  if (!m_hwnd || !m_floating) return;
+  char title[64];
+  if (m_instanceId <= 0) {
+    safe_strncpy(title, "MaxPane", sizeof(title));
+  } else {
+    snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
+  }
+  // WS_EX_TOOLWINDOW only applies reliably while the window is hidden.
+  bool wasVisible = IsWindowVisible(m_hwnd);
+  if (wasVisible) ShowWindow(m_hwnd, SW_HIDE);
+  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
+  if (wasVisible) ShowWindow(m_hwnd, SW_SHOW);
+}
+
+// U14 (ADR-070) — one-click capture of the selected track's whole FX chain.
+// Uses the last-touched track (falls back to the first selected). Chains
+// longer than the pane's free tab slots are truncated with a toast.
+void MaxPaneContainer::CaptureTrackFxChain(int paneId, bool transient)
+{
+  MediaTrack* tr = g_GetLastTouchedTrack ? g_GetLastTouchedTrack() : nullptr;
+  if (!tr && g_GetSelectedTrack) tr = g_GetSelectedTrack(nullptr, 0);
+  if (!tr) {
+    ShowToast("Select a track first, then capture its FX chain.");
+    return;
+  }
+  char ids[MAX_TABS_PER_PANE][FxCapture::kIdentityMaxLen];
+  char names[MAX_TABS_PER_PANE][256];
+  const int total = FxCapture::ListTrackFxIdentities(tr, ids, names,
+                                                     MAX_TABS_PER_PANE);
+  if (total <= 0) {
+    ShowToast("The selected track has no FX.");
+    return;
+  }
+  const int slots = MAX_TABS_PER_PANE - m_winMgr.GetTabCount(paneId);
+  int take = total < MAX_TABS_PER_PANE ? total : MAX_TABS_PER_PANE;
+  if (take > slots) take = slots;
+  for (int i = 0; i < take; i++) {
+    m_captureQueue->EnqueueArbitrary(paneId, names[i], 0, ids[i],
+                                     /*deferAction=*/false, transient);
+  }
+  if (take > 0) StartCaptureTimer();  // the queue only drains while armed
+  DBG("[MaxPane] CaptureTrackFxChain: pane=%d total=%d captured=%d transient=%d\n",
+      paneId, total, take, transient ? 1 : 0);
+  if (take < total) {
+    char msg[128];
+    snprintf(msg, sizeof(msg),
+             "Track chain has %d FX - captured the first %d (pane limit).",
+             total, take);
+    ShowToast(msg);
+  }
+}
+
+// U14 (ADR-070) — experimental follow-selected-track mode. Poll cadence is
+// the existing 500ms OnTimer; a 2-tick debounce (~1s) keeps arrow-key track
+// surfing from thrashing capture/release (SWELL SetParent recreates the
+// NSWindow on every reparent — churn is the design risk, ADR-070).
+void MaxPaneContainer::FollowTick()
+{
+  if (!g_GetLastTouchedTrack || !g_GetExtState) return;
+  const char* pref = g_GetExtState(EXT_SECTION, "follow_track_fx");
+  const bool on = (pref && pref[0] == '1' && pref[1] == '\0');
+  // U14+U12 (owner decision 2026-07-02) — mirror the pref into
+  // WindowManager so PaneHeaderHeight can keep the follow pane's tab bar
+  // visible in clean mode; relayout when the flag flips so the header
+  // change applies immediately, not at the next incidental reposition.
+  if (on != m_winMgr.GetFollowActive()) {
+    m_winMgr.SetFollowActive(on);
+    if (m_winMgr.GetHideAllTabBars()) RefreshLayout();
+  }
+  if (!on) return;
+
+  void* tr = (void*)g_GetLastTouchedTrack();
+  if (!tr || tr == m_followTrack) { m_followPending = nullptr; return; }
+  if (tr != m_followPending) {
+    m_followPending = tr;
+    m_followTicks = 0;
+    return;
+  }
+  if (++m_followTicks < 2) return;
+
+  m_followTrack = tr;
+  m_followPending = nullptr;
+  m_followTicks = 0;
+
+  const int followPane = 0;  // v1 scope: pane 0 is the follow pane
+  const int released = m_winMgr.ReleaseTransientTabs(followPane);
+  (void)released;  // Release builds compile DBG out
+  DBG("[MaxPane] FollowTick: switching to track %p (released %d transient tabs)\n",
+      tr, released);
+  CaptureTrackFxChain(followPane, /*transient=*/true);
+  RefreshLayout();
+}
+
+void MaxPaneContainer::RedockIfDetachedFromDock()
+{
+  if (!m_hwnd || m_floating) return;
+  if (!g_DockIsChildOfDock || !g_DockWindowAddEx) return;
+  bool floatingDock = false;
+  if (g_DockIsChildOfDock(m_hwnd, &floatingDock) >= 0) return;  // already docked
+  DBG("[MaxPane] RedockIfDetachedFromDock: inst %d not in a dock — re-adding\n",
+      m_instanceId);
+  g_DockWindowAddEx(m_hwnd, "MaxPane", m_dockIdent, true);
+  ShowWindow(m_hwnd, SW_SHOW);
 }
 
 // F1a (ADR-024) — Detach: deregister from REAPER docker, make HWND
@@ -205,7 +381,7 @@ void MaxPaneContainer::DetachToFloating()
   } else {
     snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
   }
-  ApplyFloatingWindowChrome(m_hwnd, title);
+  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
 
   RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
   ClampRectToVisibleScreen(&r);
@@ -343,7 +519,12 @@ void MaxPaneContainer::Toggle()
   // may already have written entries here for pre-switch windows still
   // floating — the helper merges (doesn't overwrite) so those aren't lost.
   MergeCapturesIntoStaleListForSection(m_extSection, m_winMgr);
+  // U3 (ADR-065) — mark this Shutdown as a deliberate close so SaveState
+  // writes open_at_save=0 and projStateOpenTimer stops resurrecting the
+  // instance on every project load.
+  m_userClosing = true;
   Shutdown();
+  m_userClosing = false;
 }
 
 bool MaxPaneContainer::IsVisible() const
@@ -610,6 +791,9 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
 void MaxPaneContainer::OnTimer()
 {
+  // U14 (ADR-070) — experimental follow-selected-track poll (pref-gated).
+  FollowTick();
+
   // v2.0.4 #3 (ADR-039) — drain the async update-check result. Atomic
   // read; HandleUpdateAvailable has its own single-fire guard so calling
   // every tick is cheap + safe. Only fires the modal once per session.
@@ -1227,6 +1411,12 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
+  // U14 (ADR-070) — one-click capture of the selected track's FX chain.
+  if (cmd == MenuIds::CAPTURE_FX_CHAIN) {
+    CaptureTrackFxChain(paneId, /*transient=*/false);
+    return;
+  }
+
   // Split Horizontal
   if (cmd == MenuIds::SPLIT_H) {
     SplitPane(paneId, SPLIT_HORIZONTAL);
@@ -1297,10 +1487,8 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
   // C5 (ADR-027) — Always on top (only meaningful when floating).
   if (cmd == MenuIds::TOGGLE_FLOAT_ALWAYS_ON_TOP) {
-    if (!m_floating) return;  // defensive: menu hides this when not floating
-    m_floatAlwaysOnTop = !m_floatAlwaysOnTop;
-    SetWindowAlwaysOnTop(m_hwnd, m_floatAlwaysOnTop);
-    SaveFloatingState();
+    // U15 (ADR-069) — same logic as the bindable action.
+    ToggleFloatAlwaysOnTop();
     return;
   }
 
@@ -1646,7 +1834,9 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         // F1a (ADR-024) — track floating window size so we can persist on
         // Shutdown. CaptureFloatGeometry reads window rect (outer frame),
         // matching what SetWindowPos expects on re-restore.
-        if (self->m_floating) {
+        // U2 (ADR-066) — not during Create: the dialog is still at its
+        // template rect and would clobber the loaded geometry.
+        if (self->m_floating && !self->m_inCreate) {
           self->CaptureFloatGeometry();
         }
       }
@@ -1656,7 +1846,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
     case WM_MOVE: {
       // F1a (ADR-024) — track floating window position. SWELL fires WM_MOVE
       // for top-level windows after user drags titlebar.
-      if (self && self->m_floating) {
+      // U2 (ADR-066) — not during Create (see WM_SIZE).
+      if (self && self->m_floating && !self->m_inCreate) {
         self->CaptureFloatGeometry();
       }
       return 0;

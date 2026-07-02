@@ -141,17 +141,26 @@ bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
     const PaneState* ps = winMgr.GetPaneState(p);
     if (!ps || ps->tabCount == 0) continue;
 
+    // U14 (ADR-070) — transient (follow-mode) tabs are never persisted.
+    int persistCount = 0;
+    for (int t = 0; t < ps->tabCount; t++)
+      if (!ps->tabs[t].transient) persistCount++;
+    if (persistCount == 0) continue;
+
     snprintf(key, sizeof(key), "pane_%d_tab_count", p);
-    snprintf(buf, sizeof(buf), "%d", ps->tabCount);
+    snprintf(buf, sizeof(buf), "%d", persistCount);
     acc.Set(section, key, buf, true);
 
     snprintf(key, sizeof(key), "pane_%d_active_tab", p);
-    snprintf(buf, sizeof(buf), "%d", ps->activeTab);
+    snprintf(buf, sizeof(buf), "%d",
+             (ps->activeTab >= 0 && ps->activeTab < persistCount) ? ps->activeTab : 0);
     acc.Set(section, key, buf, true);
 
+    int outIdx = 0;
     for (int t = 0; t < ps->tabCount; t++) {
       const TabEntry& tab = ps->tabs[t];
-      snprintf(key, sizeof(key), "pane_%d_tab_%d", p, t);
+      if (tab.transient) continue;
+      snprintf(key, sizeof(key), "pane_%d_tab_%d", p, outIdx);
       if (tab.name[0]) {
         if (tab.isArbitrary) {
           char cmdStr[128] = "0";
@@ -167,9 +176,10 @@ bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
           acc.Set(section, key, tab.name, true);
         }
       }
-      snprintf(key, sizeof(key), "pane_%d_tab_%d_color", p, t);
+      snprintf(key, sizeof(key), "pane_%d_tab_%d_color", p, outIdx);
       snprintf(buf, sizeof(buf), "%d", tab.colorIndex);
       acc.Set(section, key, buf, true);
+      outIdx++;
     }
   }
   return true;

@@ -2,6 +2,7 @@
 #include "swell_cocoa_helpers.h"
 #include "fx_capture.h"
 #include "globals.h"
+#include "instance_manager.h"   // U4 (ADR-065) — cross-instance capture arbitration
 #include "debug.h"
 #include <cstring>
 #include <cstdio>
@@ -47,12 +48,23 @@ static bool PointHitsChild(HWND parent, int x, int y)
   return false;
 }
 
+// U7-B (ADR-069, poydepzaj1616 #47) — the toolbar currently inside DoRelease.
+// Childless (MIDI) toolbars forward in-bounds clicks (ADR-057), so the
+// release gesture's WM_LBUTTONUP could still reach REAPER's toolbar proc
+// mid-transition and "randomly activate" a button. While a toolbar is being
+// released, its subclass eats every left-click unconditionally.
+static HWND s_releasingToolbarHwnd = nullptr;
+
 static LRESULT CALLBACK ToolbarSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
   WNDPROC origProc = (WNDPROC)(INT_PTR)GetProp(hwnd, kOrigWndProcProp);
   if (!origProc) return DefWindowProc(hwnd, msg, wParam, lParam);
 
   if (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP || msg == WM_LBUTTONDBLCLK) {
+    if (hwnd == s_releasingToolbarHwnd) {
+      DBG("[MaxPane] ToolbarSubclass: ate click during release (U7-B)\n");
+      return 0;
+    }
     int x = (short)LOWORD(lParam);
     int y = (short)HIWORD(lParam);
 #ifdef MAXPANE_DEBUG
@@ -118,6 +130,74 @@ static void UnsubclassToolbar(HWND hwnd)
   }
 }
 
+#ifdef _WIN32
+// U10 (ADR-067, X-Raym #67) — a captured ReaImGui window still runs ImGui's
+// own window-move logic: a left-click-drag on its background or embedded
+// titlebar issues Platform_SetWindowPos with SCREEN coords, SWELL applies
+// them PARENT-relative, and the child visibly slides out of its pane until
+// the 500ms CheckAlive snap-back (ADR-061 #3b) yanks it home. Instead of
+// fighting the move after the fact, veto it at the source: subclass the
+// captured child and force SWP_NOMOVE onto any reposition MaxPane did not
+// initiate. ImGui's next Platform_GetWindowPos read-back (ClientToScreen)
+// then still matches reality, so input mapping stays correct — the drag
+// simply does nothing, which is the docked-window behavior users expect.
+// Win32-only: SWELL-generic/mac do not route WM_WINDOWPOSCHANGING through
+// child wndprocs; Linux keeps the snap-back fallback, macOS is ADR-063
+// known-limitation territory.
+static const char* const kImGuiGuardProp = "MaxPane_ImGuiGuardOrig";
+static bool s_selfChildMove = false;
+
+static LRESULT CALLBACK ImGuiMoveGuardProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+  WNDPROC origProc = (WNDPROC)(INT_PTR)GetProp(hwnd, kImGuiGuardProp);
+  if (!origProc) return DefWindowProc(hwnd, msg, wParam, lParam);
+  if (msg == WM_WINDOWPOSCHANGING && !s_selfChildMove) {
+    WINDOWPOS* wp = (WINDOWPOS*)lParam;
+    if (wp && !(wp->flags & SWP_NOMOVE)) {
+      DBG("[MaxPane] ImGuiMoveGuard: vetoed external move of %p to (%d,%d)\n",
+          (void*)hwnd, wp->x, wp->y);
+      wp->flags |= SWP_NOMOVE;
+    }
+  }
+  return CallWindowProc(origProc, hwnd, msg, wParam, lParam);
+}
+
+static void InstallImGuiMoveGuard(HWND hwnd)
+{
+  if (!hwnd || GetProp(hwnd, kImGuiGuardProp)) return;
+  WNDPROC orig = (WNDPROC)GetWindowLongPtr(hwnd, GWLP_WNDPROC);
+  if (orig && orig != ImGuiMoveGuardProc) {
+    SetProp(hwnd, kImGuiGuardProp, (HANDLE)(INT_PTR)orig);
+    SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)ImGuiMoveGuardProc);
+    DBG("[MaxPane] InstallImGuiMoveGuard: hwnd=%p orig=%p\n", (void*)hwnd, (void*)orig);
+  }
+}
+
+static void RemoveImGuiMoveGuard(HWND hwnd)
+{
+  if (!hwnd) return;
+  WNDPROC orig = (WNDPROC)(INT_PTR)GetProp(hwnd, kImGuiGuardProp);
+  if (orig) {
+    SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)orig);
+    RemoveProp(hwnd, kImGuiGuardProp);
+    DBG("[MaxPane] RemoveImGuiMoveGuard: hwnd=%p restored=%p\n", (void*)hwnd, (void*)orig);
+  }
+}
+// RAII marker for MaxPane-initiated child repositions (RepositionAll, the
+// CheckAlive snap-back) so the move guard lets them through.
+struct SelfChildMoveScope {
+  SelfChildMoveScope() { s_selfChildMove = true; }
+  ~SelfChildMoveScope() { s_selfChildMove = false; }
+};
+#else
+static inline void InstallImGuiMoveGuard(HWND) {}
+static inline void RemoveImGuiMoveGuard(HWND) {}
+struct SelfChildMoveScope {
+  SelfChildMoveScope() {}
+  ~SelfChildMoveScope() {}
+};
+#endif
+
 // Known dynamic-title window prefixes.
 // Windows whose titles start with one of these change their title at runtime
 // (e.g. MIDI Editor title changes per MIDI item / project tab).
@@ -168,6 +248,17 @@ struct FindWindowData {
 static BOOL CALLBACK FindWindowEnumProc(HWND hwnd, LPARAM lParam)
 {
   FindWindowData* data = (FindWindowData*)lParam;
+#ifdef _WIN32
+  // U1 — EnumWindows visits every top-level window on the desktop, and the
+  // titleless-window module fallback below then runs OpenProcess-class
+  // syscalls against OTHER apps' windows (a large share of one search's
+  // 10-20ms). A window outside the REAPER process can never be a capture
+  // target (SetParent is same-process), and title-matching foreign apps was
+  // a latent mis-capture ("Toolbar 3 - Chrome" substring-matched "Toolbar 3").
+  DWORD winPid = 0;
+  GetWindowThreadProcessId(hwnd, &winPid);
+  if (winPid != GetCurrentProcessId()) return TRUE;
+#endif
   char buf[512];
   GetWindowText(hwnd, buf, sizeof(buf));
   // Sprint 1 Entry 15 follow-up — Win32 Direct2D plugins (ReaBeat, Reamix,
@@ -324,6 +415,31 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
   return nullptr;
 }
 
+// U4 (ADR-065) — cross-instance capture arbitration. Each container owns its
+// own WindowManager and there was NO registry of who holds which HWND: two
+// instances whose saved state referenced the same window both captured it,
+// and each CheckAlive tick "reclaimed" it from the other — a 500ms parent
+// ping-pong the user saw as permanent flicker (#61). Query live instances at
+// decision time instead of keeping a registry that release paths could
+// desync (the release/close path is a known regression magnet).
+static bool IsCapturedByOtherInstance(HWND hwnd, const WindowManager* self)
+{
+  if (!hwnd) return false;
+  bool owned = false;
+  InstanceManager::Get().ForEach([&](int /*id*/, MaxPaneContainer& c) {
+    if (owned) return;
+    const WindowManager& wm = c.GetWinMgr();
+    if (&wm == self) return;
+    if (wm.IsWindowCaptured(hwnd)) owned = true;
+  });
+  return owned;
+}
+
+bool WindowManager::IsCapturedByAnotherInstance(HWND hwnd, const WindowManager* self)
+{
+  return IsCapturedByOtherInstance(hwnd, self);
+}
+
 // Diagnostic: dump all visible window titles (call when debugging search failures)
 #ifdef MAXPANE_DEBUG
 struct DumpWindowData {
@@ -409,6 +525,12 @@ bool WindowManager::CaptureByIndex(int paneId, int knownWindowIndex, HWND contai
   }
 
   if (IsWindowCaptured(hwnd)) return false;
+  // U4 (ADR-065) — never steal a window another live instance holds.
+  if (IsCapturedByOtherInstance(hwnd, this)) {
+    DBG("[MaxPane] CaptureByIndex: '%s' hwnd=%p already captured by another instance — rejecting\n",
+        def.name, (void*)hwnd);
+    return false;
+  }
 
   TabEntry& tab = ps.tabs[ps.tabCount];
   memset(&tab, 0, sizeof(TabEntry));
@@ -479,7 +601,7 @@ static bool IsReaImGuiSoftwareRenderingOn()
 }
 #endif
 
-bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction, const char* actionCmd)
+bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction, const char* actionCmd, bool transient)
 {
   DBG("[MaxPane] CaptureArbitraryWindow: pane=%d name='%s' hwnd=%p action=%d cmd='%s'\n",
       paneId, displayName ? displayName : "(null)", (void*)targetHwnd, toggleAction,
@@ -502,12 +624,19 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
     DBG("[MaxPane] CaptureArbitraryWindow: REJECTED hwnd=%p already captured\n", (void*)targetHwnd);
     return false;
   }
+  // U4 (ADR-065) — never steal a window another live instance holds.
+  if (IsCapturedByOtherInstance(targetHwnd, this)) {
+    DBG("[MaxPane] CaptureArbitraryWindow: REJECTED hwnd=%p captured by another instance\n",
+        (void*)targetHwnd);
+    return false;
+  }
 
   TabEntry& tab = ps.tabs[ps.tabCount];
   memset(&tab, 0, sizeof(TabEntry));
 
   safe_strncpy(tab.name, displayName, sizeof(tab.name));
   safe_strncpy(tab.searchTitle, displayName, sizeof(tab.searchTitle));
+  tab.transient = transient;  // U14 (ADR-070) — never persisted
   // Audit M3.4 — tab.name round-trips through "KEY VALUE" lines in the RPP
   // <MAXPANE_STATE> chunk; a script window titled with an embedded newline
   // would split the chunk line and corrupt the saved project block. Flatten
@@ -1583,6 +1712,10 @@ bool WindowManager::DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd
     SubclassToolbar(targetHwnd);
   }
 
+  // U10 (ADR-067) — captured ReaImGui children get the Win32 move-veto
+  // subclass so background/titlebar drags can't slide them out of the pane.
+  if (tab.isReaImGui) InstallImGuiMoveGuard(targetHwnd);
+
   DBG("[MaxPane] DoCapture: DONE hwnd=%p captured=true\n", (void*)targetHwnd);
   return true;
 }
@@ -1938,6 +2071,16 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
       (tab.hwnd && IsWindow(tab.hwnd)) ? 1 : 0);
 
   if (tab.hwnd && IsWindow(tab.hwnd)) {
+    // U7-B (ADR-069) — swallow every click on this toolbar for the duration
+    // of the release; the childless-toolbar forward path could otherwise
+    // fire a button from the release gesture's WM_LBUTTONUP (#47).
+    s_releasingToolbarHwnd = tab.hwnd;
+
+    // U10 (ADR-067) — drop the move-veto FIRST: the release protocols below
+    // reposition the window to its pre-capture rect, and the guard would
+    // veto that as an "external" move.
+    if (tab.isReaImGui) RemoveImGuiMoveGuard(tab.hwnd);
+
     // F-D (forum v2.0.6) — the toolbar subclass is now removed at fx_done,
     // AFTER the toggle/reparent below finishes pumping messages. Removing it
     // here (the old spot) let a stray WM_LBUTTONUP from the release gesture
@@ -1963,7 +2106,7 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
     // IsWindow re-check is mandatory: a script window can be DESTROYED by
     // its own toggle inside the release protocol (Linux close-X crash —
     // GetProp on a freed SWELL-generic HWND is use-after-free).
-    if (IsWindow(tab.hwnd)) UnsubclassToolbar(tab.hwnd);
+    if (IsWindow(tab.hwnd)) { UnsubclassToolbar(tab.hwnd); RemoveImGuiMoveGuard(tab.hwnd); }
     if (returnVisible) {
       // F-Release (v2.0.6) — the whole point: leave the detached window VISIBLE
       // instead of hiding it. SW_SHOW + a forced Cocoa layout/display pass (SWELL
@@ -1994,6 +2137,8 @@ void WindowManager::DoRelease(TabEntry& tab, bool toggleOff, bool returnVisible)
       DBG("[MaxPane] DoRelease: hwnd already destroyed — skip hide tail '%s'\n",
           tab.name);
     }
+
+    s_releasingToolbarHwnd = nullptr;  // U7-B (ADR-069) — release finished
   }
 
   tab.hwnd = nullptr;
@@ -2012,6 +2157,26 @@ static void ShiftTabsLeft(TabEntry* tabs, int& count, int removeIndex)
     tabs[i] = tabs[i + 1];
   count--;
   memset(&tabs[count], 0, sizeof(TabEntry));
+}
+
+// U14 (ADR-070) — follow-mode switch: drop every transient tab in the pane.
+// FX windows release on the hide path (DoRelease returnVisible=false ->
+// TrackFX-managed hide, no toggle, no stale-list entry).
+int WindowManager::ReleaseTransientTabs(int paneId)
+{
+  if (paneId < 0 || paneId >= MAX_PANES) return 0;
+  PaneState& ps = m_panes[paneId];
+  int released = 0;
+  for (int t = ps.tabCount - 1; t >= 0; t--) {
+    if (!ps.tabs[t].transient) continue;
+    DoRelease(ps.tabs[t], /*toggleOff=*/false, /*returnVisible=*/false);
+    ShiftTabsLeft(ps.tabs, ps.tabCount, t);
+    if (t < ps.activeTab) ps.activeTab--;
+    released++;
+  }
+  if (ps.tabCount == 0) ps.activeTab = -1;
+  else if (ps.activeTab >= ps.tabCount) ps.activeTab = ps.tabCount - 1;
+  return released;
 }
 
 void WindowManager::SetActiveTab(int paneId, int tabIndex)
@@ -2242,14 +2407,34 @@ void WindowManager::ReleaseAllSelective(const int* staleActions, int staleCount)
 // all consult this so the captured window and the bar can never disagree.
 int WindowManager::PaneHeaderHeight(int paneId) const
 {
-  if (!m_hideSingleTabBar) return TAB_BAR_HEIGHT;
   const PaneState* ps = GetPaneState(paneId);
+  // U12 (ADR-068) — clean mode: panes that hold a window get NO header at
+  // all (Win/Linux; WS_CHILD children are clipped, splitters + nav bar stay
+  // as the control surface). macOS keeps the ADR-026 8px sliver — captured
+  // child views paint ABOVE the container, so zero would leave the pane
+  // without a mouse surface. Empty panes always keep the full header (CTA).
+  if (m_hideAllTabBars && ps && ps->tabCount > 0) {
+    // U14 follow-up (owner decision 2026-07-02) — the follow pane keeps its
+    // full tab bar even in clean mode: its tabs are the FX-chain switcher,
+    // and hiding them made follow mode unusable with clean mode on.
+    if (m_followActive && paneId == 0) return TAB_BAR_HEIGHT;
+#ifdef __APPLE__
+    return TAB_BAR_COLLAPSED_HEIGHT;
+#else
+    return 0;
+#endif
+  }
+  if (!m_hideSingleTabBar) return TAB_BAR_HEIGHT;
   if (ps && ps->tabCount == 1) return TAB_BAR_COLLAPSED_HEIGHT;
   return TAB_BAR_HEIGHT;  // multi-tab AND empty panes (capture CTA) keep full
 }
 
 void WindowManager::RepositionAll(const SplitTree& tree)
 {
+  // U10 (ADR-067) — everything RepositionAll does to captured children is a
+  // MaxPane-intended reposition; let it through the ImGui move guard.
+  SelfChildMoveScope selfMove;
+
   const int* leafList = tree.GetLeafList();
   int leafCount = tree.GetLeafCount();
 
@@ -2412,8 +2597,8 @@ bool WindowManager::HasCapturedReaImGui() const
 // coords are client-relative. ScreenToClient of both corners + min/max
 // lands in the same coordinate system RepositionAll's SetWindowPos uses,
 // on all three platforms.
-static void GetChildRectInParentClient(HWND child, HWND parent,
-                                       int* x, int* y, int* w, int* h)
+void WindowManager::GetChildRectInParentClient(HWND child, HWND parent,
+                                               int* x, int* y, int* w, int* h)
 {
   RECT r = {};
   GetWindowRect(child, &r);
@@ -2425,6 +2610,20 @@ static void GetChildRectInParentClient(HWND child, HWND parent,
   *y = (a.y < b.y) ? a.y : b.y;
   *w = (a.x < b.x) ? (b.x - a.x) : (a.x - b.x);
   *h = (a.y < b.y) ? (b.y - a.y) : (a.y - b.y);
+}
+
+// U11 (ADR-067, mequaz #66) — a script/JSFX can close and re-open its window
+// at will (the Swing sampler cycles its per-pad FX / browser / step-sequencer
+// windows from a JSFX). A tab whose window can come back by title should
+// survive the window's death and auto-recapture on reappearance — removing it
+// (the old behavior) meant every script round-trip ejected the window from
+// its pane. FX-identity tabs are excluded: closing an FX float is a routine
+// user action and silently re-grabbing it would be a behavior regression.
+static bool TabSurvivesWindowClose(const TabEntry& tab)
+{
+  if (!tab.isArbitrary || !tab.searchTitle[0]) return false;
+  if (FxCapture::IsFxIdentity(tab.actionCmd)) return false;
+  return tab.actionCmd[0] != '\0' || tab.toggleAction > 0;
 }
 
 bool WindowManager::CheckAlive()
@@ -2446,6 +2645,17 @@ bool WindowManager::CheckAlive()
           if (p != m_containerHwnd) {
             DBG("[MaxPane] CheckAlive: external reparent for '%s' hwnd=%p actual=%p expected=%p\n",
                 tab.name, (void*)tab.hwnd, (void*)p, (void*)m_containerHwnd);
+            // U4 (ADR-065) — if ANOTHER live instance holds this window,
+            // do not reclaim: that instance owns it now, and reclaiming
+            // starts the 500ms parent tug-of-war the user sees as flicker
+            // (#61). Drop our tab and leave the window alone (dead-tab path
+            // below strips our toolbar subclass and removes the entry).
+            if (IsCapturedByOtherInstance(tab.hwnd, this)) {
+              DBG("[MaxPane] CheckAlive: '%s' owned by another instance — dropping our tab\n",
+                  tab.name);
+              if (tab.hwnd && IsWindow(tab.hwnd)) { UnsubclassToolbar(tab.hwnd); RemoveImGuiMoveGuard(tab.hwnd); }
+              dead = true;
+            } else {
             // Try to reclaim. DoCapture (with B1 verification) returns false
             // if SetParent doesn't stick — then we fall through to release.
             HWND savedOriginal = tab.originalParent;
@@ -2460,9 +2670,10 @@ bool WindowManager::CheckAlive()
               // B6 follow-up: the HWND is alive but no longer ours. Strip
               // our toolbar subclass before abandoning it, or it lingers on
               // an HWND we don't track anymore.
-              if (tab.hwnd && IsWindow(tab.hwnd)) UnsubclassToolbar(tab.hwnd);
+              if (tab.hwnd && IsWindow(tab.hwnd)) { UnsubclassToolbar(tab.hwnd); RemoveImGuiMoveGuard(tab.hwnd); }
               dead = true;
             }
+            }  // U4 arbitration else-block end
           }
           // ADR-061 item #2 (v2.2.1) — drift watchdog. A captured ReaImGui
           // script can re-assert its own size every frame (ImGui size
@@ -2498,6 +2709,8 @@ bool WindowManager::CheckAlive()
                  relY > tab.lastSetY + 4 || relY < tab.lastSetY - 4)) {
               DBG("[MaxPane][DRIFT] '%s' moved to local=(%d,%d), snapping back to (%d,%d)\n",
                   tab.name, relX, relY, tab.lastSetX, tab.lastSetY);
+              // U10 (ADR-067) — mark as self-move so the guard admits it.
+              SelfChildMoveScope selfMove;
               SetWindowPos(tab.hwnd, nullptr, tab.lastSetX, tab.lastSetY, 0, 0,
                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
               SendMessage(tab.hwnd, WM_MOVE, 0,
@@ -2532,10 +2745,12 @@ bool WindowManager::CheckAlive()
           }
         }
         if (dead) {
-          if (tab.dynamicTitle) {
-            // Dynamic-title tab lost its HWND (e.g. MIDI Editor on project switch).
-            // Keep the tab entry for recapture on next tick.
-            DBG("[MaxPane] CheckAlive: dynamic tab '%s' lost HWND, waiting for recapture\n", tab.name);
+          if (tab.dynamicTitle || TabSurvivesWindowClose(tab)) {
+            // Dynamic-title tab lost its HWND (e.g. MIDI Editor on project
+            // switch), or a script-openable arb tab whose window a script
+            // closed (U11). Keep the tab entry for recapture on next tick.
+            DBG("[MaxPane] CheckAlive: %s tab '%s' lost HWND, waiting for recapture\n",
+                tab.dynamicTitle ? "dynamic" : "script-sticky", tab.name);
             tab.hwnd = nullptr;
             tab.captured = false;
             changed = true;
@@ -2554,8 +2769,8 @@ bool WindowManager::CheckAlive()
             changed = true;
           }
         }
-      } else if (tab.dynamicTitle && tab.searchTitle[0]) {
-        // Uncaptured dynamic tab — try to recapture.
+      } else if (tab.searchTitle[0] && (tab.dynamicTitle || TabSurvivesWindowClose(tab))) {
+        // Uncaptured dynamic or script-sticky tab (U11) — try to recapture.
         // Audit M3.3 — FindReaperWindow is a full-window-tree enumeration
         // (EnumWindows + GetWindowText per window). A tab whose window never
         // comes back (closed MIDI editor) used to pay that every 500 ms
@@ -2566,7 +2781,9 @@ bool WindowManager::CheckAlive()
         }
         tab.recaptureBackoff++;
         HWND h = FindReaperWindow(tab.searchTitle, m_containerHwnd);
-        if (h && !IsWindowCaptured(h)) {
+        // U4 (ADR-065) — a window held by another instance is not a recapture
+        // candidate for this one.
+        if (h && !IsWindowCaptured(h) && !IsCapturedByOtherInstance(h, this)) {
           // B3: re-verify capturability between find and capture. REAPER may
           // have destroyed the window (project switch) or moved it into a
           // docker we shouldn't grab — DoCapture would silently fail otherwise.

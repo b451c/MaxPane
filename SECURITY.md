@@ -4,15 +4,15 @@
 
 | Version | Supported |
 |---------|-----------|
-| 1.3.x   | Yes       |
-| 1.2.x   | Yes       |
-| < 1.2   | No        |
+| 2.3.x (latest) | Yes |
+| older 2.x      | Fixes ship in the next release — update via ReaPack |
+| 1.x            | No |
 
 ## Reporting a Vulnerability
 
 If you discover a security vulnerability in MaxPane, please report it via [GitHub Issues](https://github.com/b451c/MaxPane/issues).
 
-Since MaxPane is a native C++ REAPER extension that runs locally with no network access, the attack surface is limited to malformed project files or state data. However, all reports are taken seriously.
+MaxPane is a native C++ REAPER extension that runs locally; its only network access is the optional update check (an HTTPS GET of this repository's ReaPack manifest on GitHub, toggleable in Settings). The attack surface is essentially malformed project files or state data. However, all reports are taken seriously.
 
 ### What to expect
 

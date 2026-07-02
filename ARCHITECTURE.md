@@ -123,7 +123,8 @@ same `MaxPaneContainer*` via `this->`.
 |------|------|
 | `window_manager.h/cpp` | The heart of capture. `TabEntry` is the per-window record (name, searchTitle, action, HWND, originalParent, originalRect, captured flag, pinned flag, …). `PaneState[MAX_PANES]` holds the per-pane tab arrays. `DoCapture` / `DoRelease` perform the SetParent dance. `CheckAlive` is the per-tick liveness scan. `FindReaperWindow` walks the REAPER window tree by title (with the dock-frame priority described in §6 of this doc). |
 | `capture_queue.h/cpp` | Async retry queue. `EnqueueKnown` / `EnqueueArbitrary` queue a target; `Tick` polls `FindReaperWindow` until either the window appears (≤30 retries for known, ≤200 for arbitrary) or we give up. Handles the dock-frame wait for ReaImGui scripts (`"Title (docked)"` precedence) and the script-action guard (`alreadyOpen` check before firing the toggle). Failures (retry exhaustion, pane full, already captured) surface to the user via `PopFailureToast` — see §7. |
-| `fx_capture.h/cpp` | v2.0.4 (ADR-037) — AU/VST/JSFX plugin-window capture identity. Persists the same `(track GUID, FX GUID)` pair REAPER itself stores in RPP `FXID {…}` blocks (`fx@…` / `takefx@…` encodings inside the `arb:` envelope; `master` sentinel for master-track FX), so a captured plugin UI survives FX reorder, rename, and restart. Resolve / show / hide via `TrackFX_Show`. Pure REAPER SDK — zero platform `#ifdef`s. |
+| `fx_capture.h/cpp` | v2.0.4 (ADR-037) — AU/VST/JSFX plugin-window capture identity. Persists the same `(track GUID, FX GUID)` pair REAPER itself stores in RPP `FXID {…}` blocks (`fx@…` / `takefx@…` encodings inside the `arb:` envelope; `master` sentinel for master-track FX), so a captured plugin UI survives FX reorder, rename, and restart. Resolve / show / hide via `TrackFX_Show`. Pure REAPER SDK — zero platform `#ifdef`s. v2.3.0 (ADR-070) adds `ListTrackFxIdentities` — enumerates a track's main chain into identity strings for one-click "Capture track FX chain" and the experimental follow-selected-track mode. |
+| `overlay_frame.h/cpp` | v2.2.0 (ADR-060) — Win32/Linux visual feedback: a frame of four thin top-level strips drawn around a rect (interior uncovered, so no alpha or click-through tricks needed). Backs the capture hover outline and the drag-to-dock drop-zone preview. macOS keeps its native overlay path in `swell_cocoa_helpers.mm`. |
 | `context_menu.h/cpp` | Pane- and tab-context menu construction. `MenuIds` namespace centralizes command IDs. `EnumOpenWindowsProc` builds the "Open Windows" submenu by enumerating top-level windows. Capture submenus, Workspace submenus, Favorites submenus, Color submenu, Close submenu (ADR-030). |
 
 ### Persistence
@@ -897,7 +898,7 @@ both the container itself and any captured child windows route correctly.
 
 ---
 
-## 14. Feature surface, v2.0–v2.1 (one-liners)
+## 14. Feature surface, v2.0–v2.3 (one-liners)
 
 For each feature: where it lives + what ADR justifies it. Detail lives in
 `docs/v2/V2_DECISIONS.md` (local-only).
@@ -927,6 +928,15 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 | Screenset ("Window sets") integration | `screenset.{h,cpp}` | ADR-050 |
 | ReaImGui size-guard (dock min-clamp + pane floor-hide), scoped to `isReaImGui` hosts only | `window_manager.{h,cpp}`, `container.cpp` | ADR-045 + ADR-051 (v2.1.1 narrowing — docked toolbars/FX are never floor-hidden) |
 | Main-toolbar capture exclusion + corrected toolbar action table (`TOOLBAR_ACTION_RANGES`, Toolbars 17–32) | `config.{h,cpp}`, exclusion checks in the capture entry points | ADR-052 |
+| Capture/drag visual feedback on Win32/Linux (hover outline + drop-zone frame) | `overlay_frame.{h,cpp}` | ADR-060 |
+| Linux GL-ReaImGui conditional capture (gated on ReaImGui software rendering) + capture-refusal reason toasts | `window_manager.{h,cpp}` (`SetCaptureRefusal`/`TakeCaptureRefusal`) | ADR-061/062/063 |
+| Startup stale-cleanup cheap-by-default (per-tick top-level probe, deep walk on 3 sweep ticks, Win32 foreign-process guard) | `window_manager.cpp` (`FindTopLevelGhost`, `FindWindowEnumProc`), `container.cpp` `startupTimerFunc` | ADR-064 |
+| Startup/restore orchestration: `open_at_save` gate, cross-instance capture arbitration, CaptureQueue WAITING short-circuit, tri-state auto-open, dock self-heal | `container_state.cpp`, `window_manager.cpp` (`IsCapturedByAnotherInstance`), `capture_queue.cpp`, `project_state.cpp` | ADR-065 |
+| Floating geometry restore fixed on Win32 (`m_inCreate` guard vs WM_SIZE-during-Create clobber) + true-maximize persistence | `container.cpp` | ADR-066 |
+| ReaImGui move-veto subclass (Win32) + script-sticky tab recapture | `window_manager.cpp` (`ImGuiMoveGuardProc`, `TabSurvivesWindowClose`) | ADR-067 |
+| Clean mode (hide occupied-pane tab bars), splitter color presets, pane-remainder paint fill, DPI-scaled tooltips | `window_manager.cpp` (`PaneHeaderHeight`), `container_paint.cpp`, `config.cpp`, `swell_cocoa_helpers.h` (`MaxPaneDpiScaleForDC`) | ADR-068 |
+| Toolbar release-gesture click swallow; bindable always-on-top action; hide-from-taskbar pref (Win32 `WS_EX_TOOLWINDOW`) | `window_manager.cpp`, `main.cpp`, `container.cpp` (`ApplyFloatingWindowChrome`) | ADR-069 |
+| Track FX chain capture (one-shot) + follow-selected-track mode (experimental; transient tabs excluded from all persistence writers) | `fx_capture.{h,cpp}`, `container.cpp` (`FollowTick`, `CaptureTrackFxChain`) | ADR-070 |
 
 ---
 
@@ -980,13 +990,25 @@ the last silent stubs into either working implementations or registered gaps.
 - Dark-mode "Auto" follows GNOME/GTK only (`gsettings` `color-scheme` probe,
   cached per session); KDE and other desktops fall back to light. The manual
   Settings override always wins.
-- No crosshair cursor and no hover-outline overlay during capture-by-click
-  (`SetCaptureCursorActive` / `ShowCaptureHighlight` are no-ops).
+- No crosshair cursor during capture-by-click (`SetCaptureCursorActive` is
+  a no-op). The hover outline and drag drop-zone frame DO exist since
+  v2.2.0 via `overlay_frame.{h,cpp}` (ADR-060).
+- Tooltip DPI scaling assumes 1.0 (`MaxPaneDpiScaleForDC`) — HiDPI Linux
+  setups get unscaled tooltips (registered gap, ADR-068).
+- Captured ReaImGui windows dragged by their background rely on the
+  ~0.5 s CheckAlive snap-back — the Win32 move-veto subclass (ADR-067)
+  has no SWELL-generic equivalent.
 
 **Win32:**
-- No crosshair cursor and no hover-outline overlay during capture-by-click
-  (cursor is managed per `WM_SETCURSOR`; the overlay would need a layered
-  window). Esc-cancel works natively.
+- No crosshair cursor during capture-by-click (cursor is managed per
+  `WM_SETCURSOR`). The hover outline and drag frame exist since v2.2.0
+  (ADR-060). Esc-cancel works natively.
+
+**macOS + Linux:**
+- Maximize persistence for floating mode is Win32-only (SWELL has no
+  `IsZoomed`); macOS/Linux restore size + position only (ADR-066).
+- The hide-from-taskbar pref is Win32-only (`WS_EX_TOOLWINDOW`); no
+  taskbar concept on macOS, no portable API on Linux (ADR-069).
 
 ---
 

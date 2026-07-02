@@ -11,10 +11,19 @@
 #define IDC_SET_SHOWNAVBAR   2011
 // ADR-055 — collapse a pane's tab bar to a sliver when it has a single tab.
 #define IDC_SET_HIDETABBAR   2012
+// U12/ADR-068 — clean mode: hide the header of every occupied pane.
+#define IDC_SET_HIDEALLTABS  2013
+// U15/ADR-069 — hide the floating MaxPane from the Windows taskbar.
+#define IDC_SET_HIDETASKBAR  2014
+// U14/ADR-070 — experimental: follow the selected track's FX in pane 1.
+#define IDC_SET_FOLLOWFX     2015
 
 // Appearance section
 #define IDC_SET_DARK_GROUP   2020
 #define IDC_SET_DARK_CYCLE   2021
+// U13/ADR-068 — inter-pane border (splitter) color preset cycle.
+#define IDC_SET_BORDER_GROUP 2022
+#define IDC_SET_BORDER_CYCLE 2023
 
 // Hotkeys section
 #define IDC_SET_HOTKEYS_LBL  2030

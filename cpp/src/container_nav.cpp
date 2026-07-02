@@ -42,6 +42,9 @@ void MaxPaneContainer::LoadNavBarPref()
   // Pushed into WindowManager: layout/paint/hit-testing consult it there.
   const char* hst = g_GetExtState(EXT_SECTION, "hide_single_tab_bar");
   m_winMgr.SetHideSingleTabBar(hst && hst[0] == '1' && hst[1] == '\0');
+  // U12 (ADR-068) — clean mode: hide the header of every occupied pane.
+  const char* hat = g_GetExtState(EXT_SECTION, "hide_tab_bars");
+  m_winMgr.SetHideAllTabBars(hat && hat[0] == '1' && hat[1] == '\0');
 }
 
 void MaxPaneContainer::SaveNavBarPref()
@@ -207,11 +210,19 @@ void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
       {
         bool wasVisible = m_navBarVisible;
         bool wasHideTab = m_winMgr.GetHideSingleTabBar();
+        bool wasHideAll = m_winMgr.GetHideAllTabBars();
         LoadNavBarPref();
+        // U13 (ADR-068) — splitter color may have changed; brushes are
+        // cached, so recreate them and let the Invalidate above repaint.
+        RefreshChromeBrushes();
+        // U15 (ADR-069) — hide_from_taskbar may have changed; re-apply the
+        // floating chrome (no-op when docked).
+        RefreshFloatingChrome();
         if (wasVisible != m_navBarVisible) {
           m_tree.SetOrigin(0, NavBarReservedHeight());
           RefreshLayout();
-        } else if (wasHideTab != m_winMgr.GetHideSingleTabBar()) {
+        } else if (wasHideTab != m_winMgr.GetHideSingleTabBar() ||
+                   wasHideAll != m_winMgr.GetHideAllTabBars()) {
           // Pane header heights changed — reposition captured windows.
           RefreshLayout();
         }

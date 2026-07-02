@@ -24,7 +24,10 @@ void ForceHideWindow(HWND hwnd);
 // window: title bar, close + miniaturize + resize controls, given title.
 // Called after SetParent(m_hwnd, nullptr) recreates the NSWindow on detach.
 // Safe to call on subviews (no-op when view isn't a contentView).
-void ApplyFloatingWindowChrome(HWND hwnd, const char* title);
+// U15 (ADR-069) — hideFromTaskbar is a Windows concept (WS_EX_TOOLWINDOW);
+// mac/Linux implementations ignore it.
+void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
+                               bool hideFromTaskbar = false);
 
 // F1a (ADR-024) — clamp a window rect to the visible frame of the screen
 // it mostly occupies (NSScreen with the largest intersection with rect).
@@ -39,8 +42,9 @@ void ClampRectToVisibleScreen(RECT* rect);
 void OpenUrlPlatform(const char* url);
 
 // C5 (ADR-027) — keep a top-level floating NSWindow above other apps.
-// Cocoa: NSFloatingWindowLevel vs NSNormalWindowLevel. Win32 will land in
-// Sprint 1 via SetWindowPos HWND_TOPMOST; Linux via gtk_window_set_keep_above.
+// Cocoa: NSFloatingWindowLevel vs NSNormalWindowLevel. Win32: SetWindowPos
+// HWND_TOPMOST. Linux: registered no-op — SWELL-generic exposes no portable
+// topmost API (see the Linux block below + ARCHITECTURE.md platform gaps).
 // Safe to call on subviews (no-op when view isn't a contentView).
 void SetWindowAlwaysOnTop(HWND hwnd, bool onTop);
 
@@ -60,6 +64,11 @@ void BlitBGRABitmapMacOS(HDC hdc, const void* bgra, int sw, int sh,
 // plugin tab becomes the key window. Cocoa only delivers mouseMoved to the key
 // window otherwise; macOS-specific (Win32/GTK deliver move events regardless).
 void EnableContainerMouseTracking(HWND hwnd);
+
+// U9 (ADR-068) — DPI scale for owner-drawn chrome. Cocoa works in points
+// (Retina scaling is transparent), so 1.0 here; the real work is in the
+// Win32 block below. Linux HiDPI stays a documented gap.
+inline double MaxPaneDpiScaleForDC(HDC) { return 1.0; }
 
 // ADR-048 (forum v2.0.6) — capture-by-click safety. Reparenting a window
 // while an app-modal dialog is up (e.g. REAPER's "Save changes?" on quit)
@@ -137,16 +146,42 @@ inline void ForceHideWindow(HWND hwnd)
   if (hwnd) ShowWindow(hwnd, SW_HIDE);
 }
 
-inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
+inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
+                                      bool hideFromTaskbar = false)
 {
   if (!hwnd) return;
   LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
   style &= ~(WS_CHILD | WS_POPUP);
   style |= WS_OVERLAPPEDWINDOW | WS_VISIBLE;
   SetWindowLongPtr(hwnd, GWL_STYLE, style);
+  // U15 (ADR-069, mb945 #60) — WS_EX_TOOLWINDOW keeps the floating window
+  // out of the taskbar (and Alt-Tab — a documented trade-off of the pref).
+  LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+  if (hideFromTaskbar) exStyle |= WS_EX_TOOLWINDOW;
+  else                 exStyle &= ~WS_EX_TOOLWINDOW;
+  SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
   if (title && title[0]) SetWindowTextA(hwnd, title);
   SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
     SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+// U9 (ADR-068, X-Raym #67) — DPI scale for owner-drawn chrome. MaxPane
+// paints tooltips with pixel fonts/boxes; REAPER runs DPI-aware, so at 125%
+// scaling Windows does NOT magnify the plugin's GDI output and a 12px font
+// renders ~6px glyphs next to the scaled UI ("tooltips are minuscule").
+// GetDpiForWindow is Win10 1607+ and REAPER still supports Win7 — resolve
+// dynamically, fall back to the DC's LOGPIXELSX.
+inline double MaxPaneDpiScaleForDC(HDC hdc)
+{
+  typedef UINT (WINAPI *GetDpiForWindowFn)(HWND);
+  static GetDpiForWindowFn s_getDpiForWindow = (GetDpiForWindowFn)(void*)
+      GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForWindow");
+  UINT dpi = 0;
+  HWND wnd = hdc ? WindowFromDC(hdc) : nullptr;
+  if (s_getDpiForWindow && wnd) dpi = s_getDpiForWindow(wnd);
+  if (!dpi && hdc) dpi = (UINT)GetDeviceCaps(hdc, LOGPIXELSX);
+  if (!dpi) dpi = 96;
+  return dpi / 96.0;
 }
 
 inline void ClampRectToVisibleScreen(RECT* rect)
@@ -242,7 +277,9 @@ inline void ForceHideWindow(HWND) {}
 // unmovable, uncloseable GTK window. SWELL-generic decorates from the style
 // bits (swell_oswindow_manage), so restoring them + SWP_FRAMECHANGED is the
 // whole job. Runtime verification on a Linux VM pending.
-inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
+// U15 (ADR-069) — hideFromTaskbar is a Windows concept; ignored here.
+inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
+                                      bool /*hideFromTaskbar*/ = false)
 {
   if (!hwnd) return;
   // LONG_PTR end-to-end — SWELL's GetWindowLong returns LONG_PTR, and the
@@ -295,6 +332,10 @@ inline void OpenUrlPlatform(const char* url)
 // Revisit if SWELL grows SetWindowLevel-equivalent support.
 inline void SetWindowAlwaysOnTop(HWND, bool) {}
 inline void EnableContainerMouseTracking(HWND) {}
+// U9 (ADR-068) — Linux HiDPI chrome scaling is a pre-existing documented gap
+// (V2_PROGRESS "nav-bar advisory scaling"); tooltips keep 1.0 until that
+// lands as a whole.
+inline double MaxPaneDpiScaleForDC(HDC) { return 1.0; }
 // ADR-048 — capture-by-click safety. Generic SWELL_DialogBox disables all
 // other top-level windows during a modal (swell-dlg-generic.cpp), so the
 // disabled REAPER main window is a reliable modal marker on Linux/GTK.

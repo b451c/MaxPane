@@ -36,6 +36,16 @@ enum class IdentityKind {
 constexpr int kIdentityMaxLen = 128;   // matches TabEntry::actionCmd
 constexpr int kGuidStrLen = 64;        // guidToString destNeed64
 
+// U14 (ADR-070) — enumerate a track's main FX chain into identity strings +
+// display names ("capture track FX chain"). Fills up to maxCount entries;
+// returns the TOTAL chain length (callers detect truncation by total >
+// maxCount). recFX are excluded — the one-click chain ask is about the main
+// chain; recFX stay click-capturable individually.
+int ListTrackFxIdentities(MediaTrack* track,
+                          char (*idsOut)[kIdentityMaxLen],
+                          char (*namesOut)[256],
+                          int maxCount);
+
 // Resolved (track, fxIndex) tuple. For TakeFx, `take` is non-null and
 // `track` is the take's parent track (filled for diagnostics; index uses
 // `take`). For MasterFx, `track` is the master track. `fxIndex` already

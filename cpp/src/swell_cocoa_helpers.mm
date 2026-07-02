@@ -68,7 +68,7 @@ void ForceHideWindow(HWND hwnd)
   }
 }
 
-void ApplyFloatingWindowChrome(HWND hwnd, const char* title)
+void ApplyFloatingWindowChrome(HWND hwnd, const char* title, bool /*hideFromTaskbar*/)
 {
   if (!hwnd) return;
   NSView* view = (NSView*)hwnd;

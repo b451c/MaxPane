@@ -13,6 +13,7 @@
 #include "nav_bar.h"
 #include "config.h"   // MAX_WORKSPACE_NAME (label-buffer sizing)
 #include "nav_icons.h"
+#include "swell_cocoa_helpers.h"   // U9 — MaxPaneDpiScaleForDC (ADR-068)
 #include <cstring>
 #include <cstdio>
 
@@ -487,8 +488,14 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
     text = wsTipBuf;
   }
 
+  // U9 (ADR-068) — scale font + box metrics by the window DPI: REAPER runs
+  // DPI-aware, so at 125%+ Windows scaling GDI does not magnify our output
+  // and the fixed 12px font read as "~5px tooltips" (X-Raym #67).
+  const double dpiScale = MaxPaneDpiScaleForDC(hdc);
+  auto ds = [dpiScale](int v) { return (int)(v * dpiScale + 0.5); };
+
   // Size: measure text + padding.
-  HFONT tipFont = CreateFont(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+  HFONT tipFont = CreateFont(ds(12), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                               CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                               DEFAULT_PITCH, "");
@@ -496,8 +503,8 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
 
   RECT measure = { 0, 0, 0, 0 };
   DrawTextUtf8(hdc,text, -1, &measure, DT_CALCRECT | DT_NOPREFIX | DT_SINGLELINE);
-  int tipW = (measure.right - measure.left) + 16;
-  int tipH = 22;
+  int tipW = (measure.right - measure.left) + ds(16);
+  int tipH = ds(22);
   // Clamp tipW to bar width so very long workspace names don't blow past
   // the container edges; the tooltip inner draw uses DT_SINGLELINE without
   // ellipsis, so a tip wider than the bar would visually clip — clamping
@@ -507,7 +514,7 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
 
   int cx = (anchor.left + anchor.right) / 2;
   int tipX = cx - tipW / 2;
-  int tipY = lay.barRect.bottom + 6;
+  int tipY = lay.barRect.bottom + ds(6);
 
   // Clamp X to bar rect (always-visible-inside-container guarantee)
   if (tipX < lay.barRect.left + 4) tipX = lay.barRect.left + 4;
@@ -536,7 +543,7 @@ void PaintTooltip(HDC hdc, const Layout& lay, int buttonId, const State& state,
 
   SetBkMode(hdc, TRANSPARENT);
   SetTextColor(hdc, pal.tooltipText);
-  RECT inner = { tipRect.left + 8, tipRect.top, tipRect.right - 8, tipRect.bottom };
+  RECT inner = { tipRect.left + ds(8), tipRect.top, tipRect.right - ds(8), tipRect.bottom };
   DrawTextUtf8(hdc,text, -1, &inner,
            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
 

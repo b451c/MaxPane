@@ -44,6 +44,45 @@
 ]]></description>
       </metadata>
 
+      <version name="2.3.0" author="b451c" time="2026-07-02T12:00:00Z">
+        <changelog><![CDATA[A full sweep of the open forum reports, every fix verified live on Windows 11, Ubuntu, and macOS (real 3-display hardware). Headliners: the startup lag is gone, floating-window position restore is fixed at the source on Windows, plus four new features.
+
+Fixed:
+- REAPER startup lag with MaxPane installed (up to minutes on Windows) is gone: startup cleanup work measured 8.2 s -> 1.1 s on the same machine and state, and REAPER stays responsive while it runs.
+- Windows: a floating MaxPane finally remembers its position - the restore never worked on Windows at all (geometry messages during window creation clobbered the loaded position). Verified on a physical 3-display setup including a monitor at negative coordinates.
+- Windows: a maximized floating MaxPane restores maximized, and un-maximizing returns the exact previous rectangle.
+- A deliberately closed second MaxPane instance no longer resurrects on every project load.
+- Two instances no longer fight over the same captured window (500 ms flicker ping-pong replaced by arbitration).
+- FX windows restore with far less flicker when a project loads (~600 ms visible float -> under ~200 ms).
+- "Open MaxPane automatically on startup" now does what it says (was silently ignored unless MaxPane was open at last quit); an early-open instance re-docks itself.
+- Workspaces recall toolbars even when they are not already open.
+- Releasing a captured toolbar can no longer fire one of its buttons mid-gesture.
+- Windows: left-click-dragging a captured ReaImGui window's background no longer slides it out of its pane (move vetoed at the source; Linux keeps the ~0.5 s snap-back).
+- Script windows that close and reopen their own sub-windows keep their pane (auto-recapture instead of ejecting the tab).
+- Stale gray strips / flicker in panes whose window is smaller than the pane are painted over.
+- Tooltips render at the correct size under Windows display scaling (e.g. 125%).
+
+Added:
+- Capture a whole track FX chain in one click (pane menu -> "Capture track FX chain").
+- Follow mode (experimental): pane 1 re-captures the FX chain as you move between tracks; follow tabs are transient, never saved.
+- Clean mode: hide the tab bars of all occupied panes (Settings) - captured windows get every pixel.
+- Pane border color: seven presets, applied live from Settings.
+- Always-on-top is now a bindable action ("MaxPane: Toggle always-on-top (floating mode)").
+- Windows: "Hide floating MaxPane from the taskbar" Settings option (also leaves the Alt-Tab list - Windows design).
+
+Known limitations:
+- Maximize persistence, taskbar-hide, and the ReaImGui drag-veto are Windows-only; the always-on-top toggle is a no-op on Linux; Linux HiDPI tooltip scaling is not implemented yet.
+- The v2.2.1 limitations still stand: Linux GL ReaImGui capture requires ReaImGui's "Disable hardware acceleration"; macOS ReaImGui scripts that enforce a minimum window size can resize REAPER's main window.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.3.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.3.0/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.3.0/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.3.0/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.3.0/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.2.1" author="b451c" time="2026-06-11T01:00:00Z">
         <changelog><![CDATA[ReaImGui script windows (TK Patchbay and friends) get a definitive, per-platform resolution, including two crash fixes found on Linux right after v2.2.0 - this is the release v2.2.0 should have been.
 

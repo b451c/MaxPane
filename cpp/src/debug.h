@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
 
 #ifdef MAXPANE_DEBUG
 // inline (not static): a TU that includes debug.h but never calls DBG()
@@ -26,7 +27,17 @@ inline FILE* dbgFile()
   }
   return f;
 }
-#define DBG(...) do { FILE* _f = dbgFile(); if (_f) { fprintf(_f, __VA_ARGS__); } } while(0)
+// Milliseconds since first DBG call — timing bugs (startup lag, capture
+// latency, watchdog cadence) are undiagnosable from an untimed log.
+inline long dbgElapsedMs()
+{
+  static const auto t0 = std::chrono::steady_clock::now();
+  return (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - t0).count();
+}
+#define DBG(...) do { FILE* _f = dbgFile(); if (_f) { \
+    fprintf(_f, "[%6ld] ", dbgElapsedMs()); \
+    fprintf(_f, __VA_ARGS__); } } while(0)
 #else
 #define DBG(...) ((void)0)
 #endif

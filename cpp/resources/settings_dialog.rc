@@ -17,13 +17,19 @@
 //   - Bottom button breathing space cut from 47 to 22.
 // ADR-055 — third GENERAL checkbox (single-tab bar collapse); sections
 // below shifted +16, dialog height 280 → 296.
+// U12/U13 (ADR-068) — fourth GENERAL checkbox (clean mode) + APPEARANCE
+// "Pane border:" preset cycle row; sections below shifted +36, dialog
+// height 296 → 330.
+// U15 (ADR-069) — fifth GENERAL checkbox (taskbar hide); +16 again,
+// height 330 → 346.
+// U14 (ADR-070) — sixth GENERAL checkbox (follow mode); +16, height 346 → 362.
 
 #ifdef _WIN32
 #include <windows.h>
 #endif
 #include "settings_dialog.h"
 
-IDD_SETTINGS DIALOGEX 0, 0, 360, 296
+IDD_SETTINGS DIALOGEX 0, 0, 360, 362
 STYLE WS_POPUP | WS_VISIBLE | WS_CAPTION | DS_MODALFRAME | DS_CENTER
 CAPTION "MaxPane Settings"
 BEGIN
@@ -39,6 +45,12 @@ BEGIN
                     IDC_SET_SHOWNAVBAR, 25, 38, 320, 14
     AUTOCHECKBOX    "Collapse tab bar when a pane has a single window",
                     IDC_SET_HIDETABBAR, 25, 54, 320, 14
+    AUTOCHECKBOX    "Hide pane tab bars (clean mode)",
+                    IDC_SET_HIDEALLTABS, 25, 70, 320, 14
+    AUTOCHECKBOX    "Hide floating MaxPane from the taskbar (Windows)",
+                    IDC_SET_HIDETASKBAR, 25, 86, 320, 14
+    AUTOCHECKBOX    "Follow selected track's FX in pane 1 (experimental)",
+                    IDC_SET_FOLLOWFX, 25, 102, 320, 14
 #else
     CHECKBOX        "Open MaxPane automatically when REAPER starts",
                     IDC_SET_AUTOOPEN, 25, 22, 320, 14
@@ -46,50 +58,59 @@ BEGIN
                     IDC_SET_SHOWNAVBAR, 25, 38, 320, 14
     CHECKBOX        "Collapse tab bar when a pane has a single window",
                     IDC_SET_HIDETABBAR, 25, 54, 320, 14
+    CHECKBOX        "Hide pane tab bars (clean mode)",
+                    IDC_SET_HIDEALLTABS, 25, 70, 320, 14
+    CHECKBOX        "Hide floating MaxPane from the taskbar (Windows)",
+                    IDC_SET_HIDETASKBAR, 25, 86, 320, 14
+    CHECKBOX        "Follow selected track's FX in pane 1 (experimental)",
+                    IDC_SET_FOLLOWFX, 25, 102, 320, 14
 #endif
 
     // ---- Appearance ----
-    LTEXT           "APPEARANCE", -1, 15, 74, 100, 10
-    LTEXT           "Color mode:", IDC_SET_DARK_GROUP, 25, 92, 60, 12
+    LTEXT           "APPEARANCE", -1, 15, 122, 100, 10
+    LTEXT           "Color mode:", IDC_SET_DARK_GROUP, 25, 140, 60, 12
     PUSHBUTTON      "Auto (follow system)", IDC_SET_DARK_CYCLE,
-                    90, 88, 175, 18
+                    90, 136, 175, 18
+    LTEXT           "Pane border:", IDC_SET_BORDER_GROUP, 25, 162, 60, 12
+    PUSHBUTTON      "Default (system)", IDC_SET_BORDER_CYCLE,
+                    90, 158, 175, 18
 
     // ---- Hotkeys ----
-    LTEXT           "HOTKEYS", -1, 15, 114, 100, 10
+    LTEXT           "HOTKEYS", -1, 15, 182, 100, 10
     LTEXT           "Right-click workspace cards to bind shortcuts. Browse all MaxPane actions:",
-                    IDC_SET_HOTKEYS_LBL, 25, 128, 320, 12
+                    IDC_SET_HOTKEYS_LBL, 25, 196, 320, 12
     PUSHBUTTON      "Open REAPER Actions...", IDC_SET_OPEN_ACTIONS,
-                    25, 142, 130, 18
+                    25, 210, 130, 18
 
     // ---- Updates (v2.0.4 #3) ----
-    LTEXT           "UPDATES", -1, 15, 168, 100, 10
+    LTEXT           "UPDATES", -1, 15, 236, 100, 10
     PUSHBUTTON      "Check for updates", IDC_SET_CHECK_UPDATE,
-                    25, 182, 130, 18
+                    25, 250, 130, 18
 #ifdef _WIN32
     AUTOCHECKBOX    "Automatically on REAPER startup",
-                    IDC_SET_AUTO_UPDATE, 165, 185, 190, 14
+                    IDC_SET_AUTO_UPDATE, 165, 253, 190, 14
 #else
     CHECKBOX        "Automatically on REAPER startup",
-                    IDC_SET_AUTO_UPDATE, 165, 185, 190, 14
+                    IDC_SET_AUTO_UPDATE, 165, 253, 190, 14
 #endif
 
     // ---- About (v2.0.3) ----
-    LTEXT           "ABOUT", -1, 15, 206, 100, 10
+    LTEXT           "ABOUT", -1, 15, 274, 100, 10
     // Sprint 1 Entry 7 — em-dash → "--": rc.exe defaults to ACP for
     // string literals. settings_dialog.cpp fills the actual version
     // string at WM_INITDIALOG time from MAXPANE_VERSION_STRING.
     LTEXT           "MaxPane (version filled at runtime)",
-                    IDC_SET_VERSION_LBL, 25, 220, 320, 12
+                    IDC_SET_VERSION_LBL, 25, 288, 320, 12
     LTEXT           "MIT License -- github.com/b451c/MaxPane",
-                    IDC_SET_LICENSE_LBL, 25, 232, 320, 12
-    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, 248, 60, 18
-    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, 248, 60, 18
-    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, 248, 60, 18
-    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, 248, 60, 18
+                    IDC_SET_LICENSE_LBL, 25, 300, 320, 12
+    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, 316, 60, 18
+    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, 316, 60, 18
+    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, 316, 60, 18
+    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, 316, 60, 18
 
     // ---- Bottom button row ----
     PUSHBUTTON      "Reset", IDC_SET_RESET,
-                    15, 274, 60, 18
-    DEFPUSHBUTTON   "OK", 1, 235, 274, 55, 18
-    PUSHBUTTON      "Cancel", 2, 295, 274, 55, 18
+                    15, 338, 60, 18
+    DEFPUSHBUTTON   "OK", 1, 235, 338, 55, 18
+    PUSHBUTTON      "Cancel", 2, 295, 338, 55, 18
 END

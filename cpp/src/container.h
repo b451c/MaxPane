@@ -74,8 +74,26 @@ struct RestoreOrderPane {
 // wnd_vis BEFORE atexit, so any DoRelease toggle that races with the cache
 // is lost). Called from startupTimerFunc for all instance sections before
 // any MaxPane container is created.
+// deepProbe: use the full FindReaperWindow tree walk for not-yet-visible
+// entries. The walk costs ~10-20ms PER ENTRY even on an idle machine (U1:
+// EnumWindows + 4 recursive child walks + Win32 module lookups), and the
+// startup poll re-probes every entry every ~50ms tick — with a toolbar-heavy
+// stale list this stalled REAPER launch for minutes on Windows. Per-tick
+// polling now uses a cheap top-level exact-title probe (ghosts REAPER
+// restores from wnd_vis are top-level floats, so this catches the classic
+// case with the same one-tick latency); the deep walk runs only on the few
+// designated sweep ticks to cover dock-frame children and fuzzy titles.
 // Returns true if a non-empty stale list was found and processed.
-bool ProcessStaleActionsForSection(const char* section);
+bool ProcessStaleActionsForSection(const char* section, bool deepProbe);
+
+// Remove one action ID from stale_toggle_actions ExtState in EVERY instance
+// section. Called when a capture path deliberately opens that action during
+// the startup window (workspace restore / favorites recall): an action being
+// intentionally opened is by definition not stale, and without this strip the
+// startup ghost-cleanup races the recall — CaptureQueue toggles the toolbar
+// open, the next cleanup tick sees state==1 and toggles it straight back off,
+// so the toolbar is "not recalled if it was not already open" (forum U7).
+void RemoveActionFromStaleLists(int action);
 
 // Merge currently-captured action IDs into stale_toggle_actions ExtState for
 // the given section. Reads existing list (preserving prior workspace-switch
@@ -106,6 +124,29 @@ public:
   ~MaxPaneContainer();
 
   bool Create();
+  // U5-B (ADR-065) — re-run DockWindowAddEx for a docked-mode container that
+  // isn't actually inside a dock (an SWS startup action created it before
+  // REAPER's docker layout existed → bare 400x300 WS_CHILD behind main).
+  // Called once from startupTimerFunc STEP-2 after the settle delay; no-op
+  // for floating instances and properly-docked ones.
+  void RedockIfDetachedFromDock();
+  // U13 (ADR-068) — (re)create splitter brushes from the persisted color
+  // preset; called from the ctor and after Settings closes (live apply).
+  void RefreshChromeBrushes();
+  // U15 (ADR-069) — always-on-top toggle shared by the context menu and the
+  // bindable action; floating-only (no-op when docked).
+  void ToggleFloatAlwaysOnTop();
+  // U15 (ADR-069) — re-apply floating chrome (title + taskbar visibility)
+  // after the hide_from_taskbar pref changes; WS_EX_TOOLWINDOW only takes
+  // cleanly across a hide/show cycle.
+  void RefreshFloatingChrome();
+  // U14 (ADR-070) — enqueue the selected track's whole FX chain into paneId.
+  // transient=true marks the tabs as follow-mode (never persisted).
+  void CaptureTrackFxChain(int paneId, bool transient);
+  // U14 (ADR-070) — experimental follow-selected-track poll (500ms OnTimer
+  // tick): when the last-touched track changes and stays stable for 2 ticks,
+  // replace pane 0's transient tabs with the new track's FX chain.
+  void FollowTick();
   void Shutdown();
   void Show();
   void Toggle();
@@ -241,6 +282,16 @@ private:
   SplitTree m_tree;
   WindowManager m_winMgr;
   bool m_visible;
+  bool m_userClosing;    // true only inside Toggle-off — see SaveState (U3/ADR-065)
+  bool m_floatMaximized; // U2/ADR-066 — floating window was OS-maximized (Win32)
+  void* m_followTrack = nullptr;    // U14/ADR-070 — track currently followed
+  void* m_followPending = nullptr;  // U14 — candidate awaiting debounce
+  int m_followTicks = 0;            // U14 — debounce counter
+  bool m_inCreate;       // U2/ADR-066 — Create() in progress: WM_SIZE/WM_MOVE
+                         // fired during Win32 dialog construction must not
+                         // CaptureFloatGeometry-clobber the geometry that
+                         // LoadFloatingState just read (the floating branch
+                         // applies it only at the END of Create)
   CaptureMode m_captureMode;
   DragState m_dragState;
   std::unique_ptr<CaptureQueue> m_captureQueue;

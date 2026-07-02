@@ -19,6 +19,7 @@
 #include "workspace_manager.h"
 #include "split_tree.h"
 #include "config.h"
+#include "swell_cocoa_helpers.h"   // U9 — MaxPaneDpiScaleForDC (ADR-068)
 #include <cstdio>
 #include <cstring>
 
@@ -557,6 +558,14 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
   const WorkspaceEntry& ws = wsMgr.Get(cardIndex);
   const RECT& cardRect = lay.cards[cardIndex];
 
+  // U9 (ADR-068) — scale all box metrics + fonts by window DPI (see
+  // nav_bar.cpp PaintTooltip for the rationale; X-Raym #67).
+  const double dpiScale = MaxPaneDpiScaleForDC(hdc);
+  auto ds = [dpiScale](int v) { return (int)(v * dpiScale + 0.5); };
+  const int tipPadX = ds(TIP_PAD_X), tipPadY = ds(TIP_PAD_Y);
+  const int tipLineH = ds(TIP_LINE_H), tipHeaderH = ds(TIP_HEADER_H);
+  const int tipHeaderGap = ds(TIP_HEADER_GAP);
+
   // Collect window names
   char lines[TIP_MAX_LINES + 1][128];
   int lineCount = CollectWorkspaceWindowNames(ws, lines, TIP_MAX_LINES);
@@ -564,23 +573,23 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
   // Compute height
   int contentH;
   if (lineCount == 0) {
-    contentH = TIP_HEADER_H + TIP_HEADER_GAP + TIP_LINE_H; // header + "(empty)"
+    contentH = tipHeaderH + tipHeaderGap + tipLineH; // header + "(empty)"
   } else {
-    contentH = TIP_HEADER_H + TIP_HEADER_GAP + lineCount * TIP_LINE_H;
+    contentH = tipHeaderH + tipHeaderGap + lineCount * tipLineH;
   }
-  int tipH = contentH + TIP_PAD_Y * 2;
-  int tipW = TIP_MAX_W;
+  int tipH = contentH + tipPadY * 2;
+  int tipW = ds(TIP_MAX_W);
   if (tipW > lay.containerRect.right - lay.containerRect.left - 16)
     tipW = lay.containerRect.right - lay.containerRect.left - 16;
-  if (tipW < TIP_MIN_W) tipW = TIP_MIN_W;
+  if (tipW < ds(TIP_MIN_W)) tipW = ds(TIP_MIN_W);
 
   // Position: prefer below card, anchored to card's left edge; clamp to
   // container so it stays visible. Fall back to above if no room below.
   int tipX = cardRect.left;
-  int tipY = cardRect.bottom + TIP_GAP_FROM_CARD;
+  int tipY = cardRect.bottom + ds(TIP_GAP_FROM_CARD);
 
   if (tipY + tipH > lay.containerRect.bottom - 4) {
-    int aboveY = cardRect.top - TIP_GAP_FROM_CARD - tipH;
+    int aboveY = cardRect.top - ds(TIP_GAP_FROM_CARD) - tipH;
     if (aboveY >= lay.containerRect.top + 4) {
       tipY = aboveY;
     } else {
@@ -627,12 +636,12 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
   SetBkMode(hdc, TRANSPARENT);
 
   RECT headRect = {
-    tipRect.left + TIP_PAD_X,
-    tipRect.top + TIP_PAD_Y,
-    tipRect.right - TIP_PAD_X,
-    tipRect.top + TIP_PAD_Y + TIP_HEADER_H
+    tipRect.left + tipPadX,
+    tipRect.top + tipPadY,
+    tipRect.right - tipPadX,
+    tipRect.top + tipPadY + tipHeaderH
   };
-  HFONT headerFont = CreateFont(15, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+  HFONT headerFont = CreateFont(ds(15), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                                  DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                                  CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY,
                                  DEFAULT_PITCH, "");
@@ -646,25 +655,25 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
   // Divider line under header
   {
     int divY = headRect.bottom + 2;
-    RECT divRect = { tipRect.left + TIP_PAD_X, divY,
-                     tipRect.right - TIP_PAD_X, divY + 1 };
+    RECT divRect = { tipRect.left + tipPadX, divY,
+                     tipRect.right - tipPadX, divY + 1 };
     HBRUSH dv = CreateSolidBrush(tipDivider);
     FillRect(hdc, &divRect, dv);
     DeleteObject(dv);
   }
 
   // Body lines
-  int lineY = headRect.bottom + TIP_HEADER_GAP + 2;
+  int lineY = headRect.bottom + tipHeaderGap + 2;
   if (lineCount == 0) {
-    RECT lr = { tipRect.left + TIP_PAD_X, lineY,
-                tipRect.right - TIP_PAD_X, lineY + TIP_LINE_H };
+    RECT lr = { tipRect.left + tipPadX, lineY,
+                tipRect.right - tipPadX, lineY + tipLineH };
     SetTextColor(hdc, tipMuted);
     DrawTextUtf8(hdc, "(no captures saved)", -1, &lr,
               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
   } else {
     for (int i = 0; i < lineCount; i++) {
-      RECT lr = { tipRect.left + TIP_PAD_X, lineY,
-                  tipRect.right - TIP_PAD_X, lineY + TIP_LINE_H };
+      RECT lr = { tipRect.left + tipPadX, lineY,
+                  tipRect.right - tipPadX, lineY + tipLineH };
       bool isOverflow = (i == TIP_MAX_LINES && lineCount == TIP_MAX_LINES + 1);
       SetTextColor(hdc, isOverflow ? tipMuted : tipBody);
       // Prefix with bullet. %.150s bounds the line so the result provably
@@ -677,7 +686,7 @@ void PaintTooltip(HDC hdc, const Layout& lay, const WorkspaceManager& wsMgr,
                 lines[i]);
       DrawTextUtf8(hdc, buf, -1, &lr,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
-      lineY += TIP_LINE_H;
+      lineY += tipLineH;
     }
   }
 }

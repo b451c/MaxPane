@@ -44,6 +44,32 @@ COLORREF GetPaneGridLineColor()
 
 const char* const EXT_SECTION = "MaxPane_cpp";
 
+// U13 (ADR-068, poydepzaj1616 #47) — inter-pane border (splitter) color
+// presets. A cycle-button palette matching the TAB_COLORS / dark-mode-cycle
+// conventions; "Default (system)" keeps the pre-U13 GetSysColor look.
+const SplitterColorPreset SPLITTER_COLOR_PRESETS[] = {
+  { "Default (system)", "default",  0x000000, true  },
+  { "Graphite",         "graphite", 0x4A4D52, false },
+  { "Slate blue",       "blue",     0x2D6BB4, false },
+  { "Teal",             "teal",     0x2E8B74, false },
+  { "Amber",            "amber",    0xC28E2C, false },
+  { "Crimson",          "crimson",  0xB44A4A, false },
+  { "Violet",           "violet",   0x7C5CB4, false },
+};
+const int NUM_SPLITTER_COLOR_PRESETS =
+    (int)(sizeof(SPLITTER_COLOR_PRESETS) / sizeof(SPLITTER_COLOR_PRESETS[0]));
+
+int GetSplitterColorPresetIndex()
+{
+  if (!g_GetExtState) return 0;
+  const char* v = g_GetExtState(EXT_SECTION, "splitter_color");
+  if (!v || !v[0]) return 0;
+  for (int i = 0; i < NUM_SPLITTER_COLOR_PRESETS; i++) {
+    if (strcmp(v, SPLITTER_COLOR_PRESETS[i].key) == 0) return i;
+  }
+  return 0;
+}
+
 const TabColor TAB_COLORS[] = {
   {"Default",  0,   0,   0  },  // 0: no color
   {"Red",      180, 60,  60 },  // 1

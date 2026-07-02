@@ -41,8 +41,12 @@ public:
   // MaxPaneContainer overrides per-instance after construction (F2).
   void SetSection(const char* section) { m_section = section; }
 
-  // Per-project state persistence (ProjExtState, stored in RPP)
-  void SaveProjectState(ReaProject* proj, const SplitTree& tree, const WindowManager& winMgr);
+  // Per-project state persistence (ProjExtState, stored in RPP).
+  // openAtSave records whether the container was open when this state was
+  // written; projStateOpenTimerFunc honors it so a deliberately-closed
+  // instance stops resurrecting on every project load (forum U3, ADR-065).
+  void SaveProjectState(ReaProject* proj, const SplitTree& tree, const WindowManager& winMgr,
+                        bool openAtSave);
   bool LoadProjectState(ReaProject* proj, NodeSnapshot* outSnap, int& outNodeCount,
                         PaneSnapshot outPanes[MAX_PANES], bool& outHasTreeFormat) const;
   bool HasProjectState(ReaProject* proj) const;

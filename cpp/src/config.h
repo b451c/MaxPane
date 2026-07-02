@@ -4,7 +4,7 @@
 // cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
 // the Settings dialog "About" section reads this verbatim, and the
 // updater compares it against GitHub Releases tag_name on startup.
-#define MAXPANE_VERSION_STRING "v2.2.1"
+#define MAXPANE_VERSION_STRING "v2.3.0"
 
 // Layout constants
 static const int MAX_PANES = 16;
@@ -106,6 +106,18 @@ int LookupToggleAction(const char* title);
 // title. Returns true if a mapping was found. Includes MAIN_TOOLBAR_ACTION →
 // "Main toolbar" so startup ghost-cleanup can force-hide it (self-heal).
 bool GetSearchTitleForAction(int action, char* buf, int bufSize);
+
+// U13 (ADR-068) — inter-pane border (splitter) color presets, cycled from
+// Settings; persisted as ExtState "splitter_color" = preset key.
+struct SplitterColorPreset {
+  const char* name;   // Settings cycle-button label
+  const char* key;    // ExtState value
+  unsigned int rgb;   // 0xRRGGBB; ignored when useSystem
+  bool useSystem;     // true → keep the classic GetSysColor(COLOR_3DSHADOW)
+};
+extern const SplitterColorPreset SPLITTER_COLOR_PRESETS[];
+extern const int NUM_SPLITTER_COLOR_PRESETS;
+int GetSplitterColorPresetIndex();
 
 // Tab color palette (index 0 = no color)
 static const int TAB_COLOR_COUNT = 9;

@@ -21,6 +21,9 @@ struct PendingCapture {
   // ShowAndGetHwnd. Format: "fx@{track_guid}@{fx_guid}@<flags>" or
   // "takefx@{take_guid}@{fx_guid}@<flags>".
   char fxIdentity[128] = {};
+  // U14 (ADR-070) — follow-mode tab: excluded from every persistence writer
+  // (workspace slots, ProjExtState, RPP chunk); replaced on track switch.
+  bool transient = false;
 };
 
 class CaptureQueue {
@@ -34,7 +37,7 @@ public:
   CaptureQueue();
 
   void EnqueueKnown(int paneId, int knownIdx, bool deferAction = false);
-  void EnqueueArbitrary(int paneId, const char* name, int toggleAction = 0, const char* actionCmd = nullptr, bool deferAction = false);
+  void EnqueueArbitrary(int paneId, const char* name, int toggleAction = 0, const char* actionCmd = nullptr, bool deferAction = false, bool transient = false);
   bool Tick(HWND containerHwnd, WindowManager& winMgr);  // returns true if any captured
   bool HasPending() const;
   void CancelAll();

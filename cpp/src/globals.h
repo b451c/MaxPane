@@ -69,6 +69,10 @@ extern bool (*g_GetSetMediaItemTakeInfo_String)(MediaItem_Take* tk, const char* 
 extern bool (*g_GetSetMediaTrackInfo_String)(MediaTrack* tr, const char* parmname,
                                               char* stringNeedBig, bool setNewValue);
 extern MediaTrack* (*g_GetTrack)(ReaProject* proj, int trackidx);
+// U14 (ADR-070) — track-selection signal for "capture track FX chain" and
+// the experimental follow-selected-track mode.
+extern MediaTrack* (*g_GetLastTouchedTrack)();
+extern MediaTrack* (*g_GetSelectedTrack)(ReaProject* proj, int seltrackidx);
 extern void (*g_guidToString)(const GUID* g, char* destNeed64);
 extern void (*g_stringToGuid)(const char* str, GUID* g);
 extern int (*g_TakeFX_GetCount)(MediaItem_Take* take);

@@ -68,24 +68,48 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     int paneId = m_tree.GetPaneId(nodeIdx);
     if (paneId < 0 || paneId >= MAX_PANES) continue;
     const RECT& pr = m_tree.GetPaneRect(paneId);
-    // Tab bar area — always paint
-    RECT tabBarRect = { pr.left, pr.top, pr.right, pr.top + TAB_BAR_HEIGHT };
-    FillRect(hdc, &tabBarRect, m_brushPaneBg);
+    // Tab bar area — always paint. U12 (ADR-068): height via PaneHeaderHeight
+    // (single source of truth), else clean mode left a stale gray strip where
+    // the hardcoded TAB_BAR_HEIGHT fill no longer matched the real header.
+    const int hdrH = m_winMgr.PaneHeaderHeight(paneId);
+    if (hdrH > 0) {
+      RECT tabBarRect = { pr.left, pr.top, pr.right, pr.top + hdrH };
+      FillRect(hdc, &tabBarRect, m_brushPaneBg);
+    }
     // Content area — only paint if pane has no visible captured child
     const PaneState* ps = m_winMgr.GetPaneState(paneId);
+    const TabEntry* activeTab = nullptr;
     bool hasVisibleChild = false;
     if (ps && ps->activeTab >= 0 && ps->activeTab < ps->tabCount) {
-      const TabEntry* tab = &ps->tabs[ps->activeTab];
+      activeTab = &ps->tabs[ps->activeTab];
       // ADR-062 — a floor-hidden ReaImGui child counts as NOT covering the
       // pane: without the visibility check the content fill is skipped and
       // the hint text accumulates over the previous tab's stale last frame
       // (Win32 repro: smeared hint + Track Manager ghost under it).
-      hasVisibleChild = (tab->captured && tab->hwnd && IsWindow(tab->hwnd) &&
-                         IsWindowVisible(tab->hwnd));
+      hasVisibleChild = (activeTab->captured && activeTab->hwnd &&
+                         IsWindow(activeTab->hwnd) &&
+                         IsWindowVisible(activeTab->hwnd));
     }
     if (!hasVisibleChild) {
-      RECT contentRect = { pr.left, pr.top + TAB_BAR_HEIGHT, pr.right, pr.bottom };
+      RECT contentRect = { pr.left, pr.top + hdrH, pr.right, pr.bottom };
       FillRect(hdc, &contentRect, m_brushPaneBg);
+    } else {
+      // U8 (ADR-068, poydepzaj1616 #65) — a visible child smaller than its
+      // pane (a window that refuses our resize) leaves a strip OnPaint never
+      // filled and WM_ERASEBKGND never erases (returns 1): stale pixels
+      // flicker at the pane bottom on partial repaints. Fill the uncovered
+      // remainder below and to the right of the child.
+      int cx, cy, cw, ch;
+      WindowManager::GetChildRectInParentClient(activeTab->hwnd, m_hwnd,
+                                                &cx, &cy, &cw, &ch);
+      if (cy + ch < pr.bottom) {
+        RECT below = { pr.left, cy + ch, pr.right, pr.bottom };
+        FillRect(hdc, &below, m_brushPaneBg);
+      }
+      if (cx + cw < pr.right) {
+        RECT rightStrip = { cx + cw, pr.top + hdrH, pr.right, pr.bottom };
+        FillRect(hdc, &rightStrip, m_brushPaneBg);
+      }
     }
   }
   // Splitter rects
@@ -123,7 +147,9 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     const PaneState* ps = m_winMgr.GetPaneState(paneId);
 
     if (ps && ps->tabCount > 0) {
-      DrawTabBar(hdc, paneId, paneRect);
+      // U12 (ADR-068) — clean mode: no header to draw for occupied panes.
+      if (m_winMgr.PaneHeaderHeight(paneId) > 0)
+        DrawTabBar(hdc, paneId, paneRect);
       // ADR-062 — floor-hidden hint. A captured ReaImGui window whose pane
       // is smaller than its (learned) content-min is HIDDEN by RepositionAll
       // instead of overflowing the pane (the overflow used to cover the

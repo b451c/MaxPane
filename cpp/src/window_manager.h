@@ -25,6 +25,7 @@ struct TabEntry {
   int colorIndex;  // 0 = default (no color), 1-8 = palette color
   char actionCmd[128];           // stable command string ("_RSxxx" or "12345")
   bool pinned;                   // C2 (ADR-027) — sticky, sorted to left, exempt from Close Others
+  bool transient;                // U14 (ADR-070) — follow-mode tab: never persisted
   unsigned short recaptureBackoff;  // audit M3.3 — runtime-only miss counter for the
                                     // uncaptured-dynamic-tab probe in CheckAlive; after
                                     // 10 misses the FindReaperWindow full-window-tree
@@ -70,7 +71,10 @@ public:
 
   // Capture appends a new tab (returns false if MAX_TABS reached)
   bool CaptureByIndex(int paneId, int knownWindowIndex, HWND containerHwnd);
-  bool CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction = 0, const char* actionCmd = nullptr);
+  bool CaptureArbitraryWindow(int paneId, HWND targetHwnd, const char* displayName, HWND containerHwnd, int toggleAction = 0, const char* actionCmd = nullptr, bool transient = false);
+  // U14 (ADR-070) — release every transient (follow-mode) tab in a pane;
+  // FX windows are hidden (not toggled), tabs removed. Returns count released.
+  int ReleaseTransientTabs(int paneId);
 
   // Tab management
   void SetActiveTab(int paneId, int tabIndex);
@@ -100,6 +104,17 @@ public:
   // PaneHeaderHeight so layout, paint and hit-testing share one answer.
   void SetHideSingleTabBar(bool v) { m_hideSingleTabBar = v; }
   bool GetHideSingleTabBar() const { return m_hideSingleTabBar; }
+  // U12 (ADR-068) — clean mode: zero the header of every pane that HOLDS a
+  // window (empty panes keep the full header + capture CTA). macOS keeps the
+  // ADR-026 sliver — captured child views paint ABOVE the container there,
+  // so a zero header would leave the pane without any mouse surface.
+  void SetHideAllTabBars(bool v) { m_hideAllTabBars = v; }
+  bool GetHideAllTabBars() const { return m_hideAllTabBars; }
+  // U14+U12 (ADR-070 follow-up, owner decision 2026-07-02) — follow mode is
+  // active: the follow pane (pane 0) keeps its FULL tab bar even in clean
+  // mode, because its tabs ARE the FX-chain switcher.
+  void SetFollowActive(bool v) { m_followActive = v; }
+  bool GetFollowActive() const { return m_followActive; }
   // Effective header height for a pane: TAB_BAR_COLLAPSED_HEIGHT when the
   // pref is on and the pane holds exactly one tab; TAB_BAR_HEIGHT otherwise
   // (incl. empty panes — their header carries the capture CTA text).
@@ -125,8 +140,20 @@ public:
   int GetTabCount(int paneId) const;
   bool IsWindowCaptured(HWND hwnd) const;
 
+  // U4 (ADR-065) — true if a DIFFERENT live instance currently holds hwnd.
+  // Capture paths, CheckAlive's reclaim, and the capture queue consult this
+  // so two instances never fight over one window (the 500ms parent
+  // tug-of-war of #61).
+  static bool IsCapturedByAnotherInstance(HWND hwnd, const WindowManager* self);
+
   static HWND FindReaperWindow(const char* title, HWND skipContainer = nullptr);
   static HWND FindChildInParent(HWND parent, const char* title);
+
+  // ADR-062 follow-up — child rect in the parent's CLIENT space, normalized
+  // (y-up mac rects, Win32 caption offsets). Public since U8/ADR-068:
+  // container_paint uses it to fill the pane remainder a short child leaves.
+  static void GetChildRectInParentClient(HWND child, HWND parent,
+                                         int* x, int* y, int* w, int* h);
   static void DumpAllWindowTitles(const char* context = nullptr);
 
   // Sprint 1 Entry 12 — plugin window display-name resolution. Empty-title
@@ -197,6 +224,8 @@ private:
   PaneState m_panes[MAX_PANES];
   HWND m_containerHwnd;  // stored for CheckAlive recapture
   bool m_hideSingleTabBar = false;  // ADR-055 — Settings pref mirror
+  bool m_hideAllTabBars = false;    // U12/ADR-068 — clean mode pref mirror
+  bool m_followActive = false;      // U14/ADR-070 — follow-mode pref mirror
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
   void DoRelease(TabEntry& tab, bool toggleOff = true, bool returnVisible = false);
 };

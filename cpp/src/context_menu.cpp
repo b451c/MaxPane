@@ -557,6 +557,17 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
+  // --- Capture track FX chain (U14, ADR-070) ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::CAPTURE_FX_CHAIN;
+    mi.dwTypeData = (char*)"Capture track FX chain";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
   // --- Separator + Split/Merge ---
   {
     MENUITEMINFO sep = {};

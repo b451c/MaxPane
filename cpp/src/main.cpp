@@ -42,6 +42,8 @@
 #define REAPERAPI_WANT_GetSetMediaItemTakeInfo_String
 #define REAPERAPI_WANT_GetSetMediaTrackInfo_String
 #define REAPERAPI_WANT_GetTrack
+#define REAPERAPI_WANT_GetLastTouchedTrack
+#define REAPERAPI_WANT_GetSelectedTrack
 #define REAPERAPI_WANT_guidToString
 #define REAPERAPI_WANT_stringToGuid
 #define REAPERAPI_WANT_TakeFX_GetCount
@@ -80,6 +82,7 @@
 #include "updater.h"
 #include "debug.h"
 #include <cstdio>
+#include <chrono>   // U1 startup instrumentation (Debug builds)
 
 // Action command IDs. g_cmdOpenContainer[0] is the legacy "MaxPane_OpenContainer"
 // (no suffix); g_cmdOpenContainer[N>0] is "MaxPane_OpenContainer_(N+1)".
@@ -89,6 +92,7 @@ static int g_cmdPrevTab = 0;
 static int g_cmdQuickSwitcher = 0;
 static int g_cmdReopenTab = 0;       // C1 (ADR-027)
 static int g_cmdWsPickup  = 0;       // C4 (ADR-027)
+static int g_cmdToggleAOT = 0;       // U15 (ADR-069) — bindable always-on-top
 static int g_cmdNextPane = 0;
 static int g_cmdPrevPane = 0;
 static int g_cmdSoloToggle = 0;
@@ -270,6 +274,21 @@ static void projStateOpenTimerFunc()
       }
       if (!hasState) continue;
 
+      // U3 (ADR-065) — respect a deliberate close. SaveProjectState records
+      // open_at_save; Toggle-off writes it as "0". Without this gate the
+      // instance resurrected on EVERY load of a project whose RPP carried
+      // its state, and the user could not make the close stick (#62).
+      // Missing key (pre-fix RPPs) keeps the F-39 force-open behavior.
+      char openBuf[8] = {};
+      g_GetProjExtState(proj, sect, "open_at_save", openBuf, sizeof(openBuf));
+      if (!openBuf[0] && i == 0) {
+        g_GetProjExtState(proj, "MAXPANE_CPP", "OPEN_AT_SAVE", openBuf, sizeof(openBuf));
+      }
+      if (openBuf[0] == '0') {
+        DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState but open_at_save=0 — skipping\n", i);
+        continue;
+      }
+
       MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
       if (c && !c->GetHwnd()) {
         DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState, force-opening\n", i);
@@ -368,25 +387,81 @@ static void startupTimerFunc()
 
   // STEP 1 — Aggressive ghost cleanup. Runs every tick so the window of
   // visible floaters is minimized to one tick (~30ms) instead of ~450ms.
-  ProcessStaleActionsForSection(EXT_SECTION);
+  // U1 (forum #47/#65): per-tick probing is CHEAP (top-level exact-title
+  // only); the expensive full FindReaperWindow tree walk runs on a few
+  // designated sweep ticks + once right before the STEP-3 prune. Measured on
+  // the Win11 VM: the old every-tick deep walk burned 82-362ms per tick
+  // (8.2s total on an IDLE machine with 8 stale entries) — with a real
+  // user's window tree and module count that is the reported minutes-scale
+  // launch stall.
+  // Three sweeps: after REAPER's early window-restore burst (~tick 5),
+  // mid-window (~tick 35), and right before the STEP-3 prune — a fuzzy-titled
+  // or dock-frame-child ghost is caught within ~1.75s instead of one tick,
+  // while a power user's stale list no longer multiplies the walk 76×.
+  const bool deepProbe =
+      g_startupCounter == 5 || g_startupCounter == 35 ||
+      g_startupCounter > STARTUP_DELAY_TICKS + STARTUP_POLL_TICKS;
+#ifdef MAXPANE_DEBUG
+  // U1 instrumentation — per-tick STEP-1 wall time is the decisive datapoint
+  // (inside-tick cost vs REAPER-busy-elsewhere between ticks).
+  const auto u1_t0 = std::chrono::steady_clock::now();
+#endif
+  ProcessStaleActionsForSection(EXT_SECTION, deepProbe);
   for (int i = 1; i < MaxPaneContainer::MAX_INSTANCES; i++) {
     char section[32];
     snprintf(section, sizeof(section), "%s_%d", EXT_SECTION, i);
-    ProcessStaleActionsForSection(section);
+    ProcessStaleActionsForSection(section, deepProbe);
   }
+#ifdef MAXPANE_DEBUG
+  {
+    static long s_step1CumMs = 0;
+    const long u1_ms = (long)std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - u1_t0).count();
+    s_step1CumMs += u1_ms;
+    if (u1_ms > 0)
+      DBG("[MaxPane] U1: tick %d STEP-1 %ld ms (cumulative %ld ms)\n",
+          g_startupCounter, u1_ms, s_step1CumMs);
+    if (g_startupCounter > STARTUP_DELAY_TICKS + STARTUP_POLL_TICKS)
+      DBG("[MaxPane] U1: startup window done after %d ticks, STEP-1 total %ld ms\n",
+          g_startupCounter, s_step1CumMs);
+  }
+#endif
 
   // STEP 2 — Inst 0 shell auto-open (one-shot, after settle delay).
   if (!g_shellOpenAttempted && g_startupCounter >= STARTUP_DELAY_TICKS) {
     g_shellOpenAttempted = true;
     g_startupComplete = true;
 
-    bool wasVisible = true;
-    const char* vis = g_GetExtState(EXT_SECTION, "was_visible");
-    if (vis && vis[0] == '0') wasVisible = false;
-    if (IsAutoOpenEnabled() && wasVisible) {
+    // U5-A (ADR-065) — the Settings checkbox reads "Open MaxPane
+    // automatically when REAPER starts", but the pref was silently AND-ed
+    // with was_visible!=0, so a user who closed MaxPane before quitting had
+    // an explicitly-ticked pref no-op at the next start (forum #60).
+    // Tri-state semantics keep every existing default intact:
+    //   explicit "1" (user ticked the box)   → always open, as the label says
+    //   explicit "0" (user unticked)         → never auto-open
+    //   absent (never committed Settings)    → legacy restore-last-state
+    const char* autoOpen = g_GetExtState(EXT_SECTION, "auto_open");
+    bool openShell;
+    if (autoOpen && autoOpen[0] == '1')      openShell = true;
+    else if (autoOpen && autoOpen[0] == '0') openShell = false;
+    else {
+      const char* vis = g_GetExtState(EXT_SECTION, "was_visible");
+      openShell = !(vis && vis[0] == '0');
+    }
+    if (openShell) {
       MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(0);
       if (c && !c->GetHwnd()) c->Create();
     }
+
+    // U5-B (ADR-065) — self-heal a mistimed early open: an SWS/custom
+    // startup action can call the open action before REAPER's docker layout
+    // exists; DockWindowAddEx then leaves the dialog a bare 400x300 WS_CHILD
+    // behind the main window ("opens behind main, small", forum #60).
+    // Now that the layout has settled, re-dock any docked-mode instance
+    // that isn't actually sitting in a dock.
+    InstanceManager::Get().ForEach([](int /*id*/, MaxPaneContainer& c) {
+      c.RedockIfDetachedFromDock();
+    });
   }
 
   // STEP 3 — Stop polling after the polling window expires.
@@ -505,6 +580,14 @@ static bool hookCommandProc(int command, int /*flag*/)
   // C1 (ADR-027) — Reopen last closed tab. Routes to focused instance.
   // Silent no-op if no instance is live or the buffer is empty: user binding
   // a hotkey for a stack that hasn't accumulated yet shouldn't see an error.
+  // U15 (ADR-069) — bindable always-on-top toggle; routes to the focused
+  // instance (falls back to inst 0), no-ops unless it is floating.
+  if (command == g_cmdToggleAOT && g_cmdToggleAOT) {
+    MaxPaneContainer* c = ResolveSlotTargetInstance();
+    if (c) c->ToggleFloatAlwaysOnTop();
+    return true;
+  }
+
   if (command == g_cmdReopenTab && g_cmdReopenTab) {
     MaxPaneContainer* c = ResolveSlotTargetInstance();
     if (c && c->HasRecentlyClosedTab()) c->ReopenLastClosedTab();
@@ -691,6 +774,9 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_GetSetMediaItemTakeInfo_String = GetSetMediaItemTakeInfo_String;
   g_GetSetMediaTrackInfo_String = GetSetMediaTrackInfo_String;
   g_GetTrack = GetTrack;
+  // U14 (ADR-070) — track-selection signal (chain capture + follow mode)
+  g_GetLastTouchedTrack = GetLastTouchedTrack;
+  g_GetSelectedTrack = GetSelectedTrack;
   g_guidToString = guidToString;
   g_stringToGuid = stringToGuid;
   g_TakeFX_GetCount = TakeFX_GetCount;
@@ -724,6 +810,10 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_cmdQuickSwitcher = rec->Register("command_id", (void*)"MaxPane_QuickSwitcher");
   g_cmdReopenTab     = rec->Register("command_id", (void*)"MaxPane_ReopenClosedTab");
   g_cmdWsPickup      = rec->Register("command_id", (void*)"MaxPane_WorkspacePickup");
+  // U15 (ADR-069, mb945 #60) — the always-on-top toggle existed only as a
+  // context-menu item shown while floating; a bindable, searchable action
+  // fixes the discoverability gap.
+  g_cmdToggleAOT     = rec->Register("command_id", (void*)"MaxPane_ToggleAlwaysOnTop");
 
   static gaccel_register_t accelNextTab = {{0, 0, 0}, "MaxPane: Next Tab"};
   accelNextTab.accel.cmd = static_cast<unsigned short>(g_cmdNextTab);
@@ -744,6 +834,11 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   static gaccel_register_t accelSolo = {{0, 0, 0}, "MaxPane: Solo Toggle"};
   accelSolo.accel.cmd = static_cast<unsigned short>(g_cmdSoloToggle);
   rec->Register("gaccel", &accelSolo);
+
+  static gaccel_register_t accelAOT =
+      {{0, 0, 0}, "MaxPane: Toggle always-on-top (floating mode)"};
+  accelAOT.accel.cmd = static_cast<unsigned short>(g_cmdToggleAOT);
+  rec->Register("gaccel", &accelAOT);
 
   // F4 — no default accel; user binds Cmd+P (macOS) / Ctrl+P (Win/Linux)
   // themselves via REAPER's Actions list (no per-platform translation).
@@ -819,6 +914,11 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
 
   // Deferred auto-open on startup
   g_plugin_register("timer", (void*)(void(*)())startupTimerFunc);
+
+  // Debug builds identify themselves so a stale/ReaPack-stomped DLL is
+  // detectable from the log alone (version + build timestamp).
+  DBG("[MaxPane] plugin loaded: %s (build %s %s)\n",
+      MAXPANE_VERSION_STRING, __DATE__, __TIME__);
 
   return 1;
 }
