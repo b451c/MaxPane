@@ -20,8 +20,9 @@ remembers your layouts.
 ---
 
 > **Release history** lives in [CHANGELOG.md](CHANGELOG.md) — latest:
-> **v2.3.0** (startup lag fixed, Windows floating-position restore fixed,
-> clean mode, track-FX-chain capture, follow mode, pane border colors).
+> **v2.4.0** (screenset + instance-resurrection fixes, per-slot FX follow,
+> startup workspace, tie-to-main, focus-FX for MIDI controllers, and
+> out-of-process plugin UIs rendering inside panes on macOS).
 
 ## Features
 
@@ -74,14 +75,25 @@ remembers your layouts.
 - **AU / VST / JSFX plugin UI capture** — capture a floating plugin
   window; identity is saved as a `(track GUID, FX GUID)` pair so it
   round-trips through workspace save/load and project reopen as long as
-  the matching project is loaded. See Known limitations below for the
-  project-bound and plugin-scaling caveats.
+  the matching project is loaded. On macOS, plug-ins whose UI lives in
+  another process (AUv3-class AUs, Rosetta-bridged x86_64 plug-ins) are
+  hosted as chrome-less child windows glued to the pane — selected
+  automatically, rendering and resizing stay on REAPER's native float
+  path. See Known limitations below for the project-bound and
+  plugin-scaling caveats.
 - **Track FX chain capture** — pane menu → "Capture track FX chain" pulls
   every FX window of the last-touched track into the pane as tabs, one
   click instead of one capture per plugin.
 - **Follow mode (experimental)** — Settings option: pane 1 releases and
   re-captures the FX chain as you move between tracks. Follow-mode tabs
-  are transient — never saved into workspaces or projects.
+  are transient for automatic persistence (they never dirty your
+  project), but an explicit Save Workspace keeps the plugins you see.
+- **Follow FX slot** — pane menu: lock any pane to FX slot N of the
+  selected track (the Logic plugin-window "Multi" link idiom). Switch
+  tracks and every locked pane swaps to that track's slot; a blue
+  "FX slot N" badge marks the mode. Pane operations round it out:
+  merge into occupied panes, Swap with Pane, and "Fit Pane to Window"
+  (snaps splitters to the captured window's natural size).
 - **Favorites** — pin frequently-used windows for instant access from any
   container's menu.
 
@@ -131,15 +143,16 @@ remembers your layouts.
   links; non-blocking update check on startup (toggleable).
 
 ### Platform
-- **macOS arm64 + x86_64** — primary platform, actively tested on every release.
-- **Windows x64** — supported and CI-built; the v2.3.0 fix/feature batch
-  was developed and verified live on a Windows 11 VM (startup timing,
-  floating restore, ReaImGui interactions, clean mode, follow mode).
-  Community reports welcome.
-- **Linux x86_64 + aarch64** — supported and CI-built; the v2.3.0 batch
-  runtime-verified on Ubuntu 24.04 (see Known limitations for the X11
-  title-bar quirk and the ReaImGui software-rendering requirement).
-  Community reports welcome.
+- **macOS arm64 + x86_64** — primary platform, actively tested on every
+  release; the v2.4.0 batch went through an extended live session with
+  real-world plugin suites (Waves, iZotope, sonible, Audio Ease, Cradle).
+- **Windows x64** — supported and CI-built; the v2.4.0 multiplatform items
+  (tie-to-main, focused-FX, per-slot follow plumbing) were verified live
+  on a Windows 11 VM. Community reports welcome.
+- **Linux x86_64 + aarch64** — supported and CI-built; v2.4.0 verified on
+  Ubuntu 24.04 (transient-for tie, per-slot follow E2E; see Known
+  limitations for the X11 title-bar quirk and the ReaImGui
+  software-rendering requirement). Community reports welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -283,10 +296,11 @@ that version.
 - **Plugin window scaling is plugin-side.** Most VST/AU GUIs render
   at a fixed resolution and don't dynamically resize to fit the
   MaxPane pane. The plugin sits at its native size — surrounded by
-  whitespace if the pane is bigger, cropped to the pane viewport if
-  smaller. MaxPane reparents the OS window but cannot force the
-  plugin framework to redraw at a different scale. Resize the pane
-  to roughly match the plugin's preferred size, or use the plugin's
+  pane-colored background if the pane is bigger (since v2.4.0 on
+  macOS), cropped to the pane viewport if smaller. When the GUI is
+  larger than the pane, Windows shows REAPER's own FX-window
+  scrollbars; macOS has none (REAPER removed FX scrollbars there in
+  2015) — use the pane menu's "Fit Pane to Window", or the plugin's
   own zoom control if it exposes one. Same limitation in REAPER's
   native FX float windows.
 - **Linux: GL ReaImGui windows need software rendering to be captured.**
@@ -304,12 +318,18 @@ that version.
   natively in REAPER's docker, or keep the MaxPane pane at least as
   large as the script's minimum. Scripts without size constraints
   (e.g. ReaMD) are unaffected.
-- **Some v2.3.0 floating-window niceties are Windows-only.** Maximized-
-  state persistence and the taskbar-hide option have no portable
-  SWELL equivalent (macOS/Linux restore size and position only), and
-  the always-on-top toggle is a no-op on Linux. Dragging a captured
-  ReaImGui window's background is vetoed on Windows; on Linux it snaps
-  back within ~0.5 s instead.
+- **A few floating-window niceties are platform-specific.** Maximized-
+  state persistence and taskbar-hide are Windows-only (since v2.4.0 the
+  Settings dialog simply doesn't show an option on platforms where it
+  does nothing), the always-on-top toggle is a no-op on Linux, and
+  tie-to-main covers Windows + Linux (macOS has no equivalent owner
+  semantics). Dragging a captured ReaImGui window's background is
+  vetoed on Windows; on Linux it snaps back within ~0.5 s instead.
+- **macOS: window-hosted plug-ins sit above MaxPane's chrome.** The
+  out-of-process plug-in UIs described under Capture live in their own
+  chrome-less window glued over the pane; a 2 px strip at the container
+  edge stays grabbable for window resizing, and MaxPane menus and
+  toasts can be briefly covered by such a pane's content.
 - **Linux: HiDPI tooltip scaling is not implemented yet** — tooltips
   assume a 1.0 scale factor. (Windows display scaling is handled.)
 

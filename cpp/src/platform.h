@@ -21,6 +21,10 @@
   #ifndef GWLP_WNDPROC
     #define GWLP_WNDPROC GWL_WNDPROC
   #endif
+  // B2 (v2.4.0) — owner slot (F8 tie-to-main; Linux transient-for).
+  #ifndef GWLP_HWNDPARENT
+    #define GWLP_HWNDPARENT GWL_HWNDPARENT
+  #endif
   #ifndef SetWindowLongPtr
     #define SetWindowLongPtr SetWindowLong
   #endif

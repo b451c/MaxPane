@@ -47,6 +47,12 @@ struct TabEntry {
                                  // background moves the captured child in
                                  // SCREEN coords that SWELL applies parent-
                                  // relative — the watchdog snaps it back.
+  // ADR-081 §5 (v2.4.0, macOS) — WINDOW-HOSTED capture: remote-view plug-in
+  // UIs (out-of-process AUs, Rosetta-bridged VSTs) break on reparent but
+  // work in their own NSWindow, so the whole REAPER float stays alive as a
+  // borderless child NSWindow glued over the pane. Runtime-only; restore
+  // re-detects the class at recapture.
+  bool windowHosted;
 };
 
 // Returns the stable search prefix for known dynamic-title windows,
@@ -61,6 +67,10 @@ struct PaneState {
   TabEntry tabs[MAX_TABS_PER_PANE];
   int tabCount;   // 0 = empty pane
   int activeTab;  // -1 if none
+  int followSlot; // F11 (ADR-078) — -1 = not following; 0..7 = this pane
+                  // shows the selected track's main-chain FX slot N (the
+                  // Logic plugin-window Multi-Link idiom, per pane).
+                  // NOTE: ctor/Init must set -1 explicitly (memset → 0).
 };
 
 class WindowManager {
@@ -84,7 +94,17 @@ public:
   // Release menu actions pass true; every internal/close caller keeps the
   // default so the B14/B16/Bug-G ghost-prevention path is byte-equivalent.
   void CloseTab(int paneId, int tabIndex, bool returnVisible = false);
-  void MoveTab(int srcPane, int srcTab, int dstPane);
+  // F9 (v2.4.0) — returns false when the move cannot happen (bad ids,
+  // src==dst, destination full). The old void silently no-opped; callers
+  // that relocate in a loop MUST check it or a stale gate hangs the UI.
+  bool MoveTab(int srcPane, int srcTab, int dstPane);
+  // F9 (v2.4.0) — wholesale swap of two panes' contents (tabs + active
+  // tab). The tree is untouched: ratios/orientation stay with positions;
+  // per-tab runtime state (learned mins, colors, pinned) travels inside
+  // TabEntry. The only whole-pane op that works when BOTH panes are full.
+  bool SwapPanes(int a, int b);
+  // F9 (v2.4.0) — any captured tab in any pane (Layout-preset confirm).
+  bool HasAnyCaptured() const;
   void ReorderTab(int paneId, int fromIndex, int toIndex);
   void SetTabColor(int paneId, int tabIndex, int colorIndex);
   // C2 (ADR-027) — toggle pinned flag, then re-sort the pane so pinned tabs
@@ -115,6 +135,14 @@ public:
   // mode, because its tabs ARE the FX-chain switcher.
   void SetFollowActive(bool v) { m_followActive = v; }
   bool GetFollowActive() const { return m_followActive; }
+  // F11 (ADR-078) — per-pane slot-follow assignment. SetFollowSlot enforces
+  // slot uniqueness across panes (assigning slot N clears any other pane's
+  // N); slot -1 clears. Any assignment switches FollowTick from whole-chain
+  // (pane 0) to one-slot-per-pane mode.
+  int  GetFollowSlot(int paneId) const;
+  void SetFollowSlot(int paneId, int slot);
+  void ClearAllFollowSlots();
+  bool AnyFollowSlotAssigned() const;
   // Effective header height for a pane: TAB_BAR_COLLAPSED_HEIGHT when the
   // pref is on and the pane holds exactly one tab; TAB_BAR_HEIGHT otherwise
   // (incl. empty panes — their header carries the capture CTA text).
@@ -204,6 +232,14 @@ public:
   // hand-rolled copies (Open Windows menu, capture-by-click, drag-to-dock).
   static HWND ResolveDockFrameChild(HWND topLevel, char* title, HWND* dockFrameOut);
 
+  // v2.4.0 (A7) — after a committed capture the dock frame may still host
+  // OTHER docked windows (multi-tab docker: REAPER promotes the next tab
+  // once DockWindowRemove pulls the captured one out). Hiding the frame
+  // then makes those windows vanish while their toggle state stays 1
+  // (forum v2.3.0, LorenzoB #79 "only grabs one of them"). True when any
+  // direct child with a real title remains; docker chrome is untitled.
+  static bool DockFrameHasRemainingWindows(HWND dockFrame);
+
   // ADR-048 — capture allow-list. A window embedded in REAPER's MAIN window
   // (GetParent == g_reaperMainHwnd) is core UI (arrange / ruler / TCP /
   // transport) and is grabbable ONLY if it positively identifies as a real
@@ -227,5 +263,10 @@ private:
   bool m_hideAllTabBars = false;    // U12/ADR-068 — clean mode pref mirror
   bool m_followActive = false;      // U14/ADR-070 — follow-mode pref mirror
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
+  // ADR-081 §5 — remote-view windows (out-of-process AU / bridged VST UIs)
+  // are window-hosted instead of reparented; DispatchCapture detects the
+  // class (mac) and routes to the right capture protocol.
+  bool DoHostWindowCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
+  bool DispatchCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
   void DoRelease(TabEntry& tab, bool toggleOff = true, bool returnVisible = false);
 };

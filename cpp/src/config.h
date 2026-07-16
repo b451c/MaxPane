@@ -4,7 +4,10 @@
 // cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
 // the Settings dialog "About" section reads this verbatim, and the
 // updater compares it against GitHub Releases tag_name on startup.
-#define MAXPANE_VERSION_STRING "v2.3.0"
+// v2.4.0 cycle in progress — "-dev" marks pre-release working-tree builds
+// so smoke testers can tell them from the released v2.3.0 (release prep
+// strips the suffix). ParseVersion's sscanf ignores the suffix safely.
+#define MAXPANE_VERSION_STRING "v2.4.0"
 
 // Layout constants
 static const int MAX_PANES = 16;

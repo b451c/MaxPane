@@ -218,6 +218,60 @@ bool SplitTree::CanMerge(int leafNodeIndex) const
   return m_nodes[leafNodeIndex].parent >= 0;
 }
 
+bool SplitTree::FitPaneTo(int paneId, int targetW, int targetH)
+{
+  int leaf = NodeForPane(paneId);
+  if (leaf < 0) return false;
+  bool changed = false;
+  for (int axis = 0; axis < 2; axis++) {
+    const bool wantWidth = (axis == 0);
+    const int target = wantWidth ? targetW : targetH;
+    if (target <= 0) continue;
+    // Nearest ancestor branch that controls this axis.
+    int child = leaf;
+    int anc = m_nodes[leaf].parent;
+    while (anc >= 0 && anc < MAX_TREE_NODES) {
+      const bool controlsWidth = (m_nodes[anc].orient == SPLIT_VERTICAL);
+      if (controlsWidth == wantWidth) break;
+      child = anc;
+      anc = m_nodes[anc].parent;
+    }
+    if (anc < 0 || anc >= MAX_TREE_NODES) continue;  // container edge owns it
+    SplitNode& b = m_nodes[anc];
+    const int P = wantWidth ? (int)(b.rect.right - b.rect.left)
+                            : (int)(b.rect.bottom - b.rect.top);
+    if (P <= SPLITTER_WIDTH + 2 * MIN_PANE_SIZE) continue;
+    float ratio;
+    if (b.childA == child) {
+      ratio = (float)target / (float)P;
+    } else {
+      ratio = (float)(P - SPLITTER_WIDTH - target) / (float)P;
+    }
+    if (ratio < 0.05f) ratio = 0.05f;
+    if (ratio > 0.95f) ratio = 0.95f;
+    if (b.ratio != ratio) { b.ratio = ratio; changed = true; }
+  }
+  return changed;
+}
+
+int SplitTree::MergeDestinationPane(int leafNodeIndex) const
+{
+  if (!CanMerge(leafNodeIndex)) return -1;
+  int sib = GetSibling(leafNodeIndex);
+  if (sib < 0) return -1;
+  const int parentIdx = m_nodes[leafNodeIndex].parent;
+  // Descend the sibling subtree on the MERGING node's side: childA is
+  // unconditionally top/left, so a childB (right/bottom) pane merging
+  // up/left ends in the sibling's childB-most (nearest) leaf.
+  const bool mergingIsChildA = (m_nodes[parentIdx].childA == leafNodeIndex);
+  int cur = sib;
+  while (cur >= 0 && cur < MAX_TREE_NODES && m_nodes[cur].type == NODE_BRANCH) {
+    cur = mergingIsChildA ? m_nodes[cur].childA : m_nodes[cur].childB;
+  }
+  if (cur < 0 || cur >= MAX_TREE_NODES || m_nodes[cur].type != NODE_LEAF) return -1;
+  return m_nodes[cur].paneId;
+}
+
 int SplitTree::NodeForPane(int paneId) const
 {
   for (int i = 0; i < m_leafCount; i++) {

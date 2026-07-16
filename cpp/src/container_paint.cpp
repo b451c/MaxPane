@@ -7,6 +7,7 @@
 #include "drag_dock.h"
 #include "workspace_manager.h"
 #include "swell_cocoa_helpers.h"
+#include <cstdio>   // snprintf (F11 slot badge) — MSVC strict-include discipline
 
 // =========================================================================
 // OnPaint
@@ -388,6 +389,26 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
       }
     }
 
+    // v2.4.0 polish — 2 px accent underline on the active tab (the
+    // Cubase/Ableton idiom): active vs inactive differed only by bg
+    // lightness, which reads poorly at a glance with several tabs open.
+    // Custom-colored tabs get their own color lightened (their bg already
+    // IS the color); default tabs get the shared accent blue. Paint-only,
+    // no hit-test change.
+    if (t == ps->activeTab) {
+      int ci = ps->tabs[t].colorIndex;
+      COLORREF accent = COLOR_DRAG_HIGHLIGHT;
+      if (ci > 0 && ci < TAB_COLOR_COUNT) {
+        const TabColor& tc = TAB_COLORS[ci];
+        int r = tc.r + 60, g = tc.g + 60, b = tc.b + 60;
+        accent = RGB(r < 255 ? r : 255, g < 255 ? g : 255, b < 255 ? b : 255);
+      }
+      RECT accentRect = { tabLeft, tabBarBottom - 2, tabRight, tabBarBottom };
+      HBRUSH accentBrush = CreateSolidBrush(accent);
+      FillRect(hdc, &accentRect, accentBrush);
+      DeleteObject(accentBrush);
+    }
+
     SetBkMode(hdc, TRANSPARENT);
     {
       COLORREF textColor;
@@ -421,9 +442,14 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
 
     // Only draw close button if tab is wide enough to avoid overlap (B9)
     if (lay.tabWidth >= TAB_CLOSE_MIN_WIDTH) {
-      SetTextColor(hdc, COLOR_TAB_CLOSE_TEXT);
+      // v2.4.0 polish — a real multiplication sign (U+00D7, 2 UTF-8 bytes,
+      // hence length -1) instead of a lowercase "x", brightened when the
+      // tab is hovered so the affordance answers the cursor. Same
+      // ASCII-safe-glyph rationale as the pinned bullet above.
+      bool closeHover = (paneId == m_hoverPane && t == m_hoverTab);
+      SetTextColor(hdc, closeHover ? RGB(210, 210, 210) : COLOR_TAB_CLOSE_TEXT);
       RECT closeRect = { tabRight - 16, tabBarTop + 2, tabRight - 2, tabBarBottom - 2 };
-      DrawTextUtf8(hdc, "x", 1, &closeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      DrawTextUtf8(hdc, "\xC3\x97", -1, &closeRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     }
 
     if (t < ps->tabCount - 1) {
@@ -452,5 +478,19 @@ void MaxPaneContainer::DrawTabBar(HDC hdc, int paneId, const RECT& paneRect)
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, menuBtnHover ? RGB(230, 230, 230) : RGB(190, 190, 190));
     DrawTextUtf8(hdc, "\xe2\x96\xbc", -1, &btnRect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+
+    // ADR-081 addendum — F11 discoverability: a pane locked to an FX slot
+    // looked identical to a chain-follow pane, so "follow loads only one
+    // FX" read as a regression during the owner smoke. Accent badge left
+    // of the ▼ button names the mode; turn off via the pane menu
+    // (Follow FX slot → Off).
+    if (ps->followSlot >= 0) {
+      char badge[24];  // "FX slot " + worst-case %d + NUL (GCC -Wformat-truncation)
+      std::snprintf(badge, sizeof(badge), "FX slot %d", ps->followSlot + 1);
+      RECT bRect = { btnRect.left - 70, tabBarTop, btnRect.left - 5, tabBarBottom };
+      SetTextColor(hdc, COLOR_DRAG_HIGHLIGHT);
+      DrawTextUtf8(hdc, badge, -1, &bRect,
+                   DT_RIGHT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
   }
 }

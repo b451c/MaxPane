@@ -143,6 +143,8 @@ public:
   // U14 (ADR-070) — enqueue the selected track's whole FX chain into paneId.
   // transient=true marks the tabs as follow-mode (never persisted).
   void CaptureTrackFxChain(int paneId, bool transient);
+  // F11 (ADR-078) — slot mode: one FX slot per marked pane (see FollowTick).
+  void CaptureTrackFxSlots();
   // U14 (ADR-070) — experimental follow-selected-track poll (500ms OnTimer
   // tick): when the last-touched track changes and stays stable for 2 ticks,
   // replace pane 0's transient tabs with the new track's FX chain.
@@ -182,7 +184,24 @@ public:
 
   void ApplyPreset(LayoutPreset preset);
   void SplitPane(int paneId, SplitterOrientation orient);
-  void MergePane(int paneId);
+  // F9 (v2.4.0) — releaseTabs=true is the DELETE_PANE path (today's
+  // behavior: stale-list append + release). releaseTabs=false is the new
+  // MERGE path: tabs RELOCATE into the nearest sibling leaf (all-or-
+  // nothing; grayed in the menu when they don't fit).
+  void MergePane(int paneId, bool releaseTabs = true);
+  // F9 (v2.4.0) — swap two panes' contents wholesale (works when both are
+  // full — the one case Move to Pane can never handle).
+  void SwapPanes(int paneA, int paneB);
+  // F12 (ADR-079) — pref-gated focus of the active fx@/takefx@ tab's window
+  // after a USER-initiated tab switch (tab click, NextTab/PrevTab). Never
+  // called from programmatic switches (restore, follow-mode) — SW_SHOWNA
+  // stays the baseline everywhere else.
+  void FocusActiveFxTab(int paneId);
+  // v2.4.0 "Fit Pane to Window" (owner smoke feedback) — resize the
+  // adjacent splitters so this pane matches its active captured window's
+  // natural (capture-time) size + header. Kills the host's white filler
+  // around fixed-size plugin UIs without touching how windows stretch.
+  void FitPaneToWindow(int paneId);
   void ToggleSolo(int paneId);
   bool IsSoloActive() const { return m_soloActive; }
   int NodeForPane(int paneId) const { return m_tree.NodeForPane(paneId); }
@@ -192,7 +211,10 @@ public:
 
   // Workspace management
   void SaveWorkspace(const char* name);
-  void LoadWorkspace(const char* name);
+  // F7 (v2.4.0) — startupAutoLoad=true is the STEP-2.5 startup-workspace
+  // fire: it mutes project persistence (see m_projectPersistMuted) so an
+  // untouched project is never dirtied by MaxPane alone.
+  void LoadWorkspace(const char* name, bool startupAutoLoad = false);
   void DeleteWorkspace(const char* name);
 
   // F6 — capture by favorite slot. paneId < 0 routes to m_focusedPaneId.
@@ -216,6 +238,18 @@ public:
   void OpenWorkspacePickup();
 
   HWND GetHwnd() const { return m_hwnd; }
+  // A3 (v2.4.0) — GetHwnd() can dangle after a docker-X close: WM_DESTROY
+  // bypasses Shutdown and deliberately never nulls m_hwnd (B26 mac quit
+  // ordering). IsAlive() is the truth test for "instance is open". SWELL
+  // IsWindow walks window lists — keep this OFF per-tick/paint paths.
+  bool IsAlive() const { return m_hwnd && IsWindow(m_hwnd); }
+  // F7 (v2.4.0) — cleared by the first user-initiated action after the
+  // startup-workspace auto-load (mouse in container, menu command, Toggle,
+  // MaxPane hotkey); until then SaveState skips the project channel so the
+  // auto-load never dirties an untouched project (critic finding: the
+  // trailing SaveState → MarkProjectDirty would prompt "Save changes?"
+  // every session and self-cannibalize the feature after the first save).
+  void UnmuteProjectPersist() { m_projectPersistMuted = false; }
 
   // F-39 — swap an already-open container's contents to the current project's
   // saved state. The force-open timer only Creates a CLOSED container; when
@@ -292,6 +326,13 @@ private:
                          // CaptureFloatGeometry-clobber the geometry that
                          // LoadFloatingState just read (the floating branch
                          // applies it only at the END of Create)
+  bool m_needsSettleRefresh = false;  // A2 (v2.4.0) — armed by Create();
+                         // first OnTimer tick re-runs RefreshLayout to catch
+                         // a docker resize delivered without a real WM_SIZE
+  bool m_redockChecked = false;  // A3 (v2.4.0) — deferred dock self-heal ran
+  int  m_redockTicks = 0;        // A3 — OnTimer ticks since Create()
+  bool m_projectPersistMuted = false;  // F7 — see UnmuteProjectPersist()
+  DWORD m_lastDragReposTick = 0;  // v2.4.0 — splitter-drag reposition throttle
   CaptureMode m_captureMode;
   DragState m_dragState;
   std::unique_ptr<CaptureQueue> m_captureQueue;
@@ -304,7 +345,6 @@ private:
   int m_hoverSplitter;      // branch index of splitter under mouse, -1 when none
   int m_hoverPane;          // pane id of tab under mouse, -1 when none
   int m_hoverTab;           // tab index under mouse, -1 when none; -2 = menu button
-  bool m_pendingRppLoad;     // true if waiting for RPP state to become available
 
   // Solo (maximize) pane state
   bool m_soloActive = false;

@@ -298,7 +298,20 @@ void MaxPaneContainer::OnSize(int cx, int cy)
   int availH = cy - navH;
   if (availH < 1) availH = 1;
   m_tree.Recalculate(cx, availH);
-  m_winMgr.RepositionAll(m_tree);
+  // ADR-081 §2 (owner smoke round 5) — same stutter as the splitter drag,
+  // different entry point: a live window-edge resize fires WM_SIZE per
+  // mouse move and each ran a full RepositionAll over heavy plugin UIs
+  // (the 13x-in-200ms burst in the owner's log). Same ~20 Hz throttle
+  // (shared tick — a splitter drag and a window resize never run at the
+  // same time); a skipped pass arms the settle refresh so the exact final
+  // layout lands on the next OnTimer tick after the resize stops.
+  const DWORD nowTick = GetTickCount();
+  if (nowTick - m_lastDragReposTick >= 50) {
+    m_lastDragReposTick = nowTick;
+    m_winMgr.RepositionAll(m_tree);
+  } else {
+    m_needsSettleRefresh = true;
+  }
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
@@ -317,7 +330,18 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
     int availH = (rc.bottom - rc.top) - navH;
     if (availH < 1) availH = 1;
     m_tree.Drag(x, y, rc.right - rc.left, availH);
-    m_winMgr.RepositionAll(m_tree);
+    // v2.4.0 (owner smoke feedback, mac) — live-resizing every captured
+    // child on EVERY mouse move made heavy plugin UIs (iZotope-class)
+    // stutter hard during splitter drags: each move = SetWindowPos +
+    // WM_SIZE cascade + full plugin relayout. Throttle child repositioning
+    // to ~20 Hz; the splitter line itself still tracks the mouse every
+    // move (InvalidateRect below), and drag END lands the exact final
+    // layout (OnLButtonUp → RefreshLayout).
+    const DWORD nowTick = GetTickCount();
+    if (nowTick - m_lastDragReposTick >= 50) {
+      m_lastDragReposTick = nowTick;
+      m_winMgr.RepositionAll(m_tree);
+    }
     InvalidateRect(m_hwnd, nullptr, FALSE);
     return;
   }
@@ -442,6 +466,10 @@ void MaxPaneContainer::OnLButtonUp(int x, int y)
   if (m_tree.IsDragging()) {
     m_tree.EndDrag();
     ReleaseCapture();
+    // v2.4.0 — with the drag-time reposition throttled to ~20 Hz, the last
+    // mouse move may not have repositioned children; land the exact final
+    // layout here (correct-height recalc + reposition + repaint).
+    RefreshLayout();
     SaveState();
   }
 }
@@ -457,6 +485,7 @@ void MaxPaneContainer::NextTab()
   if (!ps || ps->tabCount < 2) return;
   int next = (ps->activeTab + 1) % ps->tabCount;
   m_winMgr.SetActiveTab(m_focusedPaneId, next);
+  FocusActiveFxTab(m_focusedPaneId);  // F12 — user-initiated hotkey switch
   m_winMgr.RepositionAll(m_tree);
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }
@@ -468,6 +497,7 @@ void MaxPaneContainer::PrevTab()
   if (!ps || ps->tabCount < 2) return;
   int prev = (ps->activeTab - 1 + ps->tabCount) % ps->tabCount;
   m_winMgr.SetActiveTab(m_focusedPaneId, prev);
+  FocusActiveFxTab(m_focusedPaneId);  // F12 — user-initiated hotkey switch
   m_winMgr.RepositionAll(m_tree);
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }

@@ -1,6 +1,7 @@
 // macOS only — compiled via CMakeLists.txt (APPLE target_sources)
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>   // CALayer (capture hover-highlight overlay)
+#import <objc/runtime.h>            // associated objects (ADR-081 §5 window hosting)
 #include "swell_cocoa_helpers.h"
 #include "debug.h"
 
@@ -68,7 +69,12 @@ void ForceHideWindow(HWND hwnd)
   }
 }
 
-void ApplyFloatingWindowChrome(HWND hwnd, const char* title, bool /*hideFromTaskbar*/)
+// B2 (v2.4.0) — owner (tie-to-main) is Win32-only: SWELL's macOS owner list
+// only drives a destroy cascade (owner teardown would DestroyWindow the
+// float mid-quit — against the shutdown lore) and app activation already
+// raises all REAPER windows together on macOS. Ignored here.
+void ApplyFloatingWindowChrome(HWND hwnd, const char* title, bool /*hideFromTaskbar*/,
+                               HWND /*owner*/)
 {
   if (!hwnd) return;
   NSView* view = (NSView*)hwnd;
@@ -314,6 +320,186 @@ void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)
   // independent window level. (Same guard as ApplyFloatingWindowChrome.)
   if (!window || [window contentView] != view) return;
   [window setLevel:onTop ? NSFloatingWindowLevel : NSNormalWindowLevel];
+}
+
+// ADR-081 addendum — dark-filler fallback for a plain NSView container that
+// has no SWELL wndproc to subclass (fx@ white-background fix). The layer
+// color renders beneath the view's drawn content and its subviews, so a
+// plugin view above it is untouched; only otherwise-unpainted backing
+// becomes pane-colored. AU/VST plugin views are typically layer-backed
+// already, so setWantsLayer on the CONTAINER is safe.
+void SetViewBackgroundColorPlatform(HWND hwnd, int r, int g, int b)
+{
+  if (!hwnd) return;
+  NSView* view = (NSView*)hwnd;
+  if (![view isKindOfClass:[NSView class]]) return;
+  [view setWantsLayer:YES];
+  [view layer].backgroundColor =
+      [[NSColor colorWithCalibratedRed:r / 255.0
+                                 green:g / 255.0
+                                  blue:b / 255.0
+                                 alpha:1.0] CGColor];
+}
+
+// ADR-081 §2 telemetry — Obj-C class name of the NSView behind an HWND.
+// Turns the [FXBG] dumps into hard evidence: GL/Metal plugin views
+// (NSOpenGLView, JUCE peers) that black out after reparenting are then
+// identifiable by name instead of guessed at.
+void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize)
+{
+  if (!buf || bufSize <= 0) return;
+  buf[0] = 0;
+  if (!hwnd) return;
+  NSObject* obj = (NSObject*)hwnd;
+  const char* name = [NSStringFromClass([obj class]) UTF8String];
+  if (!name) return;
+  snprintf(buf, (size_t)bufSize, "%s", name);
+}
+
+// ===========================================================================
+// ADR-081 §5 — window-hosted capture. Remote-view plug-in UIs (out-of-process
+// AUs via AUHostingServiceXPC, Rosetta-bridged x86_64 VSTs) render through
+// Apple's ViewBridge and DIE when their NSView is moved to another NSWindow
+// (SetParent path A destroys their window). But they are rock-solid in their
+// OWN window — REAPER's float. So: keep that float window ALIVE, strip its
+// chrome, and glue it over the pane as a borderless CHILD NSWindow of the
+// container's window. AppKit moves child windows with the parent; resize
+// via setFrame runs REAPER's native float-resize path (the one Cockos tuned
+// for AUv3). The saved styleMask and host reference live as associated
+// objects on the plugin's NSWindow.
+// ===========================================================================
+static const void* kMaxPaneHostWinKey   = &kMaxPaneHostWinKey;
+static const void* kMaxPaneHostMaskKey  = &kMaxPaneHostMaskKey;
+static const void* kMaxPaneHostFrameKey = &kMaxPaneHostFrameKey;   // expected frame (NSValue)
+static const void* kMaxPaneHostObsKey   = &kMaxPaneHostObsKey;     // observer tokens (NSArray)
+
+static NSWindow* HostedPluginWindow(HWND targetHwnd)
+{
+  if (!targetHwnd) return nil;
+  NSView* v = (NSView*)targetHwnd;
+  if (![v isKindOfClass:[NSView class]]) return nil;
+  NSWindow* w = [v window];
+  if (!w || [w contentView] != v) return nil;  // must be the window's root
+  return w;
+}
+
+// Round 2 (owner smoke) — REAPER repositions/autosizes its float whenever
+// the plugin UI (re)initializes; gluing only on layout changes let the
+// window fly out until the next relayout. Enforce the expected frame the
+// moment the window moves or resizes on its own.
+static void EnforceHostedFrame(NSWindow* win)
+{
+  NSValue* v = (NSValue*)objc_getAssociatedObject(win, kMaxPaneHostFrameKey);
+  if (!v) return;
+  NSRect want = [v rectValue];
+  if (!NSEqualRects([win frame], want)) [win setFrame:want display:YES];
+}
+
+bool AttachWindowAsChildWindow(HWND containerHwnd, HWND targetHwnd)
+{
+  NSView* cv = (NSView*)containerHwnd;
+  if (![cv isKindOfClass:[NSView class]]) return false;
+  NSWindow* host = [cv window];
+  NSWindow* win = HostedPluginWindow(targetHwnd);
+  if (!host || !win || host == win) return false;
+  objc_setAssociatedObject(win, kMaxPaneHostMaskKey,
+                           @([win styleMask]), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(win, kMaxPaneHostWinKey, host,
+                           OBJC_ASSOCIATION_ASSIGN);
+  // Round 2 — do NOT swap to borderless: removing NSWindowStyleMaskTitled
+  // recreates the window on the window-server side, which kills the remote
+  // view exactly like a reparent did (owner smoke: blank until a UI-toggle
+  // recreated the view). Keep the mask TITLED and hide the chrome visually
+  // instead — same window identity throughout.
+  // Round 3 — drop the RESIZABLE bit too (lightweight, unlike removing
+  // Titled): a resizable child at the container's edge grabs the resize
+  // cursor that belongs to MaxPane's own window edge.
+  [win setStyleMask:(([win styleMask] | NSWindowStyleMaskFullSizeContentView) &
+                     ~NSWindowStyleMaskResizable)];
+  [win setTitlebarAppearsTransparent:YES];
+  [win setTitleVisibility:NSWindowTitleHidden];
+  [[win standardWindowButton:NSWindowCloseButton] setHidden:YES];
+  [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+  [[win standardWindowButton:NSWindowZoomButton] setHidden:YES];
+  [win setMovable:NO];
+  // Round 4 (owner: "nie podoba mi się ta krawędź") — the window's drop
+  // shadow reads as a dark halo against the pane background; an embedded
+  // pane has no business casting one.
+  [win setHasShadow:NO];
+  [host addChildWindow:win ordered:NSWindowAbove];
+  [win orderFront:nil];
+  // Self-repositioning guard: observe move/resize and snap back instantly.
+  NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+  id o1 = [nc addObserverForName:NSWindowDidMoveNotification object:win
+                           queue:nil usingBlock:^(NSNotification* n) {
+                             EnforceHostedFrame((NSWindow*)n.object);
+                           }];
+  id o2 = [nc addObserverForName:NSWindowDidResizeNotification object:win
+                           queue:nil usingBlock:^(NSNotification* n) {
+                             EnforceHostedFrame((NSWindow*)n.object);
+                           }];
+  objc_setAssociatedObject(win, kMaxPaneHostObsKey, @[o1, o2],
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  return true;
+}
+
+void SetChildWindowFrame(HWND containerHwnd, HWND targetHwnd,
+                         int x, int y, int w, int h)
+{
+  NSView* cv = (NSView*)containerHwnd;
+  if (![cv isKindOfClass:[NSView class]]) return;
+  NSWindow* host = [cv window];
+  NSWindow* win = HostedPluginWindow(targetHwnd);
+  if (!host || !win) return;
+  // Container-client rect → window coords → screen; convertRect handles the
+  // flipped SWELL view internally.
+  NSRect inWin = [cv convertRect:NSMakeRect(x, y, w, h) toView:nil];
+  NSRect scr = [host convertRectToScreen:inWin];
+  objc_setAssociatedObject(win, kMaxPaneHostFrameKey, [NSValue valueWithRect:scr],
+                           OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  [win setFrame:scr display:YES];
+}
+
+void ShowChildWindow(HWND targetHwnd, bool show)
+{
+  NSWindow* win = HostedPluginWindow(targetHwnd);
+  if (!win) return;
+  NSWindow* host = (NSWindow*)objc_getAssociatedObject(win, kMaxPaneHostWinKey);
+  if (show) {
+    // orderOut: silently drops the child-window link — re-add on every show.
+    if (host && ![[host childWindows] containsObject:win]) {
+      [host addChildWindow:win ordered:NSWindowAbove];
+    }
+    [win orderFront:nil];
+  } else {
+    if (host) [host removeChildWindow:win];
+    [win orderOut:nil];
+  }
+}
+
+void DetachChildWindow(HWND targetHwnd)
+{
+  NSWindow* win = HostedPluginWindow(targetHwnd);
+  if (!win) return;
+  NSArray* obs = (NSArray*)objc_getAssociatedObject(win, kMaxPaneHostObsKey);
+  for (id o in obs) [[NSNotificationCenter defaultCenter] removeObserver:o];
+  objc_setAssociatedObject(win, kMaxPaneHostObsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  objc_setAssociatedObject(win, kMaxPaneHostFrameKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  NSWindow* host = (NSWindow*)objc_getAssociatedObject(win, kMaxPaneHostWinKey);
+  if (host) [host removeChildWindow:win];
+  NSNumber* mask = (NSNumber*)objc_getAssociatedObject(win, kMaxPaneHostMaskKey);
+  [win setStyleMask:mask ? (NSWindowStyleMask)[mask unsignedIntegerValue]
+                         : (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                            NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)];
+  [win setTitlebarAppearsTransparent:NO];
+  [win setTitleVisibility:NSWindowTitleVisible];
+  [[win standardWindowButton:NSWindowCloseButton] setHidden:NO];
+  [[win standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+  [[win standardWindowButton:NSWindowZoomButton] setHidden:NO];
+  [win setHasShadow:YES];
+  [win setMovable:YES];
+  objc_setAssociatedObject(win, kMaxPaneHostWinKey, nil, OBJC_ASSOCIATION_ASSIGN);
+  objc_setAssociatedObject(win, kMaxPaneHostMaskKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 void ClampRectToVisibleScreen(RECT* rect)

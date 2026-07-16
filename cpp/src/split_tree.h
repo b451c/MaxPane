@@ -107,6 +107,23 @@ public:
   // Get the sibling node index of a given node
   int GetSibling(int nodeIndex) const;
 
+  // v2.4.0 "Fit Pane to Window" (owner smoke feedback) — adjust the NEAREST
+  // width- and height-controlling ancestor ratios so this pane's rect gets
+  // the target extents (the active window's natural size). Nearest-ancestor
+  // only, by design: least possible layout disturbance — exactly what the
+  // user dragging the two adjacent splitters would do. Perpendicular
+  // ancestors pass the axis extent through unchanged, so the leaf lands on
+  // target unless MIN_PANE_SIZE clamps kick in. Returns true if any ratio
+  // changed (caller re-runs RefreshLayout).
+  bool FitPaneTo(int paneId, int targetW, int targetH);
+
+  // F9 (v2.4.0) — the paneId a merged-away leaf's tabs relocate into: the
+  // leaf of the sibling subtree NEAREST the merging pane. Descends the
+  // sibling on the merging node's own side (childA is always top/left), so
+  // a right/bottom pane merging up/left lands in the sibling's right/
+  // bottom-most leaf. Returns -1 when the node can't merge.
+  int MergeDestinationPane(int leafNodeIndex) const;
+
 private:
   SplitNode m_nodes[MAX_TREE_NODES];
   int m_root;

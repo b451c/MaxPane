@@ -898,7 +898,7 @@ both the container itself and any captured child windows route correctly.
 
 ---
 
-## 14. Feature surface, v2.0–v2.3 (one-liners)
+## 14. Feature surface, v2.0–v2.4 (one-liners)
 
 For each feature: where it lives + what ADR justifies it. Detail lives in
 `docs/v2/V2_DECISIONS.md` (local-only).
@@ -937,6 +937,17 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 | Clean mode (hide occupied-pane tab bars), splitter color presets, pane-remainder paint fill, DPI-scaled tooltips | `window_manager.cpp` (`PaneHeaderHeight`), `container_paint.cpp`, `config.cpp`, `swell_cocoa_helpers.h` (`MaxPaneDpiScaleForDC`) | ADR-068 |
 | Toolbar release-gesture click swallow; bindable always-on-top action; hide-from-taskbar pref (Win32 `WS_EX_TOOLWINDOW`) | `window_manager.cpp`, `main.cpp`, `container.cpp` (`ApplyFloatingWindowChrome`) | ADR-069 |
 | Track FX chain capture (one-shot) + follow-selected-track mode (experimental; transient tabs excluded from all persistence writers) | `fx_capture.{h,cpp}`, `container.cpp` (`FollowTick`, `CaptureTrackFxChain`) | ADR-070 |
+| Startup workspace (Settings dropdown; loads when the project carries no MaxPane state, persist-muted so it never dirties the project) | `settings_dialog.cpp`, `main.cpp` (startup STEP 2.5), `container_state.cpp` | ADR-075 |
+| Tie floating MaxPane to REAPER main (Win32 owned-window / Linux GDK transient-for; inert on mac — row not shown there) | `swell_cocoa_helpers.h` (`ApplyFloatingWindowChrome` owner param), `container.cpp` (`TieToMainOwner`) | ADR-076 |
+| Merge into occupied panes + Swap with Pane + menu discoverability (named targets, grayed-with-reason) | `container.cpp` (`MergePane`, `SwapPanes`), `split_tree.cpp` (`MergeDestinationPane`), `context_menu.cpp` | ADR-077 |
+| Follow FX slot — per-pane lock to slot N of the selected track (Logic "Multi" link idiom); "FX slot N" badge in the tab bar | `window_manager.{h,cpp}` (`followSlot`), `container.cpp` (`CaptureTrackFxSlots`), `container_paint.cpp` | ADR-078 |
+| Focus FX on user tab switch (MIDI controllers following REAPER's focused FX) | `container.cpp` (`FocusActiveFxTab`) | ADR-079 |
+| Fit Pane to Window (splitters snap to the captured window's natural size) | `container.cpp` (`FitPaneToWindow`), `split_tree.cpp` (`FitPaneTo`) | ADR-080 |
+| fx@ windows de-ReaImGui'd + gentle fx@ watchdog (position snaps, size clamps only when oversized; no learned-min/floor-hide) | `window_manager.cpp` (capture classify, `CheckAlive` DRIFT-FX) | ADR-080/081 |
+| Dark filler around plugins smaller than their pane (macOS; wrapper-chain subclass, strips around the dominant child view) | `window_manager.cpp` (`FxBgSubclassProc` family) | ADR-081 |
+| Window-hosted capture for remote-view plugin UIs on macOS (out-of-process AUs, Rosetta-bridged x86_64 VSTs): the REAPER float stays alive as a chrome-less child NSWindow glued to the pane; frame enforced via NSWindow move/resize observers | `window_manager.cpp` (`DispatchCapture`, `DoHostWindowCapture`), `swell_cocoa_helpers.mm` (attach/frame/show/detach) | ADR-081 §5 |
+| Settings platform gating (mac 6 / Linux 7 / Win 8 rows; static per-platform layout via `SD_Y_*` constants through swell_resgen + rc.exe) | `resources/settings_dialog.{h,rc}`, `settings_dialog.cpp` | ADR-081 |
+| Explicit workspace save materializes follow-mode transient tabs (automatic writers still exclude them) | `workspace_manager.cpp` (`EnqueueSave`) | ADR-081 §6 |
 
 ---
 

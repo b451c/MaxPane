@@ -11,6 +11,7 @@
 #include "project_state.h"
 #include "state_accessor.h"
 #include "nav_bar.h"      // Feature A — NavBar::NAV_BAR_HEIGHT (bar-strip repaints)
+#include "swell_cocoa_helpers.h"  // A2 — ForceViewLayoutAndDisplay after reload
 #include <cstring>
 #include <cstdio>
 
@@ -57,6 +58,9 @@ void MaxPaneContainer::ClearCurrentWorkspace()
 
 void MaxPaneContainer::MarkWorkspaceDirty()
 {
+  // F7 (v2.4.0) — every caller is a user-initiated layout mutation, so this
+  // is a natural unmute point (BEFORE the launcher-mode early return).
+  m_projectPersistMuted = false;
   // Dirty has no meaning without a loaded workspace — skip the write so we
   // don't repaint or persist no-ops on every capture in launcher mode.
   if (!m_currentWorkspaceName[0]) return;
@@ -193,6 +197,15 @@ void MaxPaneContainer::SaveState()
 {
   // Don't persist the temporary solo layout — it would overwrite the real tree
   if (m_soloActive) return;
+
+  // F7 (v2.4.0) — muted while the startup-workspace auto-load is the ONLY
+  // thing that has touched this container: skipping the project write keeps
+  // an untouched project clean (no MarkProjectDirty prompt) and keeps the
+  // startup workspace firing for it. First user action unmutes.
+  if (m_projectPersistMuted) {
+    DBG("[MaxPane] SaveState: muted (startup-workspace pristine state)\n");
+    return;
+  }
 
   // Per ADR-013: global `current_state_*` ExtState writes were removed
   // (LoadState no longer reads them). Per-project state is saved via
@@ -471,6 +484,7 @@ void MaxPaneContainer::LoadState()
   int nodeCount = 0;
   PaneSnapshot panes[MAX_PANES];
   memset(panes, 0, sizeof(panes));
+  NormalizePaneSnapshots(panes, MAX_PANES);  // F11 — memset poisons followSlot
   bool hasTreeFormat = false;
   bool loaded = false;
 
@@ -490,7 +504,6 @@ void MaxPaneContainer::LoadState()
       }
     }
     g_pendingProjectState[m_instanceId].valid = false;  // consumed
-    m_pendingRppLoad = false;
   }
 
   if (!loaded && g_EnumProjects) {
@@ -500,7 +513,6 @@ void MaxPaneContainer::LoadState()
     if (proj && m_wsMgr->HasProjectState(proj)) {
       loaded = m_wsMgr->LoadProjectState(proj, snap, nodeCount, panes, hasTreeFormat);
       DBG("[MaxPane] LoadState: loaded per-project ProjExtState (nodes=%d)\n", nodeCount);
-      m_pendingRppLoad = false;
     }
   }
 
@@ -509,6 +521,7 @@ void MaxPaneContainer::LoadState()
       DBG("[MaxPane] LoadState: corrupt tree in project state, resetting to empty\n");
       m_tree.Reset();
       memset(panes, 0, sizeof(panes));
+      NormalizePaneSnapshots(panes, MAX_PANES);  // F11
       // Audit M1.2 — this used to be Release-silent: the user opened a
       // project and found MaxPane empty with no explanation and no log.
       ShowToast("MaxPane layout reset — saved state in this project couldn't be read.");
@@ -517,6 +530,7 @@ void MaxPaneContainer::LoadState()
     // No RPP / no project state → empty launcher (ADR-013)
     m_tree.Reset();
     memset(panes, 0, sizeof(panes));
+    NormalizePaneSnapshots(panes, MAX_PANES);  // F11 — the live phantom source
     DBG("[MaxPane] LoadState: empty launcher (no RPP, no project state)\n");
   }
 
@@ -537,16 +551,30 @@ void MaxPaneContainer::ReloadProjectState()
   m_captureQueue->CancelAll();
   m_winMgr.ReleaseAll(false);   // detach + hide current captures (no toggle)
   LoadState();                  // tree + ApplyPaneState for the current project
-  RECT rc;
-  GetClientRect(m_hwnd, &rc);
-  m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
-  m_winMgr.RepositionAll(m_tree);
-  InvalidateRect(m_hwnd, nullptr, FALSE);
+  // A2 (v2.4.0) — route through RefreshLayout: the hand-rolled recalc here
+  // passed the FULL client height, ignoring the nav-bar reservation, so
+  // every reload (screenset recall, project-load-while-open) laid the pane
+  // grid out 30 px too tall — chrome painted at new rects over children
+  // stuck at stale ones (LorenzoB #77 duplicated-pane glitch).
+  RefreshLayout();
+  ForceViewLayoutAndDisplay(m_hwnd);
 }
 
 void MaxPaneContainer::ApplyPaneState(const PaneSnapshot* panes, int maxPanes, bool deferActions)
 {
   bool needsCaptureTimer = false;
+
+  // F11 (ADR-078) — apply follow-slot assignments for ALL panes BEFORE the
+  // per-pane continues below: a follow-only pane typically has tabCount==0
+  // (its slot tab is transient and never persisted), so the tab loop would
+  // skip it. Clear-all first so assignments from the OUTGOING layout can't
+  // survive a workspace/project load (ReleaseAll touches tabs, never pane
+  // attributes).
+  m_winMgr.ClearAllFollowSlots();
+  for (int i = 0; i < maxPanes && i < MAX_PANES; i++) {
+    if (panes[i].followSlot >= 0) m_winMgr.SetFollowSlot(i, panes[i].followSlot);
+  }
+  m_followTrack = nullptr;  // next FollowTick re-captures under the new mapping
 
   for (int i = 0; i < maxPanes && i < MAX_PANES; i++) {
     if (!m_tree.IsPaneIdUsed(i)) continue;
@@ -777,9 +805,13 @@ void MaxPaneContainer::SaveWorkspace(const char* name)
       name, m_pendingWorkspaceWasReplace ? 1 : 0);
 }
 
-void MaxPaneContainer::LoadWorkspace(const char* name)
+void MaxPaneContainer::LoadWorkspace(const char* name, bool startupAutoLoad)
 {
   if (!name || !name[0]) return;
+
+  // F7 (v2.4.0) — the startup fire mutes project persistence (untouched
+  // project stays clean); any USER-initiated load re-enables it.
+  m_projectPersistMuted = startupAutoLoad;
 
   // Exit solo before loading workspace
   if (m_soloActive) ToggleSolo(m_soloPaneId);
@@ -946,7 +978,12 @@ void MaxPaneContainer::LoadWorkspace(const char* name)
   {
     RECT rc;
     GetClientRect(m_hwnd, &rc);
-    m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+    // A2 (v2.4.0) — reserve nav-bar height like RefreshLayout; full client
+    // height laid the grid 30 px too tall until the next queue-drain
+    // refresh papered over it.
+    int availH = (rc.bottom - rc.top) - NavBarReservedHeight();
+    if (availH < 1) availH = 1;
+    m_tree.Recalculate(rc.right - rc.left, availH);
   }
 
   ApplyPaneState(ws->panes, MAX_PANES, false);

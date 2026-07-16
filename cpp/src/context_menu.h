@@ -46,6 +46,14 @@ namespace MenuIds {
   static const int TOGGLE_FLOATING = 10006;
   // C5 (ADR-027) — always-on-top toggle. Visible only when isFloating.
   static const int TOGGLE_FLOAT_ALWAYS_ON_TOP = 10007;
+  // v2.4.0 — Fit Pane to Window (owner smoke feedback; splitters snap to
+  // the active captured window's natural size).
+  static const int FIT_PANE = 10008;
+  // F9 (v2.4.0) — Swap with Pane N (+ otherPaneId, 10100..10115).
+  static const int SWAP_PANE_BASE = 10100;
+  // F11 (ADR-078) — per-pane "Follow FX slot" assignment submenu.
+  static const int FOLLOW_SLOT_OFF  = 12000;
+  static const int FOLLOW_SLOT_BASE = 12001;  // + slot (0..7) → 12001..12008
   // Launcher workspace-card right-click menu (Sprint 2.5).
   static const int LAUNCHER_CARD_LOAD        = 11000;
   static const int LAUNCHER_CARD_RENAME      = 11001;

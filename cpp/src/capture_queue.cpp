@@ -240,6 +240,11 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
           anyCaptured = true;
         } else {
           DBG("[MaxPane] CaptureQueue: FX capture failed (pane full or already captured)\n");
+          // ADR-081 §4 — surface a specific refusal (remote-view AU) as the
+          // toast; without a reason the failure stays log-only as before.
+          if (const char* reason = WindowManager::TakeCaptureRefusal()) {
+            snprintf(m_lastFailureToast, sizeof(m_lastFailureToast), "%.250s", reason);
+          }
         }
         Remove(i);
         continue;
@@ -374,9 +379,15 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         DBG("[MaxPane] CaptureQueue: CAPTURE FAILED for '%s' hwnd=%p (already captured or pane full?)\n",
             pc.displayName, (void*)found);
         // Audit M1.2 — surface what used to be a Release-silent failure.
-        snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
-                 "Couldn't capture '%.180s' — pane is full or window is already captured.",
-                 pc.displayName[0] ? pc.displayName : "(unknown)");
+        // ADR-081 §4 — a specific refusal reason (remote-view AU) wins over
+        // the generic message.
+        if (const char* reason = WindowManager::TakeCaptureRefusal()) {
+          snprintf(m_lastFailureToast, sizeof(m_lastFailureToast), "%.250s", reason);
+        } else {
+          snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
+                   "Couldn't capture '%.180s' — pane is full or window is already captured.",
+                   pc.displayName[0] ? pc.displayName : "(unknown)");
+        }
       }
       Remove(i);
     } else if (pc.retryCount >= pc.maxRetries) {

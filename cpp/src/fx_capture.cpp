@@ -82,12 +82,9 @@ static bool WalkTrackFx(MediaTrack* tr, V&& visit)
 
 }  // namespace
 
-bool IsFxIdentity(const char* actionCmd)
-{
-  if (!actionCmd) return false;
-  return strncmp(actionCmd, "fx@", 3) == 0 ||
-         strncmp(actionCmd, "takefx@", 7) == 0;
-}
+// IsFxIdentity moved to fx_capture.h as an inline (A5/D4) — the persistence
+// writers (workspace_manager.cpp, project_state.cpp) need it in the pure-
+// logic unit-test binary, which deliberately doesn't link this TU.
 
 int ListTrackFxIdentities(MediaTrack* track,
                           char (*idsOut)[kIdentityMaxLen],
@@ -370,6 +367,21 @@ bool ShowAndGetHwnd(const char* identity, HWND& outHwnd)
 
   DBG("[MaxPane] FxCapture::ShowAndGetHwnd: identity='%s' hwnd=%p\n",
       identity, (void*)outHwnd);
+  return outHwnd != nullptr;
+}
+
+bool GetFloatingHwnd(const char* identity, HWND& outHwnd)
+{
+  outHwnd = nullptr;
+  ResolvedLocation loc{};
+  if (!ResolveLocation(identity, loc)) return false;
+  if (loc.kind == IdentityKind::TrackFx || loc.kind == IdentityKind::MasterFx) {
+    outHwnd = g_TrackFX_GetFloatingWindow(loc.track, loc.fxIndex);
+  } else if (loc.kind == IdentityKind::TakeFx) {
+    outHwnd = g_TakeFX_GetFloatingWindow(loc.take, loc.fxIndex);
+  }
+  // No per-miss DBG: this runs on the 500 ms CheckAlive tick for waiting
+  // tabs (backoff-gated); a closed float is the NORMAL state, not an event.
   return outHwnd != nullptr;
 }
 

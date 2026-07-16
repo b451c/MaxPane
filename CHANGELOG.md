@@ -4,6 +4,101 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] - 2026-07-16
+
+The complete post-2.3.0 feedback batch (forum posts #69-79) plus an extended
+live-testing marathon on macOS: seven bugfixes, five features, and a new
+window-hosting architecture that makes out-of-process plugin UIs (AUv3,
+bridged AUs, Rosetta-bridged x86_64 VSTs) render inside panes on macOS.
+
+### Fixed
+
+- **Screensets restore MaxPane window sets again after startup.** A screenset
+  LOAD that arrived before the container existed was silently dropped; it is
+  now stashed and replayed once the container is up.
+- **A closed MaxPane instance no longer resurrects on the next project
+  save/load.** Closing an instance with the docker's own X left a zombie
+  entry that kept writing itself into the project; the docker-X path now
+  records the close and stale entries self-heal. The earlier advice
+  "close it once, save, done" was incomplete - it only held for
+  toggle-closes. (Reported by LorenzoB.)
+- **Plugin tabs bound to an FX (fx@ identities) survive the float being
+  closed and reopened by scripts or by hand** - the tab waits passively and
+  re-grabs the float when it exists again, never re-opening a float the
+  user closed. (Reported by mequaz.)
+- **Reloading a project no longer draws duplicate/misplaced panes** - three
+  layout paths computed geometry without the navigation bar offset and the
+  first layout pass after capture could use a stale rect.
+- **Windows: FX windows no longer flicker during splitter drags** - a
+  macOS-only repaint workaround ran unguarded on Windows and forced a full
+  child repaint on every container paint.
+- **Capturing one window from a multi-tab docker no longer hides the docker's
+  remaining windows.**
+- **Heavy plugin UIs no longer stutter while dragging splitters or resizing
+  the MaxPane window** - child repositioning is throttled to ~20 Hz on both
+  paths and the exact final layout lands when the drag ends.
+- **Plugin windows keep to their panes on macOS.** FX windows were mistakenly
+  run through the ReaImGui machinery (grey tabs, snap-back fights with
+  self-positioning plugins like Waves); they now have their own gentle
+  watchdog: position always returns to the pane, size is clamped only when
+  it exceeds the pane, and a plugin resizing itself smaller simply
+  letterboxes on the pane background.
+- **The area around a plugin smaller than its pane is now the pane color on
+  macOS instead of white** (REAPER's FX-window filler showed through; the
+  filler is now painted to match).
+- **Switching dark/light mode recolors panes immediately** instead of after
+  a restart.
+- **Saving a workspace while follow mode is active now keeps the plugins you
+  see.** Follow-created tabs are transient for automatic persistence (so
+  follow never dirties your project), but an explicit Save Workspace now
+  materializes them as regular tabs.
+
+### Added
+
+- **Startup workspace** (Settings): pick a workspace to load when REAPER
+  starts and the project carries no MaxPane state; "None" keeps the
+  launcher. Auto-loading never marks your project dirty. (Requested by
+  mb945.)
+- **Tie floating MaxPane to REAPER's main window** (Settings, Windows +
+  Linux): minimize-follow and group z-order via native owned-window /
+  transient-for semantics, like REAPER's own floating windows. Default off.
+  (Requested by mb945.)
+- **Follow FX slot** (pane menu): lock a pane to FX slot N of the selected
+  track - switch tracks and each locked pane swaps to that track's slot,
+  the Logic "Multi" link idiom. Panes in slot mode show an "FX slot N"
+  badge. (Follow mode itself remains available for whole chains.)
+- **Focus FX when switching tabs** (Settings, default off): a user tab
+  switch focuses the captured FX window so MIDI controllers that follow
+  REAPER's focused FX track the pane. (Requested by bertrand.)
+- **Merge into occupied panes and Swap with Pane** (pane menu): merge now
+  relocates tabs into a sibling with room (all-or-nothing), and any two
+  panes can swap contents even when both are full. Menu targets are named
+  after their active tab and disabled entries say why.
+- **Fit Pane to Window** (pane menu): snaps the surrounding splitters so
+  the pane matches the captured window's natural size.
+- **macOS: out-of-process plugin UIs now render inside panes.** AUv3-class
+  AUs and Rosetta-bridged x86_64 plug-ins (e.g. The God Particle AU,
+  Audio Ease Indoor, Altiverb 7) draw their UI from another process and do
+  not survive conventional reparenting - MaxPane now hosts their REAPER
+  float as a chrome-less child window glued to the pane, so rendering and
+  resizing run REAPER's native float path. Selected automatically per
+  window; ordinary plug-ins keep the regular capture.
+- **Settings dialog shows only options that work on your platform**
+  (macOS 6 checkboxes, Linux 7, Windows 8) - the "(Windows)" suffixes are
+  gone because a row only appears where it functions.
+- **Active tab accent underline and a proper close glyph** with hover
+  feedback in the tab bar.
+
+### Notes
+
+- When a plugin GUI is larger than its pane, Windows shows REAPER's own
+  FX-window scrollbars; macOS has none (REAPER removed FX scrollbars there
+  in 2015), so the GUI is cropped at the pane edge - use "Fit Pane to
+  Window".
+- Workspace tabs bound to plugins restore only in a project that contains
+  those tracks/FX (identities are track-bound by design); other tabs
+  restore everywhere.
+
 ## [2.3.0] - 2026-07-02
 
 A full sweep of the open forum reports (15 issues from the release thread),

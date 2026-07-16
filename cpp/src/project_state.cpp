@@ -4,6 +4,7 @@
 #include "workspace_manager.h"
 #include "state_accessor.h"
 #include "instance_manager.h"
+#include "fx_capture.h"   // A5/D4 — IsFxIdentity (waiting fx@ tabs are session-only)
 #include "debug.h"
 #include <cstring>
 #include <cstdio>
@@ -111,7 +112,12 @@ bool OnProcessExtensionLine(const char* line, ProjectStateContext* ctx,
 // (screenset.cpp, ADR-049). Returns false on a corrupt tree (write nothing).
 bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
 {
-  if (!container.GetHwnd()) return false;
+  // A3 (v2.4.0) — IsAlive, not GetHwnd: after a docker-X close the dangling
+  // hwnd kept passing this guard, so a zombie instance wrote a layout-only
+  // chunk at every project save — the unstoppable-resurrection source
+  // (LorenzoB #79). Also kills the screenset SAVE_STATE zombie blob (same
+  // writer, ADR-049).
+  if (!container.IsAlive()) return false;
 
   const SplitTree& tree = container.GetTree();
   const WindowManager& winMgr = container.GetWinMgr();
@@ -139,12 +145,27 @@ bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
   char key[128];
   for (int p = 0; p < MAX_PANES; p++) {
     const PaneState* ps = winMgr.GetPaneState(p);
-    if (!ps || ps->tabCount == 0) continue;
+    if (!ps) continue;
+    // F11 (ADR-078) — a follow-only pane typically has ZERO persistent tabs
+    // (the slot tab is transient), but its ASSIGNMENT must still reach the
+    // RPP chunk / screenset blob — emit it before any empty-pane skip.
+    if (ps->followSlot >= 0) {
+      snprintf(key, sizeof(key), "pane_%d_follow_slot", p);
+      snprintf(buf, sizeof(buf), "%d", ps->followSlot);
+      acc.Set(section, key, buf, true);
+    }
+    if (ps->tabCount == 0) continue;
 
     // U14 (ADR-070) — transient (follow-mode) tabs are never persisted.
+    // A5/D4 (v2.4.0) — waiting fx@ tabs are session-only (see the identical
+    // skip in WritePaneTabsStatic; restore would re-OPEN the closed float).
     int persistCount = 0;
-    for (int t = 0; t < ps->tabCount; t++)
-      if (!ps->tabs[t].transient) persistCount++;
+    for (int t = 0; t < ps->tabCount; t++) {
+      const TabEntry& te = ps->tabs[t];
+      if (te.transient) continue;
+      if (!te.captured && FxCapture::IsFxIdentity(te.actionCmd)) continue;
+      persistCount++;
+    }
     if (persistCount == 0) continue;
 
     snprintf(key, sizeof(key), "pane_%d_tab_count", p);
@@ -160,6 +181,7 @@ bool WriteContainerState(MaxPaneContainer& container, StateAccessor& acc)
     for (int t = 0; t < ps->tabCount; t++) {
       const TabEntry& tab = ps->tabs[t];
       if (tab.transient) continue;
+      if (!tab.captured && FxCapture::IsFxIdentity(tab.actionCmd)) continue;  // A5/D4
       snprintf(key, sizeof(key), "pane_%d_tab_%d", p, outIdx);
       if (tab.name[0]) {
         if (tab.isArbitrary) {

@@ -302,16 +302,27 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     for (int li = 0; li < leafCount; li++) {
       int otherPaneId = tree.GetPaneId(tree.GetLeafList()[li]);
       if (otherPaneId == paneId) continue;
-      if (winMgr.GetTabCount(otherPaneId) >= MAX_TABS_PER_PANE) continue;
+      // F9 (v2.4.0) — discoverability: name the target pane by its active
+      // tab, and show FULL panes grayed-with-reason instead of silently
+      // omitting them (a missing entry read as "can't move at all").
+      const bool full = (winMgr.GetTabCount(otherPaneId) >= MAX_TABS_PER_PANE);
+      const TabEntry* at = winMgr.GetActiveTabEntry(otherPaneId);
 
-      char label[64];
-      snprintf(label, sizeof(label), "Move to Pane %d", li + 1);
+      char label[96];
+      if (full) {
+        snprintf(label, sizeof(label), "Move to Pane %d (full)", li + 1);
+      } else if (at && at->name[0]) {
+        snprintf(label, sizeof(label), "Move to Pane %d (%.48s)", li + 1, at->name);
+      } else {
+        snprintf(label, sizeof(label), "Move to Pane %d (empty)", li + 1);
+      }
       MENUITEMINFO mi = {};
       mi.cbSize = sizeof(mi);
-      mi.fMask = MIIM_ID | MIIM_TYPE;
+      mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
       mi.fType = MFT_STRING;
       mi.wID = MenuIds::TAB_MOVE_BASE + otherPaneId;
       mi.dwTypeData = label;
+      mi.fState = full ? MFS_GRAYED : 0;
       InsertMenuItem(menu, insertPos++, TRUE, &mi);
     }
   }
@@ -568,6 +579,48 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
+  // --- Follow FX slot (F11, ADR-078) — per-pane slot assignment; the Logic
+  // plugin-window Multi-Link idiom generalized to panes. Shown only while
+  // the follow engine pref is ON (Settings is the discoverability point).
+  {
+    const char* fpref = g_GetExtState ? g_GetExtState(EXT_SECTION, "follow_track_fx")
+                                      : nullptr;
+    if (fpref && fpref[0] == '1' && fpref[1] == '\0') {
+      HMENU slotMenu = CreatePopupMenu();
+      const int cur = winMgr.GetFollowSlot(paneId);
+      int sPos = 0;
+      {
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::FOLLOW_SLOT_OFF;
+        mi.dwTypeData = (char*)"Off";
+        mi.fState = (cur < 0) ? MFS_CHECKED : 0;
+        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
+      }
+      char slotLabels[MAX_TABS_PER_PANE][16];
+      for (int s = 0; s < MAX_TABS_PER_PANE; s++) {
+        snprintf(slotLabels[s], sizeof(slotLabels[s]), "Slot %d", s + 1);
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::FOLLOW_SLOT_BASE + s;
+        mi.dwTypeData = slotLabels[s];
+        mi.fState = (cur == s) ? MFS_CHECKED : 0;
+        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
+      }
+      MENUITEMINFO sub = {};
+      sub.cbSize = sizeof(sub);
+      sub.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      sub.fType = MFT_STRING;
+      sub.hSubMenu = slotMenu;
+      sub.dwTypeData = (char*)"Follow FX slot";
+      InsertMenuItem(menu, insertPos++, TRUE, &sub);
+    }
+  }
+
   // --- Separator + Split/Merge ---
   {
     MENUITEMINFO sep = {};
@@ -601,20 +654,63 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // Merge with Sibling
+  // F9 (v2.4.0) — Swap with Pane N: whole-pane content swap; the only
+  // layout op that works when BOTH panes are full (Move is tab-granular).
+  {
+    int leafCountSw = tree.GetLeafCount();
+    if (leafCountSw > 1) {
+      for (int li = 0; li < leafCountSw; li++) {
+        int otherPaneId = tree.GetPaneId(tree.GetLeafList()[li]);
+        if (otherPaneId == paneId) continue;
+        const TabEntry* at = winMgr.GetActiveTabEntry(otherPaneId);
+        char label[96];
+        if (at && at->name[0]) {
+          snprintf(label, sizeof(label), "Swap with Pane %d (%.48s)", li + 1, at->name);
+        } else {
+          snprintf(label, sizeof(label), "Swap with Pane %d (empty)", li + 1);
+        }
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::SWAP_PANE_BASE + otherPaneId;
+        mi.dwTypeData = label;
+        InsertMenuItem(menu, insertPos++, TRUE, &mi);
+      }
+    }
+  }
+
+  // Merge into Sibling — F9 (v2.4.0): occupied panes RELOCATE their tabs
+  // into the nearest sibling leaf (all-or-nothing). The old isEmpty gate
+  // ("grayed with no reason") was the "had to delete and rebuild" dead end.
   {
     int nodeIdx = tree.NodeForPane(paneId);
     bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
     const PaneState* ps = winMgr.GetPaneState(paneId);
-    bool isEmpty = (!ps || ps->tabCount == 0);
+    // Count non-transient tabs only — follow-mode transients are released,
+    // not relocated, so they must not gray the merge spuriously.
+    int srcCount = 0;
+    if (ps) {
+      for (int t = 0; t < ps->tabCount; t++)
+        if (!ps->tabs[t].transient) srcCount++;
+    }
+    bool fits = false;
+    if (canMerge) {
+      const int destPane = tree.MergeDestinationPane(nodeIdx);
+      if (destPane >= 0) {
+        fits = (srcCount + winMgr.GetTabCount(destPane) <= MAX_TABS_PER_PANE);
+      }
+    }
 
     MENUITEMINFO mi = {};
     mi.cbSize = sizeof(mi);
     mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::MERGE;
-    mi.dwTypeData = (char*)"Merge with Sibling";
-    mi.fState = (canMerge && isEmpty) ? 0 : MFS_GRAYED;
+    mi.dwTypeData = (canMerge && !fits)
+        ? (char*)"Merge into Sibling (no room in sibling)"
+        : (char*)"Merge into Sibling";
+    mi.fState = (canMerge && fits) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
@@ -628,7 +724,9 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
     mi.fType = MFT_STRING;
     mi.wID = MenuIds::DELETE_PANE;
-    mi.dwTypeData = (char*)"Delete Pane";
+    // F9 — now that Merge keeps windows, the label must state what Delete
+    // does differently.
+    mi.dwTypeData = (char*)"Delete Pane (releases windows)";
     mi.fState = canMerge ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
@@ -645,6 +743,23 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.wID = MenuIds::SOLO;
     mi.dwTypeData = soloActive ? (char*)"Exit Solo" : (char*)"Solo Pane";
     mi.fState = (hasTabs || soloActive) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Fit Pane to Window (v2.4.0, owner smoke feedback) — snap the adjacent
+  // splitters to the active captured window's natural size (kills the FX
+  // host's white filler around fixed-size plugin UIs).
+  {
+    const TabEntry* at = winMgr.GetActiveTabEntry(paneId);
+    bool fittable = (at && at->captured && !soloActive);
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::FIT_PANE;
+    mi.dwTypeData = (char*)"Fit Pane to Window";
+    mi.fState = fittable ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 

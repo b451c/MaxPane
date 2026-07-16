@@ -38,7 +38,6 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
   , m_hoverSplitter(-1)
   , m_hoverPane(-1)
   , m_hoverTab(-1)
-  , m_pendingRppLoad(false)
 {
   // Compute per-instance identifiers. Instance 0 keeps the v1.5.x legacy
   // names so existing user data continues to load without migration.
@@ -74,17 +73,25 @@ MaxPaneContainer::MaxPaneContainer(int instanceId)
   m_brushTabActive = CreateSolidBrush(COLOR_TAB_ACTIVE_BG);
   m_brushTabInactive = CreateSolidBrush(COLOR_TAB_INACTIVE_BG);
   m_brushEmptyHeader = CreateSolidBrush(COLOR_EMPTY_HEADER_BG);
-  m_brushPaneBg = CreateSolidBrush(COLOR_PANE_BG);
-  RefreshChromeBrushes();  // U13 (ADR-068) — splitter (+hover) from the pref
+  RefreshChromeBrushes();  // splitter (+hover) pref + theme-sourced pane bg/grid
   m_penTabSeparator = CreatePen(PS_SOLID, 1, COLOR_TAB_SEPARATOR);
-  m_penGridLine = CreatePen(PS_SOLID, 1, COLOR_PANE_GRID_LINE);
 }
 
 // U13 (ADR-068) — (re)create the splitter brushes from the persisted color
 // preset. Brushes were ctor-only before; Settings can now change the color
 // live, so this runs from the ctor AND after the Settings dialog closes.
+// v2.4.0 polish — the pane background brush and grid pen are the two other
+// THEME-sourced GDI objects (COLOR_PANE_BG / COLOR_PANE_GRID_LINE resolve
+// through GetPaneBgColor per dark/light mode); they were ctor-only, so a
+// dark/light flip in Settings left panes in the old theme until restart.
+// Recreate them here too — this is the single refresh point for every
+// chrome object whose color can change at runtime.
 void MaxPaneContainer::RefreshChromeBrushes()
 {
+  SafeDeleteBrush(m_brushPaneBg);
+  m_brushPaneBg = CreateSolidBrush(COLOR_PANE_BG);
+  SafeDeletePen(m_penGridLine);
+  m_penGridLine = CreatePen(PS_SOLID, 1, COLOR_PANE_GRID_LINE);
   const SplitterColorPreset& p =
       SPLITTER_COLOR_PRESETS[GetSplitterColorPresetIndex()];
   COLORREF base = p.useSystem
@@ -127,9 +134,40 @@ static bool HideFromTaskbarPref()
   return (v && v[0] == '1' && v[1] == '\0');
 }
 
+// B2 feature (v2.4.0, mb945 #78) — Windows-only pref: tie the floating
+// MaxPane to REAPER's main window as an OWNED window. Windows then natively
+// handles minimize-follow and group z-order/activation (clicking the float
+// raises REAPER), like every native REAPER floating window. Default OFF
+// (owner decision D1, 2026-07-09): ON silently changes z-order for existing
+// float users — an owned window can never be covered by its owner.
+// Resolved owner for ApplyFloatingWindowChrome: REAPER main on Win32 and
+// Linux with the pref ON (same owner slot, same owned-above-owner
+// semantics — cross-platform consistency rule, owner directive
+// 2026-07-09). macOS returns null BY DESIGN, and that IS the consistent
+// outcome there: REAPER's own floating windows don't minimize-follow on
+// macOS either (app-level Cmd+H is the platform idiom), while SWELL's
+// mac owner list only drives a quit-time destroy cascade.
+static HWND TieToMainOwner()
+{
+#ifndef __APPLE__
+  if (g_GetExtState && g_reaperMainHwnd) {
+    const char* v = g_GetExtState(EXT_SECTION, "float_tie_to_main");
+    if (v && v[0] == '1' && v[1] == '\0') return g_reaperMainHwnd;
+  }
+#endif
+  return nullptr;
+}
+
 bool MaxPaneContainer::Create()
 {
-  if (m_hwnd) return true;
+  if (m_hwnd) {
+    if (IsWindow(m_hwnd)) return true;
+    // A3 (v2.4.0) — a docker-X close reaches WM_DESTROY without Shutdown,
+    // leaving m_hwnd dangling (zombie). Treat as closed and rebuild.
+    DBG("[MaxPane] Create: stale hwnd from external destroy — rebuilding\n");
+    m_hwnd = nullptr;
+    m_visible = false;
+  }
 
   // U2 (ADR-066) — Win32 fires WM_SIZE/WM_MOVE while the dialog is still a
   // default-rect WS_CHILD (during CreateDialog and LoadState); the handlers'
@@ -186,7 +224,7 @@ bool MaxPaneContainer::Create()
     } else {
       snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
     }
-    ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
+    ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref(), TieToMainOwner());
     RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
     ClampRectToVisibleScreen(&r);
     m_floatX = r.left;
@@ -219,6 +257,20 @@ bool MaxPaneContainer::Create()
   SetTimer(m_hwnd, TIMER_ID_CHECK, TIMER_INTERVAL, nullptr);
   ShowWindow(m_hwnd, SW_SHOW);
   m_visible = true;
+
+  // A2 (v2.4.0) — startup restore must not depend on docker WM_SIZE timing:
+  // LoadState's synchronous captures park children at the full container
+  // rect (DoCapture B23 reset) and nothing repositioned them until the
+  // first real resize — windows already open at REAPER start (transport,
+  // master strip) rendered STACKED (LorenzoB #77). Lay out now, and once
+  // more on the first OnTimer tick to catch a dock resize that lands
+  // between Create() and the timer.
+  RefreshLayout();
+  ForceViewLayoutAndDisplay(m_hwnd);
+  m_needsSettleRefresh = true;
+  // A3 (v2.4.0) — re-arm the deferred dock self-heal for this incarnation.
+  m_redockChecked = false;
+  m_redockTicks = 0;
 
   // F-H2 (forum v2.0.6) — keep tab-bar hover alive when a captured FX/AU plugin
   // tab grabs key-window status (Cocoa only sends mouseMoved to the key window).
@@ -262,7 +314,7 @@ void MaxPaneContainer::RefreshFloatingChrome()
   // WS_EX_TOOLWINDOW only applies reliably while the window is hidden.
   bool wasVisible = IsWindowVisible(m_hwnd);
   if (wasVisible) ShowWindow(m_hwnd, SW_HIDE);
-  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
+  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref(), TieToMainOwner());
   if (wasVisible) ShowWindow(m_hwnd, SW_SHOW);
 }
 
@@ -336,13 +388,55 @@ void MaxPaneContainer::FollowTick()
   m_followPending = nullptr;
   m_followTicks = 0;
 
-  const int followPane = 0;  // v1 scope: pane 0 is the follow pane
-  const int released = m_winMgr.ReleaseTransientTabs(followPane);
+  // F11 (ADR-078) — sweep-release transients across ALL panes, not just the
+  // engine's current targets: a chain→slot (or slot→chain) transition would
+  // otherwise deadlock on the already-captured guard against the old mode's
+  // leftover transient tabs.
+  int released = 0;
+  for (int p = 0; p < MAX_PANES; p++) released += m_winMgr.ReleaseTransientTabs(p);
   (void)released;  // Release builds compile DBG out
   DBG("[MaxPane] FollowTick: switching to track %p (released %d transient tabs)\n",
       tr, released);
-  CaptureTrackFxChain(followPane, /*transient=*/true);
+
+  if (m_winMgr.AnyFollowSlotAssigned()) {
+    // Slot mode (F11) — one FX slot per marked pane (Logic plugin-window
+    // Multi-Link idiom, generalized to panes). Chain capture does NOT run:
+    // an FX float is ONE HWND — chain-into-pane-0 plus slot-into-pane-N
+    // would fight over the same window.
+    CaptureTrackFxSlots();
+  } else {
+    // Chain mode — unchanged v2.3.0 behavior: whole chain into pane 0.
+    CaptureTrackFxChain(0, /*transient=*/true);
+  }
   RefreshLayout();
+}
+
+// F11 (ADR-078) — capture ONE FX slot per marked pane from the last-touched
+// track. Silent by design on every miss (this runs on the follow tick, not a
+// user command): a track with fewer FX than a marked slot leaves that pane
+// honestly EMPTY, and a full pane is skipped (documented silent-empty).
+void MaxPaneContainer::CaptureTrackFxSlots()
+{
+  MediaTrack* tr = g_GetLastTouchedTrack ? g_GetLastTouchedTrack() : nullptr;
+  if (!tr && g_GetSelectedTrack) tr = g_GetSelectedTrack(nullptr, 0);
+  if (!tr) return;
+
+  char ids[MAX_TABS_PER_PANE][FxCapture::kIdentityMaxLen];
+  char names[MAX_TABS_PER_PANE][256];
+  const int total = FxCapture::ListTrackFxIdentities(tr, ids, names,
+                                                     MAX_TABS_PER_PANE);
+  bool any = false;
+  for (int p = 0; p < MAX_PANES; p++) {
+    if (!m_tree.IsPaneIdUsed(p)) continue;  // stale assignment on a freed id
+    const int slot = m_winMgr.GetFollowSlot(p);
+    if (slot < 0 || slot >= total) continue;
+    if (m_winMgr.GetTabCount(p) >= MAX_TABS_PER_PANE) continue;
+    m_captureQueue->EnqueueArbitrary(p, names[slot], 0, ids[slot],
+                                     /*deferAction=*/false, /*transient=*/true);
+    any = true;
+  }
+  if (any) StartCaptureTimer();
+  DBG("[MaxPane] CaptureTrackFxSlots: total=%d enqueued=%d\n", total, any ? 1 : 0);
 }
 
 void MaxPaneContainer::RedockIfDetachedFromDock()
@@ -381,7 +475,7 @@ void MaxPaneContainer::DetachToFloating()
   } else {
     snprintf(title, sizeof(title), "MaxPane (%d)", m_instanceId + 1);
   }
-  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref());
+  ApplyFloatingWindowChrome(m_hwnd, title, HideFromTaskbarPref(), TieToMainOwner());
 
   RECT r = { m_floatX, m_floatY, m_floatX + m_floatW, m_floatY + m_floatH };
   ClampRectToVisibleScreen(&r);
@@ -415,6 +509,14 @@ void MaxPaneContainer::RedockToContainer()
 
   m_floating = false;
   SaveFloatingState();
+
+#ifndef __APPLE__
+  // B2 (v2.4.0) — clear the owner while the window is still top-level:
+  // GWLP_HWNDPARENT means "owner" only for top-level windows; after
+  // DockWindowAddEx reparents us to WS_CHILD the same slot means parent.
+  // Win32 + Linux (SWELL-generic owner slot); macOS never sets an owner.
+  SetWindowLongPtr(m_hwnd, GWLP_HWNDPARENT, 0);
+#endif
 
   if (g_DockWindowAddEx) {
     g_DockWindowAddEx(m_hwnd, "MaxPane", m_dockIdent, true);
@@ -497,7 +599,8 @@ void MaxPaneContainer::Shutdown()
 
 void MaxPaneContainer::Show()
 {
-  if (!m_hwnd) { Create(); return; }
+  // A3 (v2.4.0) — stale hwnd (docker-X zombie) counts as closed.
+  if (!m_hwnd || !IsWindow(m_hwnd)) { Create(); return; }
   ShowWindow(m_hwnd, SW_SHOW);
   m_visible = true;
 }
@@ -505,6 +608,13 @@ void MaxPaneContainer::Show()
 void MaxPaneContainer::Toggle()
 {
   if (!m_hwnd) { Create(); return; }
+  // A3 (v2.4.0) — stale hwnd after a docker-X close: the old code ghost-
+  // "closed" the dead window (teardown walk on a dangling handle). The
+  // user's key press on a gone window means "open it" — rebuild instead.
+  if (!IsWindow(m_hwnd)) { Create(); return; }
+  // F7 (v2.4.0) — a deliberate close is a user action; its open_at_save=0
+  // write must not be swallowed by the startup-workspace mute.
+  m_projectPersistMuted = false;
   DBG("[MaxPane] Toggle: closing\n");
   if (g_SetExtState) {
     g_SetExtState(m_extSection, "was_visible", "0", true);
@@ -667,7 +777,7 @@ void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
   MarkWorkspaceDirty();  // Feature A — layout no longer matches loaded ws
 }
 
-void MaxPaneContainer::MergePane(int paneId)
+void MaxPaneContainer::MergePane(int paneId, bool releaseTabs)
 {
   // Exit solo before merge
   if (m_soloActive) ToggleSolo(m_soloPaneId);
@@ -676,27 +786,131 @@ void MaxPaneContainer::MergePane(int paneId)
   if (nodeIdx < 0) return;
   if (!m_tree.CanMerge(nodeIdx)) return;
 
-  // Release the pane being merged — record action IDs for stale-cleanup
-  // BEFORE the release wipes PaneState. Defense-in-depth against the
-  // wnd_vis-cache race (B13/B16): even if mid-session toggle succeeds, the
-  // startup verify pass is a no-op for state==0 windows; the win comes
-  // from the failure case.
-  {
-    const PaneState* ps = m_winMgr.GetPaneState(paneId);
-    if (ps) {
-      for (int t = 0; t < ps->tabCount; t++) {
-        if (ps->tabs[t].captured && ps->tabs[t].toggleAction > 0) {
-          AppendActionToStaleListForSection(m_extSection, ps->tabs[t].toggleAction);
+  if (releaseTabs) {
+    // DELETE_PANE path — today's behavior, byte-identical.
+    // Release the pane being merged — record action IDs for stale-cleanup
+    // BEFORE the release wipes PaneState. Defense-in-depth against the
+    // wnd_vis-cache race (B13/B16): even if mid-session toggle succeeds, the
+    // startup verify pass is a no-op for state==0 windows; the win comes
+    // from the failure case.
+    {
+      const PaneState* ps = m_winMgr.GetPaneState(paneId);
+      if (ps) {
+        for (int t = 0; t < ps->tabCount; t++) {
+          if (ps->tabs[t].captured && ps->tabs[t].toggleAction > 0) {
+            AppendActionToStaleListForSection(m_extSection, ps->tabs[t].toggleAction);
+          }
         }
       }
     }
+    m_winMgr.ReleaseWindow(paneId);
+  } else {
+    // F9 (v2.4.0) — MERGE into an OCCUPIED sibling: relocate tabs instead
+    // of releasing them ("remove this split but keep my stuff" — LorenzoB
+    // #79 "had to delete and rebuild"). Tabs NEVER enter the stale-action
+    // list here — they stay live captures (the B15/B17 startup cleanup
+    // must not close them next launch).
+    m_winMgr.ReleaseTransientTabs(paneId);  // follow-mode tabs re-spawn in pane 0
+
+    const int destPane = m_tree.MergeDestinationPane(nodeIdx);
+    const PaneState* srcPs = m_winMgr.GetPaneState(paneId);
+    const PaneState* dstPs = m_winMgr.GetPaneState(destPane);
+    if (destPane < 0 || destPane == paneId || !srcPs || !dstPs) return;
+
+    // Execute-time re-validation — the menu-build gate can go stale: a
+    // queued capture can land while TrackPopupMenu's modal loop pumps
+    // WM_TIMER. All-or-nothing: never a partial move, never a release.
+    if (srcPs->tabCount + dstPs->tabCount > MAX_TABS_PER_PANE) {
+      ShowToast("No room in the sibling pane - move or close some tabs first.");
+      return;
+    }
+    // Bounded relocation: MoveTab reports failure instead of silently
+    // no-opping (the unbounded loop + void MoveTab was a UI-thread hang).
+    int guard = srcPs->tabCount;
+    while (guard-- > 0 && srcPs->tabCount > 0) {
+      if (!m_winMgr.MoveTab(paneId, 0, destPane)) {
+        ShowToast("Merge stopped - the sibling pane filled up mid-move.");
+        RefreshLayout();
+        SaveState();
+        MarkWorkspaceDirty();
+        return;
+      }
+    }
+    if (srcPs->tabCount > 0) return;  // defense: abort the tree merge
   }
-  m_winMgr.ReleaseWindow(paneId);
 
   m_tree.MergeNode(nodeIdx);
+  // F11 (ADR-078) — the freed paneId must not keep a follow-slot
+  // assignment: a future pane reusing this id would inherit it silently.
+  m_winMgr.SetFollowSlot(paneId, -1);
   RefreshLayout();
   SaveState();
   MarkWorkspaceDirty();  // Feature A — layout no longer matches loaded ws
+}
+
+// F12 (ADR-079, bertrand #73) — focus the active fx@/takefx@ tab's captured
+// window so MIDI controllers targeting REAPER's focused FX follow the tab.
+// Mechanism verified live on the Win11 VM (2026-07-09): REAPER DOES update
+// GetTouchedOrFocusedFX for reparented captured windows when they gain
+// focus by click; this extends the same to tab clicks. Pref default OFF —
+// SW_SHOWNA (never steal focus) stays the deliberate baseline, and a
+// focused VST gets first refusal on plain keystrokes (documented trade-off:
+// bind modifier chords for NextTab/PrevTab when using this).
+void MaxPaneContainer::FocusActiveFxTab(int paneId)
+{
+  if (!g_GetExtState) return;
+  const char* v = g_GetExtState(EXT_SECTION, "focus_fx_on_tab_switch");
+  if (!(v && v[0] == '1' && v[1] == '\0')) return;
+  const TabEntry* t = m_winMgr.GetActiveTabEntry(paneId);
+  if (!t || !t->captured || !t->hwnd || !IsWindow(t->hwnd)) return;
+  if (!FxCapture::IsFxIdentity(t->actionCmd)) return;
+  SetFocus(t->hwnd);
+  DBG("[MaxPane] FocusActiveFxTab: pane=%d '%s' hwnd=%p\n",
+      paneId, t->name, (void*)t->hwnd);
+}
+
+// v2.4.0 "Fit Pane to Window" (owner smoke feedback, mac) — a fixed-size
+// plugin UI can't stretch, so a bigger pane shows the host FX window's own
+// (white) filler around it. This verb does what the user would do by hand:
+// drags the adjacent splitters so the pane matches the active window's
+// natural capture-time size (+ header). Best-effort like a manual drag —
+// MIN_PANE_SIZE clamps on neighbors win.
+void MaxPaneContainer::FitPaneToWindow(int paneId)
+{
+  if (m_soloActive) return;  // solo layout is temporary
+  const TabEntry* t = m_winMgr.GetActiveTabEntry(paneId);
+  if (!t || !t->captured || !t->hwnd || !IsWindow(t->hwnd)) return;
+  const int natW = (int)(t->originalRect.right - t->originalRect.left);
+  const int natH = (int)(t->originalRect.bottom - t->originalRect.top);
+  if (natW <= 0 || natH <= 0) return;
+  if (m_tree.FitPaneTo(paneId, natW, natH + m_winMgr.PaneHeaderHeight(paneId))) {
+    RefreshLayout();
+    SaveState();
+    MarkWorkspaceDirty();  // Feature A
+  }
+}
+
+void MaxPaneContainer::SwapPanes(int paneA, int paneB)
+{
+  if (paneA == paneB) return;
+  // Exit solo first (same guard as Split/Merge; SaveState is a no-op while
+  // soloed, so ordering matters).
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+
+  // F9 — transient follow-mode tabs must not leave the follow pane (pane 0
+  // is hardcoded in FollowTick); release from both sides, the next tick
+  // re-captures the chain into pane 0 at its new position.
+  const int releasedTransients = m_winMgr.ReleaseTransientTabs(paneA) +
+                                 m_winMgr.ReleaseTransientTabs(paneB);
+  if (!m_winMgr.SwapPanes(paneA, paneB)) return;
+  if (releasedTransients > 0) {
+    // Surface the ~1 s self-heal so the post-swap mutation doesn't read as
+    // a bug (critique item 5).
+    ShowToast("Follow mode will re-capture the FX chain into its pane.");
+  }
+  RefreshLayout();
+  SaveState();
+  MarkWorkspaceDirty();  // Feature A
 }
 
 void MaxPaneContainer::ToggleSolo(int paneId)
@@ -713,7 +927,13 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
     RECT rc;
     GetClientRect(m_hwnd, &rc);
-    m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+    // A2 (v2.4.0) — reserve nav-bar height like RefreshLayout; the full
+    // client height laid the grid out 30 px too tall (LorenzoB #77 class).
+    {
+      int availH = (rc.bottom - rc.top) - NavBarReservedHeight();
+      if (availH < 1) availH = 1;
+      m_tree.Recalculate(rc.right - rc.left, availH);
+    }
 
     // Show tabs that were visible before solo
     for (int p = 0; p < MAX_PANES; p++) {
@@ -775,7 +995,12 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
     RECT rc;
     GetClientRect(m_hwnd, &rc);
-    m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
+    // A2 (v2.4.0) — same nav-bar reservation as the exit branch above.
+    {
+      int availH = (rc.bottom - rc.top) - NavBarReservedHeight();
+      if (availH < 1) availH = 1;
+      m_tree.Recalculate(rc.right - rc.left, availH);
+    }
 
     m_soloActive = true;
     m_soloPaneId = paneId;
@@ -791,6 +1016,24 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
 void MaxPaneContainer::OnTimer()
 {
+  // A2 (v2.4.0) — one-shot settle refresh armed by Create(): catches a
+  // docker resize that landed after Create's own RefreshLayout without a
+  // real WM_SIZE reaching us (startup ordering, LorenzoB #77).
+  if (m_needsSettleRefresh) {
+    m_needsSettleRefresh = false;
+    RefreshLayout();
+  }
+
+  // A3 (v2.4.0) — deferred per-instance dock self-heal: STEP-2's one-shot
+  // heal runs at startup tick 15, but a force-open (projStateOpenTimer up
+  // to tick 20, or a mid-session File > Open) can land later and stay a
+  // detached bare child. ~2 ticks (~1 s) after Create, heal once; no-op
+  // when docked or floating (ADR-065 zero-false-fire property preserved).
+  if (!m_redockChecked && ++m_redockTicks >= 2) {
+    m_redockChecked = true;
+    RedockIfDetachedFromDock();
+  }
+
   // U14 (ADR-070) — experimental follow-selected-track poll (pref-gated).
   FollowTick();
 
@@ -801,48 +1044,13 @@ void MaxPaneContainer::OnTimer()
     Updater::HandleUpdateAvailable(m_hwnd);
   }
 
-  // Check if deferred RPP state has become available.
-  // REAPER parses the RPP <MAXPANE_STATE> chunk asynchronously —
-  // it may arrive after Create()/LoadState() already ran.
-  if (m_pendingRppLoad && g_pendingProjectState[m_instanceId].valid) {
-    DBG("[MaxPane] OnTimer: deferred RPP state now available (%d lines), applying\n",
-        g_pendingProjectState[m_instanceId].lineCount);
-    m_pendingRppLoad = false;
-
-    RppReadAccessor rppAcc(g_pendingProjectState[m_instanceId].lines,
-                           g_pendingProjectState[m_instanceId].lineCount);
-    const char* treeVer = rppAcc.Get(m_extSection, "tree_version");
-    bool hasTreeFormat = (treeVer && strcmp(treeVer, "2") == 0);
-    if (hasTreeFormat) {
-      NodeSnapshot snap[MAX_TREE_NODES];
-      memset(snap, 0, sizeof(snap));
-      int nodeCount = WorkspaceManager::ReadTreeNodesStatic(m_extSection, "", snap, rppAcc);
-      if (nodeCount > 0) {
-        PaneSnapshot panes[MAX_PANES];
-        memset(panes, 0, sizeof(panes));
-        WorkspaceManager::ReadPaneTabsStatic(m_extSection, "", panes, MAX_PANES, rppAcc);
-
-        // Release any windows from default state before applying RPP state
-        m_captureQueue->CancelAll();
-        m_winMgr.ReleaseAll(false);
-
-        if (!m_tree.LoadSnapshot(snap, nodeCount)) {
-          DBG("[MaxPane] OnTimer: deferred RPP tree corrupt, resetting\n");
-          m_tree.Reset();
-        }
-
-        RECT rc;
-        GetClientRect(m_hwnd, &rc);
-        m_tree.Recalculate(rc.right - rc.left, rc.bottom - rc.top);
-        ApplyPaneState(panes, MAX_PANES, true);
-        m_winMgr.RepositionAll(m_tree);
-        InvalidateRect(m_hwnd, nullptr, FALSE);
-
-        DBG("[MaxPane] OnTimer: deferred RPP state applied (nodes=%d)\n", nodeCount);
-      }
-    }
-    g_pendingProjectState[m_instanceId].valid = false;  // consumed
-  }
+  // A1 (v2.4.0) — the deferred-RPP block that lived here was DEAD CODE:
+  // its m_pendingRppLoad gate was never set true anywhere (the only
+  // assignment went out with 52e39de), so a chunk parsed while this
+  // container was open was consumed by NOBODY and the pending slot stuck
+  // valid forever. rppReadyTimerFunc (main.cpp) now calls
+  // ReloadProjectState() on open containers instead — one funnel, correct
+  // geometry, slot consumed.
 
   if (m_winMgr.CheckAlive()) {
     m_winMgr.RepositionAll(m_tree);
@@ -1340,6 +1548,18 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 {
   // Layout preset
   if (cmd >= MenuIds::LAYOUT_BASE && cmd < MenuIds::LAYOUT_BASE + PRESET_COUNT) {
+    // F9 (v2.4.0) — ApplyPreset releases EVERY captured window; the preset
+    // submenu sits in the menu's most prominent slot, so one mis-click was
+    // total layout loss (plausibly LorenzoB's "had to delete and rebuild").
+    // Confirm only when something is captured; Enter = OK keeps the old
+    // one-click flow for empty containers.
+    if (m_winMgr.HasAnyCaptured() &&
+        MessageBox(m_hwnd,
+                   "Applying a layout preset releases all captured windows.\n"
+                   "Continue?",
+                   "MaxPane", MB_OKCANCEL) != IDOK) {
+      return;
+    }
     ApplyPreset((LayoutPreset)(cmd - MenuIds::LAYOUT_BASE));
     return;
   }
@@ -1387,7 +1607,11 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
         // REAPER, not in MaxPane) whenever the pane was full.
         bool captured = m_winMgr.CaptureArbitraryWindow(paneId, targetHwnd, title,
                                                         m_hwnd, toggleAction);
-        if (captured && dockFrame && IsWindow(dockFrame)) {
+        // A7 (v2.4.0) — multi-tab docker: REAPER promotes the next docked
+        // tab after DockWindowRemove; hiding the frame then would make it
+        // vanish with toggle state stuck at 1 (LorenzoB #79).
+        if (captured && dockFrame && IsWindow(dockFrame) &&
+            !WindowManager::DockFrameHasRemainingWindows(dockFrame)) {
           ShowWindow(dockFrame, SW_HIDE);
         }
         if (!captured) {
@@ -1429,15 +1653,42 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
-  // Merge with Sibling
+  // Merge into Sibling — F9 (v2.4.0): tabs relocate, never release.
   if (cmd == MenuIds::MERGE) {
-    MergePane(paneId);
+    MergePane(paneId, /*releaseTabs=*/false);
     return;
   }
 
   // Delete Pane (release all tabs + merge)
   if (cmd == MenuIds::DELETE_PANE) {
-    MergePane(paneId);  // MergePane already calls ReleaseWindow which releases all tabs
+    MergePane(paneId, /*releaseTabs=*/true);
+    return;
+  }
+
+  // F9 (v2.4.0) — Swap with Pane N (wholesale content swap).
+  if (cmd >= MenuIds::SWAP_PANE_BASE && cmd < MenuIds::SWAP_PANE_BASE + MAX_PANES) {
+    SwapPanes(paneId, cmd - MenuIds::SWAP_PANE_BASE);
+    return;
+  }
+
+  // F11 (ADR-078) — per-pane follow-slot assignment. Immediate effect:
+  // resetting m_followTrack makes the next FollowTick re-capture under the
+  // new mapping without waiting for a track change.
+  if (cmd == MenuIds::FOLLOW_SLOT_OFF ||
+      (cmd >= MenuIds::FOLLOW_SLOT_BASE &&
+       cmd < MenuIds::FOLLOW_SLOT_BASE + MAX_TABS_PER_PANE)) {
+    const int slot = (cmd == MenuIds::FOLLOW_SLOT_OFF)
+                         ? -1 : (cmd - MenuIds::FOLLOW_SLOT_BASE);
+    m_winMgr.SetFollowSlot(paneId, slot);
+    m_followTrack = nullptr;
+    SaveState();
+    MarkWorkspaceDirty();  // Feature A
+    return;
+  }
+
+  // Fit Pane to Window (v2.4.0)
+  if (cmd == MenuIds::FIT_PANE) {
+    FitPaneToWindow(paneId);
     return;
   }
 
@@ -1715,7 +1966,10 @@ void MaxPaneContainer::OnCaptureTimerTick()
               // frame only on a committed capture, toast on failure.
               bool captured = m_winMgr.CaptureArbitraryWindow(
                   pId, captureHwnd, title, m_hwnd, toggleAction);
-              if (captured && dockFrame && IsWindow(dockFrame)) {
+              // A7 (v2.4.0) — same multi-tab-docker guard as the Open
+              // Windows path: never hide a frame that still hosts windows.
+              if (captured && dockFrame && IsWindow(dockFrame) &&
+                  !WindowManager::DockFrameHasRemainingWindows(dockFrame)) {
                 ShowWindow(dockFrame, SW_HIDE);
               }
               if (!captured) {
@@ -1777,6 +2031,19 @@ void MaxPaneContainer::OnCaptureTimerTick()
       // real WM_SIZE relayout. A forced layout pass paints them now.
       RefreshLayout();
       ForceViewLayoutAndDisplay(m_hwnd);
+      // v2.4.0 (owner smoke, mac) — F-H covered the CONTAINER's view, but
+      // the freshly captured ACTIVE child sometimes stayed an unrendered
+      // grey view until the user clicked away and back ("Capture track FX
+      // chain" burst of heavy AU/VST UIs). Clicking a tab heals it because
+      // SetActiveTab does an explicit SW_SHOWNA + per-CHILD forced
+      // layout+display — run that exact path programmatically for every
+      // pane once the queue drains.
+      for (int p = 0; p < MAX_PANES; p++) {
+        const PaneState* ps = m_winMgr.GetPaneState(p);
+        if (ps && ps->tabCount > 0 && ps->activeTab >= 0) {
+          m_winMgr.SetActiveTab(p, ps->activeTab);
+        }
+      }
     }
   }
   else {
@@ -1863,11 +2130,19 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         // SWELL doesn't implement WS_CLIPCHILDREN, so the Cocoa drawRect:
         // cycle on the parent view may clear areas under child views.
         //
+        // Win32 is EXCLUDED: the container has real WS_CLIPCHILDREN
+        // (platform.h), so parent paints can never damage child pixels
+        // there and this re-invalidate forced a full repaint of every
+        // active captured child on EVERY parent paint — visible as FX
+        // window flicker when crossing splitters (LorenzoB, v2.3.0
+        // feedback). SWELL (macOS/Linux) keeps the workaround.
+        //
         // ADR-026 — when an overlay/menu is active we paint UI ON TOP of
         // the pane grid. If we invalidate child windows here they paint
         // OVER our overlay (their NSViews don't know the menu exists).
         // Skip the propagation in those states; the next regular tick
         // (drag/hover/etc.) will re-invalidate naturally.
+#ifndef _WIN32
         bool overlayActive = self->m_homeOverlay ||
                              self->m_drag.mode == DragDock::TRACKING;
         if (!overlayActive) {
@@ -1883,6 +2158,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
             }
           }
         }
+#endif
       }
       return 0;
     }
@@ -1894,6 +2170,8 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
         // F6 — mark this instance as focused for slot-action routing.
         InstanceManager::Get().SetFocused(self->m_instanceId);
+        // F7 (v2.4.0) — first user interaction re-enables project persist.
+        self->UnmuteProjectPersist();
 
         // ADR-026 — nav bar consumes clicks on its strip first. If
         // visible and the click hit the bar (button or empty area),
@@ -1971,6 +2249,12 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
               self->SaveState();
             } else {
               self->m_winMgr.SetActiveTab(paneId, tabIdx);
+              // F12 (ADR-079) — USER tab click points the MIDI controller
+              // at this FX (pref-gated, default OFF). Fired on mouse-down
+              // deliberately: the drag-out side effect is benign (the FX
+              // stays focused after a cross-pane drop) and mouse-up-only
+              // would miss click-and-hold switching.
+              self->FocusActiveFxTab(paneId);
               self->RefreshLayout();
               self->StartTabDrag(paneId, tabIdx, x, y);
             }
@@ -2095,6 +2379,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
 
     case WM_CONTEXTMENU: {
       if (self) {
+        self->UnmuteProjectPersist();  // F7 — user interaction
         POINT pt;
         GetCursorPos(&pt);
         ScreenToClient(hwnd, &pt);
@@ -2278,6 +2563,21 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         }
         KillTimer(hwnd, TIMER_ID_CHECK);
         KillTimer(hwnd, TIMER_ID_CAPTURE);
+        // A3 (v2.4.0) — a docker-X close is a deliberate close, but this
+        // path never runs Toggle: open_at_save stayed "1" and the dangling
+        // m_hwnd kept passing WriteContainerState's guard, so the instance
+        // resurrected on every load of a project saved afterwards ("can't
+        // make the close stick"). Record the close in the CURRENT project's
+        // ProjExtState. Quit path (g_atexitSaved) excluded; a mac quit-time
+        // write is in-memory only anyway (ProjExtState hits disk at project
+        // save, which precedes window teardown).
+        if (!g_atexitSaved && g_SetProjExtState && g_EnumProjects) {
+          ReaProject* proj = g_EnumProjects(-1, nullptr, 0);
+          if (proj) {
+            g_SetProjExtState(proj, self->m_extSection, "open_at_save", "0");
+            DBG("[MaxPane] WM_DESTROY: recorded open_at_save=0 (external close)\n");
+          }
+        }
         // B26: do NOT write was_visible from WM_DESTROY. On macOS REAPER
         // destroys docker windows asynchronously during quit — order between
         // these destroys and our atexit callback is undefined, so any "0"

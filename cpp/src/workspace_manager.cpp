@@ -2,6 +2,7 @@
 #include "config.h"
 #include "globals.h"
 #include "debug.h"
+#include "fx_capture.h"   // A5/D4 — IsFxIdentity (waiting fx@ tabs are session-only)
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -158,6 +159,10 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
     state.Set(section, key, "0", true);
     snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
     state.Set(section, key, "0", true);
+    // F11 (ADR-078) — pre-clear the follow-slot key too (B21 rule): a
+    // smaller layout overwriting a slot must not resurrect an assignment.
+    snprintf(key, sizeof(key), "%spane_%d_follow_slot", prefix, p);
+    state.Set(section, key, "-1", true);
     for (int t = 0; t < MAX_TABS_PER_PANE; t++) {
       snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
       state.Set(section, key, "", true);
@@ -175,9 +180,17 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
       // U14 (ADR-070) — transient (follow-mode) tabs are never persisted:
       // they are rebuilt from the live selection, and freezing them into a
       // workspace/project would pin the follow pane to one track forever.
+      // A5/D4 (v2.4.0, owner decision 2026-07-09) — a WAITING fx@ tab
+      // (float closed, passive probe idle) is session-only: persisting it
+      // would make restore re-OPEN the float the user closed (restore goes
+      // through ShowAndGetHwnd) — the exact resurrection ADR-067 refused.
       int persistCount = 0;
-      for (int t = 0; t < ps->tabCount; t++)
-        if (!ps->tabs[t].transient) persistCount++;
+      for (int t = 0; t < ps->tabCount; t++) {
+        const TabEntry& te = ps->tabs[t];
+        if (te.transient) continue;
+        if (!te.captured && FxCapture::IsFxIdentity(te.actionCmd)) continue;
+        persistCount++;
+      }
 
       snprintf(key, sizeof(key), "%spane_%d_tab_count", prefix, p);
       snprintf(buf, sizeof(buf), "%d", persistCount);
@@ -188,10 +201,17 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
                (ps->activeTab >= 0 && ps->activeTab < persistCount) ? ps->activeTab : 0);
       state.Set(section, key, buf, true);
 
+      // F11 (ADR-078) — the slot assignment is a pane ATTRIBUTE (the
+      // transient slot TAB itself never persists).
+      snprintf(key, sizeof(key), "%spane_%d_follow_slot", prefix, p);
+      snprintf(buf, sizeof(buf), "%d", ps->followSlot);
+      state.Set(section, key, buf, true);
+
       int outIdx = 0;
       for (int t = 0; t < ps->tabCount; t++) {
         const TabEntry& tab = ps->tabs[t];
         if (tab.transient) continue;
+        if (!tab.captured && FxCapture::IsFxIdentity(tab.actionCmd)) continue;  // A5/D4
         snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, outIdx);
         if (tab.name[0]) {
           if (tab.isArbitrary) {
@@ -235,6 +255,11 @@ void WorkspaceManager::WritePaneTabsStatic(const char* section, const char* pref
       snprintf(buf, sizeof(buf), "%d", panes[p].tabCount);
       state.Set(section, key, buf, true);
 
+      // F11 (ADR-078) — snapshot branch carries the assignment too.
+      snprintf(key, sizeof(key), "%spane_%d_follow_slot", prefix, p);
+      snprintf(buf, sizeof(buf), "%d", panes[p].followSlot);
+      state.Set(section, key, buf, true);
+
       snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
       snprintf(buf, sizeof(buf), "%d", panes[p].activeTab);
       state.Set(section, key, buf, true);
@@ -275,6 +300,13 @@ void WorkspaceManager::ReadPaneTabsStatic(const char* section, const char* prefi
     snprintf(key, sizeof(key), "%spane_%d_active_tab", prefix, p);
     val = state.Get(section, key);
     panes[p].activeTab = safe_atoi_clamped(val, 0, MAX_TABS_PER_PANE - 1);
+
+    // F11 (ADR-078) — absent key MUST read as -1 (snapshots are memset(0);
+    // 0 would silently mean "follow slot 1" on every legacy save).
+    snprintf(key, sizeof(key), "%spane_%d_follow_slot", prefix, p);
+    val = state.Get(section, key);
+    panes[p].followSlot = val ? safe_atoi_clamped(val, -1, MAX_TABS_PER_PANE - 1)
+                              : -1;
 
     for (int t = 0; t < panes[p].tabCount && t < MAX_TABS_PER_PANE; t++) {
       snprintf(key, sizeof(key), "%spane_%d_tab_%d", prefix, p, t);
@@ -451,31 +483,49 @@ void WorkspaceManager::EnqueueSave(const char* name, const SplitTree& tree,
   }
 
   memset(dst, 0, sizeof(*dst));
+  NormalizePaneSnapshots(dst->panes, MAX_PANES);  // F11 (copy below overwrites, belt+braces)
   dst->valid = true;
   safe_strncpy(dst->name, name, sizeof(dst->name));
   tree.SaveSnapshot(dst->nodes, dst->nodeCount);
   for (int p = 0; p < MAX_PANES; p++) {
     const PaneState* ps = winMgr.GetPaneState(p);
     if (!ps) continue;
-    dst->panes[p].tabCount = ps->tabCount;
-    dst->panes[p].activeTab = ps->activeTab;
+    // F11 (ADR-078) — the assignment persists; the transient tab does not.
+    dst->panes[p].followSlot = ps->followSlot;
+    // ADR-081 §6 (owner repro: follow → Save Workspace → restart → plugins
+    // GONE): an EXPLICIT save is the user saying "utrwal to, co widzę" — so
+    // transient follow-mode tabs are MATERIALIZED here (the snapshot tab has
+    // no transient flag, so they come back as regular persistent fx@ tabs).
+    // This is safe because EnqueueSave has exactly ONE caller — the explicit
+    // Save Workspace flow; MarkWorkspaceDirty only flags UI state and never
+    // writes slots, so follow churn cannot auto-rewrite a workspace. The
+    // ADR-070 "transients excluded" rule still holds for every AUTOMATIC
+    // writer (project state / RPP / screensets / exit state). Waiting
+    // (unresolved) fx@ tabs stay excluded per D4.
+    int outIdx = 0;
     for (int t = 0; t < ps->tabCount && t < MAX_TABS_PER_PANE; t++) {
       const TabEntry& tab = ps->tabs[t];
-      dst->panes[p].tabs[t].isArbitrary = tab.isArbitrary;
-      dst->panes[p].tabs[t].toggleAction = tab.toggleAction;
-      dst->panes[p].tabs[t].colorIndex = tab.colorIndex;
-      dst->panes[p].tabs[t].pinned = tab.pinned;
+      if (!tab.captured && FxCapture::IsFxIdentity(tab.actionCmd)) continue;
+      dst->panes[p].tabs[outIdx].isArbitrary = tab.isArbitrary;
+      dst->panes[p].tabs[outIdx].toggleAction = tab.toggleAction;
+      dst->panes[p].tabs[outIdx].colorIndex = tab.colorIndex;
+      dst->panes[p].tabs[outIdx].pinned = tab.pinned;
       if (tab.isArbitrary && tab.actionCmd[0]) {
-        safe_strncpy(dst->panes[p].tabs[t].actionCommand, tab.actionCmd,
-                     sizeof(dst->panes[p].tabs[t].actionCommand));
+        safe_strncpy(dst->panes[p].tabs[outIdx].actionCommand, tab.actionCmd,
+                     sizeof(dst->panes[p].tabs[outIdx].actionCommand));
       } else if (tab.toggleAction > 0) {
-        GetActionCommandString(tab.toggleAction, dst->panes[p].tabs[t].actionCommand,
-                               sizeof(dst->panes[p].tabs[t].actionCommand));
+        GetActionCommandString(tab.toggleAction, dst->panes[p].tabs[outIdx].actionCommand,
+                               sizeof(dst->panes[p].tabs[outIdx].actionCommand));
       }
       if (tab.name[0]) {
-        safe_strncpy(dst->panes[p].tabs[t].name, tab.name, sizeof(dst->panes[p].tabs[t].name));
+        safe_strncpy(dst->panes[p].tabs[outIdx].name, tab.name,
+                     sizeof(dst->panes[p].tabs[outIdx].name));
       }
+      outIdx++;
     }
+    dst->panes[p].tabCount = outIdx;
+    dst->panes[p].activeTab =
+        (ps->activeTab >= 0 && ps->activeTab < outIdx) ? ps->activeTab : 0;
   }
 
   // Phase 1 in-memory commit — the launcher's next repaint must show the
@@ -600,6 +650,13 @@ void WorkspaceManager::Delete(const char* name)
       // invisible to readers (gated by ws_count) but permanent
       // reaper-extstate.ini garbage until a new workspace reused the index.
       ClearSlotPersistedKeys(m_count);
+      // F7 (v2.4.0) — keep the startup-workspace pref consistent: deleting
+      // the chosen workspace clears the pref (launcher fallback).
+      if (g_GetExtState && g_SetExtState) {
+        const char* sw = g_GetExtState(EXT_SECTION, "startup_workspace");
+        if (sw && strcmp(sw, name) == 0)
+          g_SetExtState(EXT_SECTION, "startup_workspace", "", true);
+      }
       return;
     }
   }
@@ -625,6 +682,7 @@ void WorkspaceManager::ClearSlotPersistedKeys(int slot)
 
   static PaneSnapshot s_empty[MAX_PANES];  // static: ~50 KB, keep off the stack
   memset(s_empty, 0, sizeof(s_empty));
+  NormalizePaneSnapshots(s_empty, MAX_PANES);  // F11 — else clears write slot "0" 
   WritePaneTabsStatic(m_listSection, prefix, s_empty, MAX_PANES, nullptr, acc);
 }
 
@@ -635,8 +693,17 @@ bool WorkspaceManager::Rename(int index, const char* newName)
   if (!m_workspaces[index].used) return false;
   // Reject collision (case-sensitive — matches Find/Delete behavior).
   if (Find(newName)) return false;
+  // F7 (v2.4.0) — capture the OLD name BEFORE the in-place overwrite; if it
+  // was the startup workspace, the pref follows the rename.
+  char oldName[MAX_WORKSPACE_NAME];
+  safe_strncpy(oldName, m_workspaces[index].name, sizeof(oldName));
   safe_strncpy(m_workspaces[index].name, newName, MAX_WORKSPACE_NAME);
   SaveList();
+  if (g_GetExtState && g_SetExtState) {
+    const char* sw = g_GetExtState(EXT_SECTION, "startup_workspace");
+    if (sw && strcmp(sw, oldName) == 0)
+      g_SetExtState(EXT_SECTION, "startup_workspace", newName, true);
+  }
   return true;
 }
 

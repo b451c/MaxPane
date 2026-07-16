@@ -7,6 +7,9 @@
 struct PaneSnapshot {
   int tabCount;
   int activeTab;
+  int followSlot;  // F11 (ADR-078) — -1 = none. Snapshots are memset(0)
+                   // before fill, so READERS must set -1 when the key is
+                   // absent (0 would silently mean "follow slot 1").
   struct TabSnapshot {
     bool isArbitrary;
     char name[256];
@@ -16,6 +19,16 @@ struct PaneSnapshot {
     bool pinned;  // C2 (ADR-027)
   } tabs[MAX_TABS_PER_PANE];
 };
+
+// F11 (ADR-078) — memset(0) POISONS followSlot (0 means "follow slot 1").
+// Every memset of a PaneSnapshot array must be followed by this. Caught
+// live on the first mac smoke: the empty-launcher LoadState path passed a
+// zeroed array into ApplyPaneState and phantom-assigned slot 1 to all 16
+// panes, silently flipping the follow engine into slot mode.
+inline void NormalizePaneSnapshots(PaneSnapshot* panes, int count)
+{
+  for (int i = 0; i < count; i++) panes[i].followSlot = -1;
+}
 
 // Workspace preset — stores tree snapshots
 struct WorkspaceEntry {

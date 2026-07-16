@@ -18,6 +18,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>   // strtol (F7 combo) — MSVC strict-include discipline
 
 namespace {
 
@@ -93,12 +94,87 @@ bool ReadFollowTrackFx()
 
 // U15 (ADR-069) — keep the floating MaxPane out of the Windows taskbar
 // (WS_EX_TOOLWINDOW; also leaves Alt-Tab — documented trade-off). Win-only
-// in effect; the checkbox is shown everywhere, harmless no-op on mac/Linux.
+// in effect; since v2.4.0 the row is only emitted on Windows (platform
+// gating — see settings_dialog.h), so mac/Linux users never see it.
+#ifdef _WIN32
 bool ReadHideFromTaskbar()
 {
   if (!g_GetExtState) return false;
   const char* v = g_GetExtState(EXT_SECTION, "hide_from_taskbar");
   return (v && v[0] == '1' && v[1] == '\0');
+}
+#endif
+
+// F12 (ADR-079, bertrand #73) — focus the captured FX window on a USER tab
+// switch so MIDI controllers targeting REAPER's focused FX follow the tab.
+// Default OFF (SW_SHOWNA no-steal is the deliberate baseline).
+bool ReadFocusFxOnTab()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "focus_fx_on_tab_switch");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
+// B2 (v2.4.0, mb945 #78) — tie the floating MaxPane to REAPER's main window
+// (Win32 owned-window semantics: minimize-follow + group z-order; Linux gets
+// the same via GDK transient-for). Default OFF (owner decision D1). Inert on
+// mac, so the row is not emitted there (platform gating, settings_dialog.h).
+#ifndef __APPLE__
+bool ReadTieToMain()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "float_tie_to_main");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+#endif
+
+// F7 (v2.4.0, mb945 #78) — startup workspace dropdown. Raw workspace-name
+// storage backing the combo entries: index 0 = "None (show launcher)",
+// entries 1..count map to g_startupWsNames[i-1]. A pref naming a workspace
+// that no longer exists is appended as "<name> (missing)" so committing any
+// other choice replaces it.
+static char g_startupWsNames[MAX_WORKSPACES + 1][128];
+static int  g_startupWsCount = 0;
+
+void PopulateStartupWorkspaceCombo(HWND dlg)
+{
+  g_startupWsCount = 0;
+  SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_RESETCONTENT, 0, 0);
+  SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_ADDSTRING, 0,
+                     (LPARAM)"None (show launcher)");
+
+  const char* pref = g_GetExtState ? g_GetExtState(EXT_SECTION, "startup_workspace")
+                                   : nullptr;
+  int selected = 0;
+
+  // Raw list read (ws_count / ws_<N>_name) — no WorkspaceManager needed.
+  const char* countStr = g_GetExtState ? g_GetExtState(EXT_SECTION, "ws_count") : nullptr;
+  int count = 0;
+  if (countStr) count = (int)strtol(countStr, nullptr, 10);
+  if (count < 0) count = 0;
+  if (count > MAX_WORKSPACES) count = MAX_WORKSPACES;
+  for (int w = 0; w < count; w++) {
+    char key[64];
+    std::snprintf(key, sizeof(key), "ws_%d_name", w);
+    const char* name = g_GetExtState(EXT_SECTION, key);
+    if (!name || !name[0]) continue;
+    safe_strncpy(g_startupWsNames[g_startupWsCount], name,
+                 sizeof(g_startupWsNames[0]));
+    SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_ADDSTRING, 0, (LPARAM)name);
+    g_startupWsCount++;
+    if (pref && pref[0] && strcmp(pref, name) == 0) selected = g_startupWsCount;
+  }
+  if (pref && pref[0] && selected == 0) {
+    // Pref names a workspace that no longer exists — surface it.
+    char label[160];
+    std::snprintf(label, sizeof(label), "%s (missing)", pref);
+    safe_strncpy(g_startupWsNames[g_startupWsCount], pref,
+                 sizeof(g_startupWsNames[0]));
+    SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_ADDSTRING, 0, (LPARAM)label);
+    g_startupWsCount++;
+    selected = g_startupWsCount;
+  }
+  SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_SETCURSEL, (WPARAM)selected, 0);
 }
 
 // U13 (ADR-068) — pending splitter-color preset index (cycle button, same
@@ -111,8 +187,18 @@ void LoadValues(HWND dlg)
   CheckDlgButton(dlg, IDC_SET_SHOWNAVBAR, ReadShowNavBar() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_HIDETABBAR, ReadHideSingleTabBar() ? BST_CHECKED : BST_UNCHECKED);
   CheckDlgButton(dlg, IDC_SET_HIDEALLTABS, ReadHideAllTabBars() ? BST_CHECKED : BST_UNCHECKED);
+  // v2.4.0 platform gating — rows inert on this platform are not emitted
+  // (see settings_dialog.h); load/commit mirror the same #if structure so
+  // an absent control never round-trips a pref it can't edit.
+#ifdef _WIN32
   CheckDlgButton(dlg, IDC_SET_HIDETASKBAR, ReadHideFromTaskbar() ? BST_CHECKED : BST_UNCHECKED);
+#endif
   CheckDlgButton(dlg, IDC_SET_FOLLOWFX, ReadFollowTrackFx() ? BST_CHECKED : BST_UNCHECKED);
+#ifndef __APPLE__
+  CheckDlgButton(dlg, IDC_SET_TIEMAIN, ReadTieToMain() ? BST_CHECKED : BST_UNCHECKED);
+#endif
+  CheckDlgButton(dlg, IDC_SET_FOCUSFX, ReadFocusFxOnTab() ? BST_CHECKED : BST_UNCHECKED);
+  PopulateStartupWorkspaceCombo(dlg);
   CheckDlgButton(dlg, IDC_SET_AUTO_UPDATE, IsAutoUpdateEnabled() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
   SetDlgItemText(dlg, IDC_SET_DARK_CYCLE, DarkModeButtonLabel(g_pendingDarkMode));
@@ -139,10 +225,25 @@ void CommitValues(HWND dlg)
     g_SetExtState(EXT_SECTION, "hide_single_tab_bar", hideTab ? "1" : "0", true);
     const bool hideAll = (IsDlgButtonChecked(dlg, IDC_SET_HIDEALLTABS) == BST_CHECKED);
     g_SetExtState(EXT_SECTION, "hide_tab_bars", hideAll ? "1" : "0", true);
+#ifdef _WIN32
     const bool hideTb = (IsDlgButtonChecked(dlg, IDC_SET_HIDETASKBAR) == BST_CHECKED);
     g_SetExtState(EXT_SECTION, "hide_from_taskbar", hideTb ? "1" : "0", true);
+#endif
     const bool follow = (IsDlgButtonChecked(dlg, IDC_SET_FOLLOWFX) == BST_CHECKED);
     g_SetExtState(EXT_SECTION, "follow_track_fx", follow ? "1" : "0", true);
+#ifndef __APPLE__
+    const bool tie = (IsDlgButtonChecked(dlg, IDC_SET_TIEMAIN) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "float_tie_to_main", tie ? "1" : "0", true);
+#endif
+    const bool focusFx = (IsDlgButtonChecked(dlg, IDC_SET_FOCUSFX) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "focus_fx_on_tab_switch", focusFx ? "1" : "0", true);
+    // F7 — commit the startup-workspace choice by RAW name (index 0 = off).
+    {
+      int sel = (int)SendDlgItemMessage(dlg, IDC_SET_STARTWS, CB_GETCURSEL, 0, 0);
+      const char* name = (sel > 0 && sel <= g_startupWsCount)
+                             ? g_startupWsNames[sel - 1] : "";
+      g_SetExtState(EXT_SECTION, "startup_workspace", name, true);
+    }
     g_SetExtState(EXT_SECTION, "splitter_color",
                   SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].key, true);
   }

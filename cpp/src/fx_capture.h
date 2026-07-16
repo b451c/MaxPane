@@ -1,5 +1,6 @@
 #pragma once
 #include "platform.h"
+#include <cstring>   // strncmp (inline IsFxIdentity) — MSVC strict-include
 
 // Forward declarations match globals.h (REAPER SDK types are class, not struct).
 class MediaTrack;
@@ -90,6 +91,13 @@ bool ResolveLocation(const char* identity, ResolvedLocation& out,
 // ResolveLocation fails or the SDK call doesn't produce a window.
 bool ShowAndGetHwnd(const char* identity, HWND& outHwnd);
 
+// A5 (v2.4.0) — passive identity probe: return the live floating-window
+// HWND WITHOUT opening anything (no TrackFX_Show). False while the FX is
+// closed or merely embedded in the chain window — which is exactly what
+// makes the fx@ sticky-tab recapture safe: a float the user closed stays
+// closed; the waiting tab only re-grabs a float that EXISTS again.
+bool GetFloatingHwnd(const char* identity, HWND& outHwnd);
+
 // Hide the floating FX window (TrackFX_Show showFlag=2). Idempotent.
 bool Hide(const char* identity);
 
@@ -99,7 +107,14 @@ bool Hide(const char* identity);
 bool GetDisplayName(const char* identity, char* out, int outSize);
 
 // True iff the actionCmd starts with one of the FX identity prefixes
-// (`fx@` or `takefx@`). Cheap; safe to call from any branch.
-bool IsFxIdentity(const char* actionCmd);
+// (`fx@` or `takefx@`). Cheap; safe to call from any branch. Inline so the
+// pure-logic test binary (which links the persistence writers but not this
+// module's TU) resolves it too.
+inline bool IsFxIdentity(const char* actionCmd)
+{
+  if (!actionCmd) return false;
+  return strncmp(actionCmd, "fx@", 3) == 0 ||
+         strncmp(actionCmd, "takefx@", 7) == 0;
+}
 
 }  // namespace FxCapture

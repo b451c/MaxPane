@@ -21,6 +21,134 @@ static void BuildScreensetId(int i, char* out, size_t n)
 }
 
 // =========================================================================
+// A1 (v2.4.0) — deferred screenset LOAD replay.
+//
+// LOAD_STATE used to silently DROP the blob whenever it arrived inside the
+// project-restore window (guard in the callback below). A screenset recalled
+// from a REAPER startup action always lands inside that window — the timer
+// arms on EVERY project load and stays up the full 20-tick poll for
+// stateless projects — so "MaxPane doesn't load at startup, but the same
+// shortcut works a second later" (LorenzoB #76). actionParm is only valid
+// during the callback, so the blob is heap-stashed per instance and replayed
+// once the restore settles. Semantics: replay-always (owner decision D3,
+// 2026-07-09) — after settling, the screenset applies exactly like a manual
+// press (screenset-wins; in a state-carrying project that is a brief,
+// honest layout swap).
+// =========================================================================
+struct ScreensetStash {
+  char* blob = nullptr;
+  int   len = 0;
+  int   settleTicks = 0;  // consecutive guard-clear ticks observed
+  int   ageTicks = 0;     // total ticks since stashed (drop cap)
+};
+static ScreensetStash s_stash[MaxPaneContainer::MAX_INSTANCES];
+static bool s_replayTimerArmed = false;
+
+static void ApplyScreensetBlob(int instId, const char* blob, int blobLen);
+
+static void FreeStash(int i)
+{
+  delete[] s_stash[i].blob;
+  s_stash[i] = ScreensetStash();
+}
+
+static void screensetReplayTimerFunc()
+{
+  bool anyLeft = false;
+  for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
+    ScreensetStash& st = s_stash[i];
+    if (!st.blob) continue;
+    st.ageTicks++;
+    const bool guardUp = g_pendingProjectState[i].valid || g_projOpenTimerActive;
+    if (guardUp) {
+      st.settleTicks = 0;
+      if (st.ageTicks > 100) {  // ~3 s — something is genuinely mid-flight;
+        // with the rppReadyTimer consumption fix the pending arm can no
+        // longer stick, so expiry means dropping is the conservative choice.
+        DBG("[MaxPane] screenset replay inst %d: cap expired, dropping\n", i);
+        FreeStash(i);
+      } else {
+        anyLeft = true;
+      }
+      continue;
+    }
+    // Settle margin: let the project restore's deferred capture queue drain
+    // before we swap the layout out from under it.
+    if (++st.settleTicks < 5) { anyLeft = true; continue; }
+    DBG("[MaxPane] screenset replay inst %d: applying stashed blob (%d bytes)\n",
+        i, st.len);
+    char* blob = st.blob;
+    int len = st.len;
+    st.blob = nullptr;      // detach before Apply (Apply may take time)
+    FreeStash(i);           // resets counters; blob already detached
+    ApplyScreensetBlob(i, blob, len);
+    delete[] blob;
+  }
+  if (!anyLeft && s_replayTimerArmed && g_plugin_register) {
+    g_plugin_register("-timer", (void*)(void(*)())screensetReplayTimerFunc);
+    s_replayTimerArmed = false;
+  }
+}
+
+static void StashScreensetBlob(int instId, const char* blob, int blobLen)
+{
+  FreeStash(instId);  // last-write-wins
+  s_stash[instId].blob = new char[(size_t)blobLen + 1];
+  memcpy(s_stash[instId].blob, blob, (size_t)blobLen);
+  s_stash[instId].blob[blobLen] = '\0';
+  s_stash[instId].len = blobLen;
+  if (!s_replayTimerArmed && g_plugin_register) {
+    g_plugin_register("timer", (void*)(void(*)())screensetReplayTimerFunc);
+    s_replayTimerArmed = true;
+  }
+}
+
+// Parse a "KEY VALUE\n" blob into the shared pending buffer and drive the
+// SAME restore funnel the RPP/ProjExtState paths use (LoadState consumes
+// it). Shared by the immediate LOAD_STATE path and the deferred replay.
+static void ApplyScreensetBlob(int instId, const char* blob, int blobLen)
+{
+  MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(instId);
+  if (!c) return;
+
+  PendingProjectState& slot = g_pendingProjectState[instId];
+  slot.reading = false;
+  slot.lineCount = 0;
+  const char* p = blob;
+  const size_t bl = strnlen(p, (size_t)blobLen);
+  const char* end = p + bl;
+  while (p < end && slot.lineCount < RPP_MAX_LINES) {
+    const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+    const char* lineEnd = nl ? nl : end;
+    int len = (int)(lineEnd - p);
+    if (len > 0) {
+      if (len >= RPP_MAX_LINE_LEN) len = RPP_MAX_LINE_LEN - 1;
+      memcpy(slot.lines[slot.lineCount], p, (size_t)len);
+      slot.lines[slot.lineCount][len] = '\0';
+      slot.lineCount++;
+    }
+    if (!nl) break;
+    p = nl + 1;
+  }
+  if (p < end)  // exited because we hit the 512-line RPP ceiling (review minor)
+    DBG("[MaxPane] screenset LOAD inst %d: WARN blob truncated at %d lines (RPP_MAX_LINES)\n",
+        instId, slot.lineCount);
+  slot.valid = (slot.lineCount > 0);
+  DBG("[MaxPane] screenset LOAD inst %d: %d lines, valid=%d\n",
+      instId, slot.lineCount, slot.valid);
+  if (!slot.valid) return;
+
+  if (c->IsAlive()) {          // A3 — a docker-X zombie must rebuild, not reload
+    c->ReloadProjectState();   // CancelAll + ReleaseAll + LoadState + reposition
+  } else {
+    c->Create();               // Create → LoadState consumes the pending blob
+  }
+  // Ensure visible — a recalled window set means "show MaxPane with this layout".
+  MaxPaneContainer* live = InstanceManager::Get().GetExisting(instId);
+  if (live && live->IsAlive() && !live->IsVisible()) live->Show();
+}
+
+// =========================================================================
 // Screenset callback — REAPER invokes this for save/load/query of one slot.
 // param carries the instance id (set at registration).
 // =========================================================================
@@ -99,7 +227,8 @@ static LRESULT MaxPaneScreensetCallback(int action, const char* /*id*/, void* pa
 
       // NULL/NULL → hide.
       if (!actionParm || actionParmSize <= 0) {
-        if (c->GetHwnd() && c->IsVisible()) {
+        FreeStash(instId);  // A1 — a hide supersedes any pending replay
+        if (c->IsAlive() && c->IsVisible()) {
           DBG("[MaxPane] screenset LOAD inst %d: hide\n", instId);
           c->Toggle();  // visible → hidden
         }
@@ -109,49 +238,17 @@ static LRESULT MaxPaneScreensetCallback(int action, const char* /*id*/, void* pa
       // Reconciliation with the project-load restore (F-39): if a project is
       // mid-load — an RPP <MAXPANE_STATE> chunk is parsed-but-not-yet-consumed,
       // OR the ProjExtState open-timer is in flight — the project path is
-      // authoritative. Don't clobber the shared pending buffer or double-apply.
+      // authoritative NOW. A1 (v2.4.0): do NOT drop the blob — stash it and
+      // replay once the restore settles (D3 replay-always), or a screenset
+      // recalled from a startup action silently never applies.
       if (g_pendingProjectState[instId].valid || g_projOpenTimerActive) {
-        DBG("[MaxPane] screenset LOAD inst %d: deferring to in-flight project restore\n", instId);
+        DBG("[MaxPane] screenset LOAD inst %d: deferring to in-flight project restore (stashed)\n",
+            instId);
+        StashScreensetBlob(instId, (const char*)actionParm, actionParmSize);
         return 0;
       }
 
-      // Parse the blob into the shared pending buffer, then drive the SAME
-      // restore funnel the RPP/ProjExtState paths use (LoadState consumes it).
-      PendingProjectState& slot = g_pendingProjectState[instId];
-      slot.reading = false;
-      slot.lineCount = 0;
-      const char* p = (const char*)actionParm;
-      const size_t blobLen = strnlen(p, (size_t)actionParmSize);
-      const char* end = p + blobLen;
-      while (p < end && slot.lineCount < RPP_MAX_LINES) {
-        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
-        const char* lineEnd = nl ? nl : end;
-        int len = (int)(lineEnd - p);
-        if (len > 0) {
-          if (len >= RPP_MAX_LINE_LEN) len = RPP_MAX_LINE_LEN - 1;
-          memcpy(slot.lines[slot.lineCount], p, (size_t)len);
-          slot.lines[slot.lineCount][len] = '\0';
-          slot.lineCount++;
-        }
-        if (!nl) break;
-        p = nl + 1;
-      }
-      if (p < end)  // exited because we hit the 512-line RPP ceiling (review minor)
-        DBG("[MaxPane] screenset LOAD inst %d: WARN blob truncated at %d lines (RPP_MAX_LINES)\n",
-            instId, slot.lineCount);
-      slot.valid = (slot.lineCount > 0);
-      DBG("[MaxPane] screenset LOAD inst %d: %d lines, valid=%d\n",
-          instId, slot.lineCount, slot.valid);
-      if (!slot.valid) return 0;
-
-      if (c->GetHwnd()) {
-        c->ReloadProjectState();  // CancelAll + ReleaseAll + LoadState + reposition
-      } else {
-        c->Create();              // Create → LoadState consumes the pending blob
-      }
-      // Ensure visible — a recalled window set means "show MaxPane with this layout".
-      MaxPaneContainer* live = InstanceManager::Get().GetExisting(instId);
-      if (live && live->GetHwnd() && !live->IsVisible()) live->Show();
+      ApplyScreensetBlob(instId, (const char*)actionParm, actionParmSize);
       return 0;
     }
   }
@@ -170,6 +267,14 @@ void MaxPaneScreenset::RegisterAll()
 
 void MaxPaneScreenset::UnregisterAll()
 {
+  // A1 (v2.4.0) — kill the replay timer and free stashes BEFORE the
+  // screenset ids go away (atexit path: no replay may fire mid-teardown).
+  if (s_replayTimerArmed && g_plugin_register) {
+    g_plugin_register("-timer", (void*)(void(*)())screensetReplayTimerFunc);
+    s_replayTimerArmed = false;
+  }
+  for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) FreeStash(i);
+
   if (!g_screenset_unregister) return;
   for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
     if (s_ssId[i][0]) g_screenset_unregister(s_ssId[i]);

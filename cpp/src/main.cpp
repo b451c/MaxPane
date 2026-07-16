@@ -224,10 +224,17 @@ static void rppReadyTimerFunc()
     DBG("[MaxPane] rppReadyTimer: inst %d has RPP state (%d lines), ensuring container\n",
         i, g_pendingProjectState[i].lineCount);
     MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
-    if (c && !c->GetHwnd()) {
+    if (c && !c->IsAlive()) {
       c->Create();  // Create() → LoadState() consumes this instance's pending RPP data
+    } else if (c) {
+      // A1 (v2.4.0) — an OPEN container must consume the slot HERE. The old
+      // "OnTimer will pick up" comment relied on a dead path: m_pendingRppLoad
+      // is never set true (its only assignment was removed in 52e39de), so the
+      // slot stuck valid forever — permanently deferring every screenset LOAD
+      // for this instance (screenset.cpp guard) and poisoning the next
+      // Create() with a stale project's layout.
+      c->ReloadProjectState();
     }
-    // If container already has hwnd, its OnTimer will pick up the pending RPP state
   }
 }
 
@@ -290,7 +297,7 @@ static void projStateOpenTimerFunc()
       }
 
       MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
-      if (c && !c->GetHwnd()) {
+      if (c && !c->IsAlive()) {  // A3 — a docker-X zombie counts as closed
         DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState, force-opening\n", i);
         c->Create();  // Create() → LoadState() restores the captured windows
         anyOpened = true;
@@ -464,6 +471,38 @@ static void startupTimerFunc()
     });
   }
 
+  // STEP 2.5 (F7, v2.4.0, mb945 #78 / owner decision D2) — default startup
+  // workspace. Fires ONCE per session when ALL hold: the pref names an
+  // existing workspace, instance 0 is open+visible and still shows the
+  // EMPTY launcher (no project state claimed it, no user action touched
+  // it), and no project restore is in flight (same guard as the screenset
+  // deferral). Project state ALWAYS wins — this is a fallback for the
+  // no-state case only (scoped exception to ADR-013, per new ADR).
+  static bool s_startupWsDone = false;
+  if (!s_startupWsDone && g_shellOpenAttempted) {
+    const char* wsName = g_GetExtState(EXT_SECTION, "startup_workspace");
+    if (!wsName || !wsName[0]) {
+      s_startupWsDone = true;  // pref off — stop checking
+    } else if (!g_pendingProjectState[0].valid && !g_projOpenTimerActive) {
+      MaxPaneContainer* c = InstanceManager::Get().GetExisting(0);
+      if (c && c->IsAlive() && c->IsVisible() && c->IsInLauncherMode()) {
+        if (c->GetWsMgr().Find(wsName)) {
+          DBG("[MaxPane] startup: loading startup workspace '%s'\n", wsName);
+          s_startupWsDone = true;
+          c->LoadWorkspace(wsName, /*startupAutoLoad=*/true);
+        } else {
+          DBG("[MaxPane] startup: startup workspace '%s' not found — launcher stays\n",
+              wsName);
+          s_startupWsDone = true;
+        }
+      } else if (c && c->IsAlive() && !c->IsInLauncherMode()) {
+        // Project state or the user beat us to it — never fight either.
+        s_startupWsDone = true;
+      }
+      // else: instance not open/visible yet — keep polling until STEP 3.
+    }
+  }
+
   // STEP 3 — Stop polling after the polling window expires.
   if (g_startupCounter > STARTUP_DELAY_TICKS + STARTUP_POLL_TICKS) {
     // Audit M3.3 — prune what's left of the stale lists. Entries still
@@ -522,7 +561,7 @@ static bool hookCommandProc(int command, int /*flag*/)
 
     MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(instId);
     if (!c) return false;
-    if (!c->GetHwnd()) {
+    if (!c->IsAlive()) {  // A3 — stale hwnd (docker-X zombie) = closed
       // Audit M1.2 — Create() failure used to be swallowed: the user pressed
       // the action and nothing happened, with no message and no Release log.
       // This is the user-initiated entry point, so a modal is appropriate.
@@ -562,6 +601,7 @@ static bool hookCommandProc(int command, int /*flag*/)
     if (favSlot >= 0) {
       MaxPaneContainer* c = ResolveSlotTargetInstance();
       if (!c) return false;
+      c->UnmuteProjectPersist();  // F7 — hotkey = user action
       c->ActivateFavorite(favSlot);
       return true;
     }
@@ -584,13 +624,16 @@ static bool hookCommandProc(int command, int /*flag*/)
   // instance (falls back to inst 0), no-ops unless it is floating.
   if (command == g_cmdToggleAOT && g_cmdToggleAOT) {
     MaxPaneContainer* c = ResolveSlotTargetInstance();
-    if (c) c->ToggleFloatAlwaysOnTop();
+    if (c) { c->UnmuteProjectPersist(); c->ToggleFloatAlwaysOnTop(); }
     return true;
   }
 
   if (command == g_cmdReopenTab && g_cmdReopenTab) {
     MaxPaneContainer* c = ResolveSlotTargetInstance();
-    if (c && c->HasRecentlyClosedTab()) c->ReopenLastClosedTab();
+    if (c && c->HasRecentlyClosedTab()) {
+      c->UnmuteProjectPersist();  // F7 — hotkey = user action
+      c->ReopenLastClosedTab();
+    }
     return true;
   }
 

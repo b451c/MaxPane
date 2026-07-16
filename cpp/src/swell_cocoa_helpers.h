@@ -26,8 +26,14 @@ void ForceHideWindow(HWND hwnd);
 // Safe to call on subviews (no-op when view isn't a contentView).
 // U15 (ADR-069) — hideFromTaskbar is a Windows concept (WS_EX_TOOLWINDOW);
 // mac/Linux implementations ignore it.
+// B2 feature (v2.4.0, mb945 #78) — `owner` ties the float to REAPER's main
+// window (Win32 owned-window semantics: minimize-follow, group z-order and
+// activation). Windows-only: on macOS the SWELL owner list only drives a
+// destroy cascade (dangerous at quit) and Linux transient-for is deferred
+// pending VM verification — both ignore the parameter.
 void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
-                               bool hideFromTaskbar = false);
+                               bool hideFromTaskbar = false,
+                               HWND owner = nullptr);
 
 // F1a (ADR-024) — clamp a window rect to the visible frame of the screen
 // it mostly occupies (NSScreen with the largest intersection with rect).
@@ -47,6 +53,29 @@ void OpenUrlPlatform(const char* url);
 // topmost API (see the Linux block below + ARCHITECTURE.md platform gaps).
 // Safe to call on subviews (no-op when view isn't a contentView).
 void SetWindowAlwaysOnTop(HWND hwnd, bool onTop);
+
+// ADR-081 addendum — Cocoa layer background for a plain NSView container
+// that has no SWELL wndproc to subclass (the fx@ dark-filler fallback).
+// The layer color renders beneath the view's drawn content and subviews.
+// No-op on Win32/Linux (see the platform blocks below).
+void SetViewBackgroundColorPlatform(HWND hwnd, int r, int g, int b);
+
+// ADR-081 §2 telemetry — NSView class name (mac) for the [FXBG] dumps:
+// identifies GL/Metal-surface plugin views (NSOpenGLView, JUCE classes)
+// that go black after reparenting. Win32: GetClassNameA; Linux: stub.
+void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize);
+
+// ADR-081 §5 — WINDOW-HOSTED capture (macOS): remote-view plug-in UIs
+// (out-of-process AUs, Rosetta-bridged VSTs) break when their NSView is
+// reparented, but work in their own NSWindow — so MaxPane keeps the whole
+// REAPER float window alive, strips its chrome, and glues it over the pane
+// as a borderless CHILD NSWindow (follows the container automatically;
+// resize goes through REAPER's native float path). No-ops off-mac.
+bool AttachWindowAsChildWindow(HWND containerHwnd, HWND targetHwnd);
+void SetChildWindowFrame(HWND containerHwnd, HWND targetHwnd,
+                         int x, int y, int w, int h);
+void ShowChildWindow(HWND targetHwnd, bool show);
+void DetachChildWindow(HWND targetHwnd);
 
 // v2.0.2 cross-platform icon unify — blit a BGRA pre-composed bitmap into a
 // SWELL HDC at the given destination rect, scaling if needed. macOS Cocoa
@@ -147,18 +176,33 @@ inline void ForceHideWindow(HWND hwnd)
 }
 
 inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
-                                      bool hideFromTaskbar = false)
+                                      bool hideFromTaskbar = false,
+                                      HWND owner = nullptr)
 {
   if (!hwnd) return;
   LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
   style &= ~(WS_CHILD | WS_POPUP);
   style |= WS_OVERLAPPEDWINDOW | WS_VISIBLE;
   SetWindowLongPtr(hwnd, GWL_STYLE, style);
+  // B2 feature (v2.4.0, mb945 #78) — the owner ties the float to REAPER
+  // main: Windows then natively handles minimize-follow + group z-order and
+  // activation, like every native REAPER floating window. Keyed on the
+  // PARAMETER, never a pref read inside this helper: the DoRelease
+  // chromed-orphan path calls it with defaults and must stay byte-identical
+  // (release path = documented regression magnet).
+  SetWindowLongPtr(hwnd, GWLP_HWNDPARENT, (LONG_PTR)owner);
   // U15 (ADR-069, mb945 #60) — WS_EX_TOOLWINDOW keeps the floating window
   // out of the taskbar (and Alt-Tab — a documented trade-off of the pref).
   LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
   if (hideFromTaskbar) exStyle |= WS_EX_TOOLWINDOW;
   else                 exStyle &= ~WS_EX_TOOLWINDOW;
+  // B2 — owned windows lose their taskbar button by default; WS_EX_APPWINDOW
+  // restores it so tying to main doesn't silently change shell presence.
+  // Untouched when owner is null (release paths stay byte-identical).
+  if (owner) {
+    if (hideFromTaskbar) exStyle &= ~(LONG_PTR)WS_EX_APPWINDOW;
+    else                 exStyle |= WS_EX_APPWINDOW;
+  }
   SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
   if (title && title[0]) SetWindowTextA(hwnd, title);
   SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
@@ -217,6 +261,19 @@ inline void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)
   SetWindowPos(hwnd, onTop ? HWND_TOPMOST : HWND_NOTOPMOST,
                0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
+// ADR-081 addendum — Cocoa-only fallback; no-op here.
+inline void SetViewBackgroundColorPlatform(HWND, int, int, int) {}
+inline void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize)
+{
+  if (!buf || bufSize <= 0) return;
+  buf[0] = 0;
+  if (hwnd) GetClassNameA(hwnd, buf, bufSize);
+}
+// ADR-081 §5 — window-hosted capture is Cocoa-only; no-ops here.
+inline bool AttachWindowAsChildWindow(HWND, HWND) { return false; }
+inline void SetChildWindowFrame(HWND, HWND, int, int, int, int) {}
+inline void ShowChildWindow(HWND, bool) {}
+inline void DetachChildWindow(HWND) {}
 // Win32 delivers WM_MOUSEMOVE to the window under the cursor regardless of
 // focus, so the macOS key-window hover gap doesn't exist here.
 inline void EnableContainerMouseTracking(HWND) {}
@@ -278,8 +335,18 @@ inline void ForceHideWindow(HWND) {}
 // bits (swell_oswindow_manage), so restoring them + SWP_FRAMECHANGED is the
 // whole job. Runtime verification on a Linux VM pending.
 // U15 (ADR-069) — hideFromTaskbar is a Windows concept; ignored here.
+// B2 (v2.4.0) — owner (tie-to-main): Linux gets the SAME semantics as
+// Win32 via SWELL-generic's owner slot (GWL_HWNDPARENT → GDK transient-for
+// at os-window level; GDK defaults keep owned windows above their owner,
+// mirroring the Win32 owned-group invariant). Native REAPER floats are
+// transient-for main on Linux, so this restores parity with them — the
+// cross-platform consistency rule (owner directive 2026-07-09). VERIFIED
+// on the Linux VM 2026-07-09 (xprop WM_TRANSIENT_FOR — see the ADR-072..079
+// Linux addendum). Known side effect: owned windows default OUT of the
+// tasklist (gdk_owned_windows_in_tasklist=0).
 inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
-                                      bool /*hideFromTaskbar*/ = false)
+                                      bool /*hideFromTaskbar*/ = false,
+                                      HWND owner = nullptr)
 {
   if (!hwnd) return;
   // LONG_PTR end-to-end — SWELL's GetWindowLong returns LONG_PTR, and the
@@ -289,6 +356,7 @@ inline void ApplyFloatingWindowChrome(HWND hwnd, const char* title,
   style &= ~(LONG_PTR)WS_CHILD;
   style |= WS_CAPTION | WS_THICKFRAME | WS_SYSMENU;
   SetWindowLong(hwnd, GWL_STYLE, style);
+  SetWindowLong(hwnd, GWL_HWNDPARENT, (LONG_PTR)owner);  // B2 — see above
   if (title && title[0]) SetWindowText(hwnd, title);
   SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
@@ -331,6 +399,19 @@ inline void OpenUrlPlatform(const char* url)
 // API — the floating-mode "always on top" checkbox is a no-op on Linux.
 // Revisit if SWELL grows SetWindowLevel-equivalent support.
 inline void SetWindowAlwaysOnTop(HWND, bool) {}
+// ADR-081 addendum — Cocoa-only fallback; no-op here.
+inline void SetViewBackgroundColorPlatform(HWND, int, int, int) {}
+inline void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize)
+{
+  if (!buf || bufSize <= 0) return;
+  buf[0] = 0;
+  if (hwnd) GetClassName(hwnd, buf, bufSize);
+}
+// ADR-081 §5 — window-hosted capture is Cocoa-only; no-ops here.
+inline bool AttachWindowAsChildWindow(HWND, HWND) { return false; }
+inline void SetChildWindowFrame(HWND, HWND, int, int, int, int) {}
+inline void ShowChildWindow(HWND, bool) {}
+inline void DetachChildWindow(HWND) {}
 inline void EnableContainerMouseTracking(HWND) {}
 // U9 (ADR-068) — Linux HiDPI chrome scaling is a pre-existing documented gap
 // (V2_PROGRESS "nav-bar advisory scaling"); tooltips keep 1.0 until that
