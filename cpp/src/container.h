@@ -136,6 +136,12 @@ public:
   // U15 (ADR-069) — always-on-top toggle shared by the context menu and the
   // bindable action; floating-only (no-op when docked).
   void ToggleFloatAlwaysOnTop();
+  // v2.5.0 (quar_edm #91: "is there an action to get to the settings?") —
+  // one entry point for the nav button, the pane menu and the bindable
+  // MaxPane_OpenSettings action: runs the modal dialog, then re-applies
+  // every pref that can change live (nav bar, tab bars, chrome colors,
+  // floating chrome) exactly like the nav button always did.
+  void OpenSettings();
   // U15 (ADR-069) — re-apply floating chrome (title + taskbar visibility)
   // after the hide_from_taskbar pref changes; WS_EX_TOOLWINDOW only takes
   // cleanly across a hide/show cycle.
@@ -192,6 +198,20 @@ public:
   // F9 (v2.4.0) — swap two panes' contents wholesale (works when both are
   // full — the one case Move to Pane can never handle).
   void SwapPanes(int paneA, int paneB);
+  // v2.5.0 (LorenzoB #90 "merge sibling up/down/left/right") — relocate this
+  // pane's tabs into the ADJACENT pane in that direction (largest one when
+  // several touch; SplitTree::NeighborPane) and remove the pane from the
+  // tree. dir = SplitTree::PaneDirection. All-or-nothing like Merge.
+  void MergePaneToward(int paneId, int dir);
+  void MergeFocusedPaneToward(int dir);   // bindable-action entry
+  // v2.5.0 (LorenzoB #90 "container lock mode") — LAYOUT EDIT MODE: every
+  // captured window is hidden and each pane paints as a labelled card, so
+  // the pane structure can be edited "as if the windows weren't there":
+  // drag a card onto another pane = swap contents, right-click = pane menu,
+  // splitters drag as usual. Session-only UI state; toggled from the nav
+  // bar button, the pane menu or MaxPane_ToggleLayoutEdit.
+  void ToggleLayoutEditMode();
+  bool IsLayoutEditMode() const { return m_layoutEdit; }
   // F12 (ADR-079) — pref-gated focus of the active fx@/takefx@ tab's window
   // after a USER-initiated tab switch (tab click, NextTab/PrevTab). Never
   // called from programmatic switches (restore, follow-mode) — SW_SHOWNA
@@ -333,6 +353,14 @@ private:
   int  m_redockTicks = 0;        // A3 — OnTimer ticks since Create()
   bool m_projectPersistMuted = false;  // F7 — see UnmuteProjectPersist()
   DWORD m_lastDragReposTick = 0;  // v2.4.0 — splitter-drag reposition throttle
+  // v2.5.0 — layout edit mode (see ToggleLayoutEditMode). Drag state for
+  // the card-to-pane swap gesture: source pane, press point, whether the
+  // drag threshold was crossed, and the pane currently under the cursor.
+  bool  m_layoutEdit = false;
+  int   m_editDragPane = -1;
+  POINT m_editDragStart = {};
+  bool  m_editDragging = false;
+  int   m_editHoverPane = -1;
   CaptureMode m_captureMode;
   DragState m_dragState;
   std::unique_ptr<CaptureQueue> m_captureQueue;
@@ -536,7 +564,9 @@ private:
   void ExitCaptureMode();
 
   void OnSize(int cx, int cy);
-  void OnPaint(HDC hdc);
+  // paintRect (ADR-093 #5): the dirty rect from BeginPaint — sections that
+  // do not intersect it (nav bar, pane headers, splitters) are skipped.
+  void OnPaint(HDC hdc, const RECT* paintRect = nullptr);
   void OnMouseMove(int x, int y);
   void OnLButtonUp(int x, int y);
   void OnTimer();
@@ -601,6 +631,17 @@ private:
   // Context menu command dispatch
   void HandleTabMenuCommand(int cmd, int paneId, int tabIdx);
   void HandlePaneMenuCommand(int cmd, int paneId);
+
+  // v2.5.0 — shared by Merge into Sibling and the directional merges: move
+  // every non-transient tab of src into dst, all-or-nothing (toasts on no
+  // room / mid-move fill). Returns true when src ended up empty.
+  bool RelocateAllTabs(int srcPane, int dstPane);
+  // v2.5.0 — layout edit mode paint + input (see ToggleLayoutEditMode).
+  void PaintLayoutEditCards(HDC hdc);
+  bool OnLayoutEditLButtonDown(int x, int y);   // true = consumed
+  // Drop a held card without acting (menu opened / bound action fired /
+  // mode left while the mouse was down) — releases capture, clears drag.
+  void CancelLayoutEditDrag();
 
   static INT_PTR CALLBACK DlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 };

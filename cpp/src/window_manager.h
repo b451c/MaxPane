@@ -47,6 +47,12 @@ struct TabEntry {
                                  // background moves the captured child in
                                  // SCREEN coords that SWELL applies parent-
                                  // relative — the watchdog snaps it back.
+  bool floorHidden;              // ADR-097 (v2.5.0) — RepositionAll hid this
+                                 // ReaImGui window below the pane floor. On
+                                 // Win32 ReaImGui re-shows its viewport itself
+                                 // on the next frame (sized to the whole
+                                 // container); CheckAlive re-hides while set.
+                                 // Cleared when RepositionAll shows it again.
   // ADR-081 §5 (v2.4.0, macOS) — WINDOW-HOSTED capture: remote-view plug-in
   // UIs (out-of-process AUs, Rosetta-bridged VSTs) break on reparent but
   // work in their own NSWindow, so the whole REAPER float stays alive as a
@@ -117,7 +123,12 @@ public:
   void ReleaseAll(bool toggleOff = true);
   // Release all: toggle off tabs whose action is in staleActions, hide the rest
   void ReleaseAllSelective(const int* staleActions, int staleCount);
-  void RepositionAll(const SplitTree& tree);
+  // interactive=true (v2.5.0 perf, ADR-093 #3): a throttled pass from a
+  // splitter drag / window-edge resize — children are moved and sized, but
+  // no synchronous forced display, no hosted-window display:YES, no fx@
+  // filler chain walk; Cocoa coalesces the repaint. The drag-end / settle
+  // RefreshLayout runs the normal (forcing) pass once.
+  void RepositionAll(const SplitTree& tree, bool interactive = false);
   bool CheckAlive();  // returns true if any tabs were removed or recaptured
   // ADR-055 — single-tab tab-bar collapse pref (Settings, global). Pushed in
   // by the container; consulted by RepositionAll and exposed via
@@ -135,6 +146,12 @@ public:
   // mode, because its tabs ARE the FX-chain switcher.
   void SetFollowActive(bool v) { m_followActive = v; }
   bool GetFollowActive() const { return m_followActive; }
+  // v2.5.0 — layout edit mode (container): while set, RepositionAll hides
+  // EVERY captured window (hosted ones via ShowChildWindow) instead of
+  // placing them, so the container's pane cards are the visible surface.
+  // Clearing it + RepositionAll re-shows the active tabs (reShow path).
+  void SetLayoutEditHide(bool v) { m_layoutEditHide = v; }
+  bool GetLayoutEditHide() const { return m_layoutEditHide; }
   // F11 (ADR-078) — per-pane slot-follow assignment. SetFollowSlot enforces
   // slot uniqueness across panes (assigning slot N clears any other pane's
   // N); slot -1 clears. Any assignment switches FollowTick from whole-chain
@@ -167,6 +184,10 @@ public:
   bool CanReturnVisible(const TabEntry* tab) const;
   int GetTabCount(int paneId) const;
   bool IsWindowCaptured(HWND hwnd) const;
+  // ADR-090 — the captured tab whose window is `hwnd` or contains it
+  // (accelerator hook: script windows get plain keys, native REAPER windows
+  // keep the main-table routing). nullptr when hwnd is not inside a capture.
+  const TabEntry* FindTabContaining(HWND hwnd) const;
 
   // U4 (ADR-065) — true if a DIFFERENT live instance currently holds hwnd.
   // Capture paths, CheckAlive's reclaim, and the capture queue consult this
@@ -250,6 +271,12 @@ public:
   // pane and leaving the main window blank (forum v2.0.6).
   static bool IsCapturableTarget(HWND topLevel, const char* title);
 
+  // ADR-089 (v2.5.0) — true when hwnd is a ReaImGui context window that is
+  // currently INSIDE a REAPER docker (Win/Linux). Capturing it crashes
+  // REAPER (ReaImGui DockerHost invariant); CaptureQueue keeps such a tab
+  // waiting until the window floats. Always false on macOS (dock-frame path).
+  static bool IsReaImGuiDockedHost(HWND hwnd);
+
   // ADR-061 amendment (v2.2.1) — capture-refusal reason channel. A gate that
   // rejects a capture leaves a user-facing message; the UI path that owns the
   // toast consumes it (returns nullptr when none pending; consuming clears).
@@ -262,6 +289,7 @@ private:
   bool m_hideSingleTabBar = false;  // ADR-055 — Settings pref mirror
   bool m_hideAllTabBars = false;    // U12/ADR-068 — clean mode pref mirror
   bool m_followActive = false;      // U14/ADR-070 — follow-mode pref mirror
+  bool m_layoutEditHide = false;    // v2.5.0 — layout edit mode hides all
   bool DoCapture(TabEntry& tab, HWND targetHwnd, HWND containerHwnd);
   // ADR-081 §5 — remote-view windows (out-of-process AU / bridged VST UIs)
   // are window-hosted instead of reparented; DispatchCapture detects the

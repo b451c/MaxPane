@@ -14,6 +14,21 @@
 // by this string, so it must be stable across runs.
 static char s_ssId[MaxPaneContainer::MAX_INSTANCES][32];
 
+// Registration `param` per instance. It MUST be a real pointer: REAPER keeps
+// only the registration whose param is 0 when the params are small integers
+// (0..7 as (void*)i left instances 2-8 unregistered — no SAVE/LOAD callbacks
+// ever, "container 2 ignores window sets", LorenzoB #90; verified
+// 2026-09-02 with reaper-screensets.ini: 101 -> 108 entries once the params
+// became pointers). The callback maps the pointer back to the instance id.
+static int s_ssParam[MaxPaneContainer::MAX_INSTANCES];
+
+static int InstFromParam(const void* param)
+{
+  for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++)
+    if (param == (const void*)&s_ssParam[i]) return i;
+  return -1;
+}
+
 static void BuildScreensetId(int i, char* out, size_t n)
 {
   if (i == 0) snprintf(out, n, "MaxPane");
@@ -155,8 +170,8 @@ static void ApplyScreensetBlob(int instId, const char* blob, int blobLen)
 static LRESULT MaxPaneScreensetCallback(int action, const char* /*id*/, void* param,
                                         void* actionParm, int actionParmSize)
 {
-  const int instId = (int)(intptr_t)param;
-  if (instId < 0 || instId >= MaxPaneContainer::MAX_INSTANCES) return 0;
+  const int instId = InstFromParam(param);
+  if (instId < 0) return 0;
 
   DBG("[MaxPane] screenset cb: action=0x%x inst=%d parm=%p size=%d\n",
       action, instId, actionParm, actionParmSize);
@@ -260,7 +275,8 @@ void MaxPaneScreenset::RegisterAll()
   if (!g_screenset_registerNew) return;
   for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) {
     BuildScreensetId(i, s_ssId[i], sizeof(s_ssId[i]));
-    g_screenset_registerNew(s_ssId[i], (void*)MaxPaneScreensetCallback, (void*)(intptr_t)i);
+    s_ssParam[i] = i;
+    g_screenset_registerNew(s_ssId[i], (void*)MaxPaneScreensetCallback, (void*)&s_ssParam[i]);
     DBG("[MaxPane] screenset register id='%s' inst %d\n", s_ssId[i], i);
   }
 }

@@ -170,6 +170,9 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
 
   int insertPos = 0;
 
+  // v2.5.0 menu pass — tab menu order: organise (Pin, Color, Move, Favorites),
+  // then the destructive pair at the bottom (Release, Close) — same shape as
+  // the pane menu and the platform convention (destructive last).
   // C2 (ADR-027) — Pin/Unpin Tab on top: pinning is a promotion action, not
   // a close-related one. Label flips, check-mark reflects state.
   {
@@ -182,77 +185,6 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     mi.wID = MenuIds::TAB_TOGGLE_PINNED;
     mi.dwTypeData = pinned ? (char*)"Unpin Tab" : (char*)"Pin Tab";
     mi.fState = pinned ? MFS_CHECKED : 0;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  {
-    MENUITEMINFO sep = {};
-    sep.cbSize = sizeof(sep);
-    sep.fMask = MIIM_TYPE;
-    sep.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &sep);
-  }
-
-  // Close Tab — primary close action, top-level (Chrome/VS Code pattern).
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::TAB_CLOSE;
-    mi.dwTypeData = (char*)"Close Tab";
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // v2.0.6 — bulk-close family ("Close Others / to Right / All") removed: a
-  // MaxPane pane holds a handful of windows, not a browser's worth of tabs, so
-  // the submenu was over-engineering. "Close Tab" (above) + "Delete Pane" (pane
-  // menu, releases all) cover the real need.
-
-  // v2.0.6 — "Release Window": detach the captured window back to REAPER as a
-  // free-floating VISIBLE window (distinct from "Close Tab" above, which hides
-  // it). Shown only for tab types that can safely float (CanReturnVisible):
-  // known/toggle windows, FX, toolbars — hidden for ReaImGui (ADR-035 crash).
-  if (winMgr.CanReturnVisible(winMgr.GetTab(paneId, tabIndex))) {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::TAB_RELEASE;
-    mi.dwTypeData = (char*)"Release Window";
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // Separator between close-block and the rest.
-  {
-    MENUITEMINFO sep = {};
-    sep.cbSize = sizeof(sep);
-    sep.fMask = MIIM_TYPE;
-    sep.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &sep);
-  }
-
-  // Add to Favorites
-  {
-    const TabEntry* tab = winMgr.GetTab(paneId, tabIndex);
-    bool canAdd = (tab && tab->captured && tab->name[0]);
-    bool alreadyFav = false;
-    if (canAdd) {
-      for (int i = 0; i < favMgr.GetCount(); i++) {
-        if (strcmp(favMgr.Get(i).name, tab->name) == 0) {
-          alreadyFav = true;
-          break;
-        }
-      }
-    }
-
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::FAV_ADD;
-    mi.dwTypeData = alreadyFav ? (char*)"Already in Favorites" : (char*)"Add to Favorites";
-    mi.fState = (canAdd && !alreadyFav) ? 0 : MFS_GRAYED;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
@@ -327,6 +259,68 @@ HMENU BuildTabContextMenu(int paneId, int tabIndex,
     }
   }
 
+  // Add to Favorites
+  {
+    const TabEntry* tab = winMgr.GetTab(paneId, tabIndex);
+    bool canAdd = (tab && tab->captured && tab->name[0]);
+    bool alreadyFav = false;
+    if (canAdd) {
+      for (int i = 0; i < favMgr.GetCount(); i++) {
+        if (strcmp(favMgr.Get(i).name, tab->name) == 0) {
+          alreadyFav = true;
+          break;
+        }
+      }
+    }
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::FAV_ADD;
+    mi.dwTypeData = alreadyFav ? (char*)"Already in Favorites" : (char*)"Add to Favorites";
+    mi.fState = (canAdd && !alreadyFav) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  {
+    MENUITEMINFO sep = {};
+    sep.cbSize = sizeof(sep);
+    sep.fMask = MIIM_TYPE;
+    sep.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &sep);
+  }
+
+  // v2.0.6 — bulk-close family ("Close Others / to Right / All") removed: a
+  // MaxPane pane holds a handful of windows, not a browser's worth of tabs, so
+  // the submenu was over-engineering. "Close Tab" (above) + "Delete Pane" (pane
+  // menu, releases all) cover the real need.
+
+  // v2.0.6 — "Release Window": detach the captured window back to REAPER as a
+  // free-floating VISIBLE window (distinct from "Close Tab" above, which hides
+  // it). Shown only for tab types that can safely float (CanReturnVisible):
+  // known/toggle windows, FX, toolbars — hidden for ReaImGui (ADR-035 crash).
+  if (winMgr.CanReturnVisible(winMgr.GetTab(paneId, tabIndex))) {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::TAB_RELEASE;
+    mi.dwTypeData = (char*)"Release Window";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Close Tab — primary close action, top-level (Chrome/VS Code pattern).
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::TAB_CLOSE;
+    mi.dwTypeData = (char*)"Close Tab";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
   return menu;
 }
 
@@ -342,12 +336,416 @@ HMENU BuildPaneContextMenu(int paneId,
                            const WorkspaceManager& wsMgr,
                            bool soloActive,
                            bool isFloating,
-                           bool floatAlwaysOnTop)
+                           bool floatAlwaysOnTop,
+                           bool layoutEdit)
 {
   HMENU menu = CreatePopupMenu();
   if (!menu) return nullptr;
 
   int insertPos = 0;
+
+
+  // ======================= Add windows to this pane =======================
+  // --- Capture by Click ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::CAPTURE_BY_CLICK;
+    mi.dwTypeData = (char*)"Capture by click";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Capture window submenu (Q2 — 2026-05-22 UX revisit).
+  // Sprint 2 (ADR-020) had flattened these 15 known windows into the
+  // top-level menu — 1 click but long menu. Returned to a submenu so the
+  // pane menu's primary surface stays under ~7 verbs; capture-everything
+  // now lives under one consistent "Capture …" submenu group together
+  // with Open Windows and Capture by Click below.
+  {
+    HMENU captureMenu = CreatePopupMenu();
+    if (captureMenu) {
+      for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::KNOWN_BASE + i;
+        mi.dwTypeData = (char*)KNOWN_WINDOWS[i].name;
+        InsertMenuItem(captureMenu, i, TRUE, &mi);
+      }
+      MENUITEMINFO submi = {};
+      submi.cbSize = sizeof(submi);
+      submi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      submi.fType = MFT_STRING;
+      submi.hSubMenu = captureMenu;
+      submi.dwTypeData = (char*)"Capture window";
+      InsertMenuItem(menu, insertPos++, TRUE, &submi);
+    }
+  }
+
+  // --- Open Windows submenu (kept alongside Capture window for grouping) ---
+  HMENU openWinMenu = CreatePopupMenu();
+  if (openWinMenu) {
+    BuildOpenWindowsSubmenu(openWinMenu, MenuIds::OPEN_WINDOWS_BASE, containerHwnd, winMgr);
+
+    MENUITEMINFO owMi = {};
+    owMi.cbSize = sizeof(owMi);
+    owMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+    owMi.fType = MFT_STRING;
+    owMi.hSubMenu = openWinMenu;
+    owMi.dwTypeData = (char*)"Open windows";
+    InsertMenuItem(menu, insertPos++, TRUE, &owMi);
+  }
+
+  // --- Favorites submenu ---
+  {
+    HMENU favMenu = CreatePopupMenu();
+    if (favMenu) {
+      int favPos = 0;
+      int favCount = favMgr.GetCount();
+
+      for (int i = 0; i < favCount; i++) {
+        const FavoriteEntry& fav = favMgr.Get(i);
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::FAV_BASE + i;
+        mi.dwTypeData = (char*)fav.name;
+        InsertMenuItem(favMenu, favPos++, TRUE, &mi);
+      }
+
+      // Delete submenu
+      if (favCount > 0) {
+        MENUITEMINFO sep = {};
+        sep.cbSize = sizeof(sep);
+        sep.fMask = MIIM_TYPE;
+        sep.fType = MFT_SEPARATOR;
+        InsertMenuItem(favMenu, favPos++, TRUE, &sep);
+
+        HMENU favDelMenu = CreatePopupMenu();
+        if (favDelMenu) {
+          for (int i = 0; i < favCount; i++) {
+            const FavoriteEntry& fav = favMgr.Get(i);
+            MENUITEMINFO mi = {};
+            mi.cbSize = sizeof(mi);
+            mi.fMask = MIIM_ID | MIIM_TYPE;
+            mi.fType = MFT_STRING;
+            mi.wID = MenuIds::FAV_DELETE_BASE + i;
+            mi.dwTypeData = (char*)fav.name;
+            InsertMenuItem(favDelMenu, i, TRUE, &mi);
+          }
+
+          MENUITEMINFO delMi = {};
+          delMi.cbSize = sizeof(delMi);
+          delMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+          delMi.fType = MFT_STRING;
+          delMi.hSubMenu = favDelMenu;
+          delMi.dwTypeData = (char*)"Delete";
+          InsertMenuItem(favMenu, favPos++, TRUE, &delMi);
+        }
+      }
+
+      MENUITEMINFO favMi = {};
+      favMi.cbSize = sizeof(favMi);
+      favMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      favMi.fType = MFT_STRING;
+      favMi.hSubMenu = favMenu;
+      favMi.dwTypeData = (char*)"Favorites";
+      InsertMenuItem(menu, insertPos++, TRUE, &favMi);
+    }
+  }
+
+  // --- Capture track FX chain (U14, ADR-070) ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::CAPTURE_FX_CHAIN;
+    mi.dwTypeData = (char*)"Capture track FX chain";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Follow FX slot (F11, ADR-078) — per-pane slot assignment; the Logic
+  // plugin-window Multi-Link idiom generalized to panes. Shown only while
+  // the follow engine pref is ON (Settings is the discoverability point).
+  {
+    const char* fpref = g_GetExtState ? g_GetExtState(EXT_SECTION, "follow_track_fx")
+                                      : nullptr;
+    if (fpref && fpref[0] == '1' && fpref[1] == '\0') {
+      HMENU slotMenu = CreatePopupMenu();
+      const int cur = winMgr.GetFollowSlot(paneId);
+      int sPos = 0;
+      {
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::FOLLOW_SLOT_OFF;
+        mi.dwTypeData = (char*)"Off";
+        mi.fState = (cur < 0) ? MFS_CHECKED : 0;
+        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
+      }
+      char slotLabels[MAX_TABS_PER_PANE][16];
+      for (int s = 0; s < MAX_TABS_PER_PANE; s++) {
+        snprintf(slotLabels[s], sizeof(slotLabels[s]), "Slot %d", s + 1);
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::FOLLOW_SLOT_BASE + s;
+        mi.dwTypeData = slotLabels[s];
+        mi.fState = (cur == s) ? MFS_CHECKED : 0;
+        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
+      }
+      MENUITEMINFO sub = {};
+      sub.cbSize = sizeof(sub);
+      sub.fMask = MIIM_SUBMENU | MIIM_TYPE;
+      sub.fType = MFT_STRING;
+      sub.hSubMenu = slotMenu;
+      sub.dwTypeData = (char*)"Follow FX slot";
+      InsertMenuItem(menu, insertPos++, TRUE, &sub);
+    }
+  }
+
+  // --- Separator ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_TYPE;
+    mi.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // ======================= This pane =======================
+  // Split Horizontal
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::SPLIT_H;
+    mi.dwTypeData = (char*)"Split Top / Bottom";
+    mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Split Vertical
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::SPLIT_V;
+    mi.dwTypeData = (char*)"Split Left / Right";
+    mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Merge submenu (v2.5.0 menu pass): sibling + the four directional
+  // merges (ADR-086) under one entry instead of five top-level rows.
+  HMENU mergeMenu = CreatePopupMenu();
+  int mergePos = 0;
+  if (mergeMenu)
+  {
+    int nodeIdx = tree.NodeForPane(paneId);
+    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
+    const PaneState* ps = winMgr.GetPaneState(paneId);
+    // Count non-transient tabs only — follow-mode transients are released,
+    // not relocated, so they must not gray the merge spuriously.
+    int srcCount = 0;
+    if (ps) {
+      for (int t = 0; t < ps->tabCount; t++)
+        if (!ps->tabs[t].transient) srcCount++;
+    }
+    bool fits = false;
+    if (canMerge) {
+      const int destPane = tree.MergeDestinationPane(nodeIdx);
+      if (destPane >= 0) {
+        fits = (srcCount + winMgr.GetTabCount(destPane) <= MAX_TABS_PER_PANE);
+      }
+    }
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::MERGE;
+    mi.dwTypeData = (canMerge && !fits)
+        ? (char*)"Into Sibling (no room)"
+        : (char*)"Into Sibling";
+    mi.fState = (canMerge && fits) ? 0 : MFS_GRAYED;
+    InsertMenuItem(mergeMenu, mergePos++, TRUE, &mi);
+
+    // v2.5.0 (LorenzoB #90) — directional merges: the ADJACENT pane in that
+    // direction (largest when several touch) receives the tabs. Named by the
+    // target's content so the user sees where things go; grayed with the
+    // reason when nothing is there or it can't take the tabs.
+    static const char* const dirNames[4] = { "Left", "Right", "Up", "Down" };
+    for (int d = 0; d < 4; d++) {
+      const int nb = tree.NeighborPane(paneId, d);
+      bool ok = (canMerge && nb >= 0);
+      char label[128];
+      if (nb < 0) {
+        snprintf(label, sizeof(label), "%s (no pane there)", dirNames[d]);
+      } else {
+        const bool room = (srcCount + winMgr.GetTabCount(nb) <= MAX_TABS_PER_PANE);
+        ok = ok && room;
+        const TabEntry* at = winMgr.GetActiveTabEntry(nb);
+        const char* what = (at && at->name[0]) ? at->name : "empty";
+        snprintf(label, sizeof(label), room ? "%s (into %.40s)"
+                                            : "%s (no room in %.40s)",
+                 dirNames[d], what);
+      }
+      MENUITEMINFO dmi = {};
+      dmi.cbSize = sizeof(dmi);
+      dmi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+      dmi.fType = MFT_STRING;
+      dmi.wID = MenuIds::MERGE_DIR_BASE + d;
+      dmi.dwTypeData = label;
+      dmi.fState = ok ? 0 : MFS_GRAYED;
+      InsertMenuItem(mergeMenu, mergePos++, TRUE, &dmi);
+    }
+  }
+  if (mergeMenu) {
+    MENUITEMINFO mmi = {};
+    mmi.cbSize = sizeof(mmi);
+    mmi.fMask = MIIM_TYPE | MIIM_SUBMENU;
+    mmi.fType = MFT_STRING;
+    mmi.hSubMenu = mergeMenu;
+    mmi.dwTypeData = (char*)"Merge";
+    InsertMenuItem(menu, insertPos++, TRUE, &mmi);
+  }
+
+  // --- Swap submenu (v2.5.0 menu pass): "Swap with Pane N" rows collapsed
+  // under one entry; grayed when this is the only pane.
+  HMENU swapMenu = CreatePopupMenu();
+  int swapPos = 0;
+  if (swapMenu)
+  {
+    int leafCountSw = tree.GetLeafCount();
+    if (leafCountSw > 1) {
+      for (int li = 0; li < leafCountSw; li++) {
+        int otherPaneId = tree.GetPaneId(tree.GetLeafList()[li]);
+        if (otherPaneId == paneId) continue;
+        const TabEntry* at = winMgr.GetActiveTabEntry(otherPaneId);
+        char label[96];
+        if (at && at->name[0]) {
+          snprintf(label, sizeof(label), "Pane %d (%.48s)", li + 1, at->name);
+        } else {
+          snprintf(label, sizeof(label), "Pane %d (empty)", li + 1);
+        }
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_ID | MIIM_TYPE;
+        mi.fType = MFT_STRING;
+        mi.wID = MenuIds::SWAP_PANE_BASE + otherPaneId;
+        mi.dwTypeData = label;
+        InsertMenuItem(swapMenu, swapPos++, TRUE, &mi);
+      }
+    }
+  }
+  if (swapMenu) {
+    MENUITEMINFO smi = {};
+    smi.cbSize = sizeof(smi);
+    smi.fMask = MIIM_TYPE | MIIM_SUBMENU | MIIM_STATE;
+    smi.fType = MFT_STRING;
+    smi.hSubMenu = swapMenu;
+    smi.dwTypeData = (char*)"Swap with Pane";
+    smi.fState = (swapPos > 0) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &smi);
+  }
+
+  // Fit Pane to Window (v2.4.0, owner smoke feedback) — snap the adjacent
+  // splitters to the active captured window's natural size (kills the FX
+  // host's white filler around fixed-size plugin UIs).
+  {
+    const TabEntry* at = winMgr.GetActiveTabEntry(paneId);
+    bool fittable = (at && at->captured && !soloActive);
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::FIT_PANE;
+    mi.dwTypeData = (char*)"Fit Pane to Window";
+    mi.fState = fittable ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Solo Pane (maximize/restore)
+  {
+    const PaneState* ps = winMgr.GetPaneState(paneId);
+    bool hasTabs = (ps && ps->tabCount > 0);
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::SOLO;
+    mi.dwTypeData = soloActive ? (char*)"Exit Solo" : (char*)"Solo Pane";
+    mi.fState = (hasTabs || soloActive) ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // Release Window — detaches the active tab's captured window back to REAPER as
+  // a free-floating VISIBLE window (v2.0.6). Shown only for types that can
+  // safely float (CanReturnVisible: known/toggle, FX, toolbar — not ReaImGui).
+  {
+    const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
+    if (winMgr.CanReturnVisible(activeTab)) {
+      MENUITEMINFO mi = {};
+      mi.cbSize = sizeof(mi);
+      mi.fMask = MIIM_ID | MIIM_TYPE;
+      mi.fType = MFT_STRING;
+      mi.wID = MenuIds::RELEASE;
+      mi.dwTypeData = (char*)"Release Window";
+      InsertMenuItem(menu, insertPos++, TRUE, &mi);
+    }
+  }
+
+  // Delete Pane (release all tabs + merge)
+  {
+    int nodeIdx = tree.NodeForPane(paneId);
+    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
+
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::DELETE_PANE;
+    // F9 — now that Merge keeps windows, the label must state what Delete
+    // does differently.
+    mi.dwTypeData = (char*)"Delete Pane (releases windows)";
+    mi.fState = canMerge ? 0 : MFS_GRAYED;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // --- Separator ---
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_TYPE;
+    mi.fType = MFT_SEPARATOR;
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
+
+  // ======================= Layout and workspaces =======================
+  // v2.5.0 (LorenzoB #90) — layout edit mode: windows hidden, panes as
+  // cards (drag = swap, right-click = this menu). Toggle label.
+  {
+    MENUITEMINFO mi = {};
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIIM_ID | MIIM_TYPE;
+    mi.fType = MFT_STRING;
+    mi.wID = MenuIds::LAYOUT_EDIT;
+    mi.dwTypeData = layoutEdit ? (char*)"Finish Layout Edit"
+                               : (char*)"Edit Layout (hide windows, arrange panes)";
+    InsertMenuItem(menu, insertPos++, TRUE, &mi);
+  }
 
   // --- Layout submenu ---
   HMENU layoutMenu = CreatePopupMenu();
@@ -447,65 +845,6 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &wsMi);
   }
 
-  // --- Favorites submenu ---
-  {
-    HMENU favMenu = CreatePopupMenu();
-    if (favMenu) {
-      int favPos = 0;
-      int favCount = favMgr.GetCount();
-
-      for (int i = 0; i < favCount; i++) {
-        const FavoriteEntry& fav = favMgr.Get(i);
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::FAV_BASE + i;
-        mi.dwTypeData = (char*)fav.name;
-        InsertMenuItem(favMenu, favPos++, TRUE, &mi);
-      }
-
-      // Delete submenu
-      if (favCount > 0) {
-        MENUITEMINFO sep = {};
-        sep.cbSize = sizeof(sep);
-        sep.fMask = MIIM_TYPE;
-        sep.fType = MFT_SEPARATOR;
-        InsertMenuItem(favMenu, favPos++, TRUE, &sep);
-
-        HMENU favDelMenu = CreatePopupMenu();
-        if (favDelMenu) {
-          for (int i = 0; i < favCount; i++) {
-            const FavoriteEntry& fav = favMgr.Get(i);
-            MENUITEMINFO mi = {};
-            mi.cbSize = sizeof(mi);
-            mi.fMask = MIIM_ID | MIIM_TYPE;
-            mi.fType = MFT_STRING;
-            mi.wID = MenuIds::FAV_DELETE_BASE + i;
-            mi.dwTypeData = (char*)fav.name;
-            InsertMenuItem(favDelMenu, i, TRUE, &mi);
-          }
-
-          MENUITEMINFO delMi = {};
-          delMi.cbSize = sizeof(delMi);
-          delMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-          delMi.fType = MFT_STRING;
-          delMi.hSubMenu = favDelMenu;
-          delMi.dwTypeData = (char*)"Delete";
-          InsertMenuItem(favMenu, favPos++, TRUE, &delMi);
-        }
-      }
-
-      MENUITEMINFO favMi = {};
-      favMi.cbSize = sizeof(favMi);
-      favMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-      favMi.fType = MFT_STRING;
-      favMi.hSubMenu = favMenu;
-      favMi.dwTypeData = (char*)"Favorites";
-      InsertMenuItem(menu, insertPos++, TRUE, &favMi);
-    }
-  }
-
   // --- Separator ---
   {
     MENUITEMINFO mi = {};
@@ -515,263 +854,7 @@ HMENU BuildPaneContextMenu(int paneId,
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
   }
 
-  // --- Capture window submenu (Q2 — 2026-05-22 UX revisit).
-  // Sprint 2 (ADR-020) had flattened these 15 known windows into the
-  // top-level menu — 1 click but long menu. Returned to a submenu so the
-  // pane menu's primary surface stays under ~7 verbs; capture-everything
-  // now lives under one consistent "Capture …" submenu group together
-  // with Open Windows and Capture by Click below.
-  {
-    HMENU captureMenu = CreatePopupMenu();
-    if (captureMenu) {
-      for (int i = 0; i < NUM_KNOWN_WINDOWS; i++) {
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::KNOWN_BASE + i;
-        mi.dwTypeData = (char*)KNOWN_WINDOWS[i].name;
-        InsertMenuItem(captureMenu, i, TRUE, &mi);
-      }
-      MENUITEMINFO submi = {};
-      submi.cbSize = sizeof(submi);
-      submi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-      submi.fType = MFT_STRING;
-      submi.hSubMenu = captureMenu;
-      submi.dwTypeData = (char*)"Capture window";
-      InsertMenuItem(menu, insertPos++, TRUE, &submi);
-    }
-  }
-
-  // --- Open Windows submenu (kept alongside Capture window for grouping) ---
-  HMENU openWinMenu = CreatePopupMenu();
-  if (openWinMenu) {
-    BuildOpenWindowsSubmenu(openWinMenu, MenuIds::OPEN_WINDOWS_BASE, containerHwnd, winMgr);
-
-    MENUITEMINFO owMi = {};
-    owMi.cbSize = sizeof(owMi);
-    owMi.fMask = MIIM_SUBMENU | MIIM_TYPE;
-    owMi.fType = MFT_STRING;
-    owMi.hSubMenu = openWinMenu;
-    owMi.dwTypeData = (char*)"Open windows";
-    InsertMenuItem(menu, insertPos++, TRUE, &owMi);
-  }
-
-  // --- Capture by Click ---
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::CAPTURE_BY_CLICK;
-    mi.dwTypeData = (char*)"Capture by click";
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // --- Capture track FX chain (U14, ADR-070) ---
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::CAPTURE_FX_CHAIN;
-    mi.dwTypeData = (char*)"Capture track FX chain";
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // --- Follow FX slot (F11, ADR-078) — per-pane slot assignment; the Logic
-  // plugin-window Multi-Link idiom generalized to panes. Shown only while
-  // the follow engine pref is ON (Settings is the discoverability point).
-  {
-    const char* fpref = g_GetExtState ? g_GetExtState(EXT_SECTION, "follow_track_fx")
-                                      : nullptr;
-    if (fpref && fpref[0] == '1' && fpref[1] == '\0') {
-      HMENU slotMenu = CreatePopupMenu();
-      const int cur = winMgr.GetFollowSlot(paneId);
-      int sPos = 0;
-      {
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::FOLLOW_SLOT_OFF;
-        mi.dwTypeData = (char*)"Off";
-        mi.fState = (cur < 0) ? MFS_CHECKED : 0;
-        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
-      }
-      char slotLabels[MAX_TABS_PER_PANE][16];
-      for (int s = 0; s < MAX_TABS_PER_PANE; s++) {
-        snprintf(slotLabels[s], sizeof(slotLabels[s]), "Slot %d", s + 1);
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::FOLLOW_SLOT_BASE + s;
-        mi.dwTypeData = slotLabels[s];
-        mi.fState = (cur == s) ? MFS_CHECKED : 0;
-        InsertMenuItem(slotMenu, sPos++, TRUE, &mi);
-      }
-      MENUITEMINFO sub = {};
-      sub.cbSize = sizeof(sub);
-      sub.fMask = MIIM_SUBMENU | MIIM_TYPE;
-      sub.fType = MFT_STRING;
-      sub.hSubMenu = slotMenu;
-      sub.dwTypeData = (char*)"Follow FX slot";
-      InsertMenuItem(menu, insertPos++, TRUE, &sub);
-    }
-  }
-
-  // --- Separator + Split/Merge ---
-  {
-    MENUITEMINFO sep = {};
-    sep.cbSize = sizeof(sep);
-    sep.fMask = MIIM_TYPE;
-    sep.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &sep);
-  }
-
-  // Split Horizontal
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::SPLIT_H;
-    mi.dwTypeData = (char*)"Split Top / Bottom";
-    mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // Split Vertical
-  {
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::SPLIT_V;
-    mi.dwTypeData = (char*)"Split Left / Right";
-    mi.fState = (tree.GetLeafCount() < MAX_LEAVES) ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // F9 (v2.4.0) — Swap with Pane N: whole-pane content swap; the only
-  // layout op that works when BOTH panes are full (Move is tab-granular).
-  {
-    int leafCountSw = tree.GetLeafCount();
-    if (leafCountSw > 1) {
-      for (int li = 0; li < leafCountSw; li++) {
-        int otherPaneId = tree.GetPaneId(tree.GetLeafList()[li]);
-        if (otherPaneId == paneId) continue;
-        const TabEntry* at = winMgr.GetActiveTabEntry(otherPaneId);
-        char label[96];
-        if (at && at->name[0]) {
-          snprintf(label, sizeof(label), "Swap with Pane %d (%.48s)", li + 1, at->name);
-        } else {
-          snprintf(label, sizeof(label), "Swap with Pane %d (empty)", li + 1);
-        }
-        MENUITEMINFO mi = {};
-        mi.cbSize = sizeof(mi);
-        mi.fMask = MIIM_ID | MIIM_TYPE;
-        mi.fType = MFT_STRING;
-        mi.wID = MenuIds::SWAP_PANE_BASE + otherPaneId;
-        mi.dwTypeData = label;
-        InsertMenuItem(menu, insertPos++, TRUE, &mi);
-      }
-    }
-  }
-
-  // Merge into Sibling — F9 (v2.4.0): occupied panes RELOCATE their tabs
-  // into the nearest sibling leaf (all-or-nothing). The old isEmpty gate
-  // ("grayed with no reason") was the "had to delete and rebuild" dead end.
-  {
-    int nodeIdx = tree.NodeForPane(paneId);
-    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
-    const PaneState* ps = winMgr.GetPaneState(paneId);
-    // Count non-transient tabs only — follow-mode transients are released,
-    // not relocated, so they must not gray the merge spuriously.
-    int srcCount = 0;
-    if (ps) {
-      for (int t = 0; t < ps->tabCount; t++)
-        if (!ps->tabs[t].transient) srcCount++;
-    }
-    bool fits = false;
-    if (canMerge) {
-      const int destPane = tree.MergeDestinationPane(nodeIdx);
-      if (destPane >= 0) {
-        fits = (srcCount + winMgr.GetTabCount(destPane) <= MAX_TABS_PER_PANE);
-      }
-    }
-
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::MERGE;
-    mi.dwTypeData = (canMerge && !fits)
-        ? (char*)"Merge into Sibling (no room in sibling)"
-        : (char*)"Merge into Sibling";
-    mi.fState = (canMerge && fits) ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // Delete Pane (release all tabs + merge)
-  {
-    int nodeIdx = tree.NodeForPane(paneId);
-    bool canMerge = (nodeIdx >= 0 && tree.CanMerge(nodeIdx));
-
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::DELETE_PANE;
-    // F9 — now that Merge keeps windows, the label must state what Delete
-    // does differently.
-    mi.dwTypeData = (char*)"Delete Pane (releases windows)";
-    mi.fState = canMerge ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // Solo Pane (maximize/restore)
-  {
-    const PaneState* ps = winMgr.GetPaneState(paneId);
-    bool hasTabs = (ps && ps->tabCount > 0);
-
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::SOLO;
-    mi.dwTypeData = soloActive ? (char*)"Exit Solo" : (char*)"Solo Pane";
-    mi.fState = (hasTabs || soloActive) ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // Fit Pane to Window (v2.4.0, owner smoke feedback) — snap the adjacent
-  // splitters to the active captured window's natural size (kills the FX
-  // host's white filler around fixed-size plugin UIs).
-  {
-    const TabEntry* at = winMgr.GetActiveTabEntry(paneId);
-    bool fittable = (at && at->captured && !soloActive);
-
-    MENUITEMINFO mi = {};
-    mi.cbSize = sizeof(mi);
-    mi.fMask = MIIM_ID | MIIM_TYPE | MIIM_STATE;
-    mi.fType = MFT_STRING;
-    mi.wID = MenuIds::FIT_PANE;
-    mi.dwTypeData = (char*)"Fit Pane to Window";
-    mi.fState = fittable ? 0 : MFS_GRAYED;
-    InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // --- Separator before pane-state group (Settings / Detach / AlwaysOnTop) ---
-  {
-    MENUITEMINFO sep = {};
-    sep.cbSize = sizeof(sep);
-    sep.fMask = MIIM_TYPE;
-    sep.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &sep);
-  }
-
+  // ======================= MaxPane =======================
   // --- Settings... (ADR-019) ---
   {
     MENUITEMINFO mi = {};
@@ -805,35 +888,6 @@ HMENU BuildPaneContextMenu(int paneId,
     mi.dwTypeData = (char*)"Always on top";
     mi.fState = floatAlwaysOnTop ? MFS_CHECKED : 0;
     InsertMenuItem(menu, insertPos++, TRUE, &mi);
-  }
-
-  // --- Destructive group on the bottom (Q4 — 2026-05-22 UX revisit):
-  // "Release Window" was previously labelled "Close" which read ambiguously
-  // in a pane menu ('close what — the tab? the pane? MaxPane?'). Renamed
-  // and grouped with Close MaxPane so destructive actions cluster together
-  // at the end, matching premium-OSS menu order (VS Code, JetBrains, Logic).
-  {
-    MENUITEMINFO sep = {};
-    sep.cbSize = sizeof(sep);
-    sep.fMask = MIIM_TYPE;
-    sep.fType = MFT_SEPARATOR;
-    InsertMenuItem(menu, insertPos++, TRUE, &sep);
-  }
-
-  // Release Window — detaches the active tab's captured window back to REAPER as
-  // a free-floating VISIBLE window (v2.0.6). Shown only for types that can
-  // safely float (CanReturnVisible: known/toggle, FX, toolbar — not ReaImGui).
-  {
-    const TabEntry* activeTab = winMgr.GetActiveTabEntry(paneId);
-    if (winMgr.CanReturnVisible(activeTab)) {
-      MENUITEMINFO mi = {};
-      mi.cbSize = sizeof(mi);
-      mi.fMask = MIIM_ID | MIIM_TYPE;
-      mi.fType = MFT_STRING;
-      mi.wID = MenuIds::RELEASE;
-      mi.dwTypeData = (char*)"Release Window";
-      InsertMenuItem(menu, insertPos++, TRUE, &mi);
-    }
   }
 
   // --- Close MaxPane ---

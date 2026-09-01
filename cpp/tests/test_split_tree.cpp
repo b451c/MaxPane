@@ -161,3 +161,102 @@ TEST_CASE("SplitTree::LoadSnapshot rejects corrupted node count", "[split_tree][
   t.Recalculate(TEST_W, TEST_H);
   REQUIRE(t.GetLeafCount() == 1);
 }
+
+// v2.5.0 — directional neighbors (Merge Left/Right/Up/Down, LorenzoB #90).
+// Geometry-based: adjacency across one splitter, overlap on the other axis,
+// largest candidate wins when a neighbor is itself split.
+TEST_CASE("SplitTree::NeighborPane finds adjacent panes by direction", "[split_tree][neighbor]")
+{
+  SplitTree t;
+  // [left] | [right-top / right-bottom]
+  t.BuildPreset(PRESET_LEFT_RIGHT2V);
+  t.Recalculate(TEST_W, TEST_H);
+  REQUIRE(t.GetLeafCount() == 3);
+
+  // Identify panes by geometry, not by allocation order.
+  int left = -1, rightTop = -1, rightBottom = -1;
+  for (int i = 0; i < t.GetLeafCount(); i++) {
+    const int p = t.GetPaneId(t.GetLeafList()[i]);
+    const RECT& r = t.GetPaneRect(p);
+    if (r.left == 0) left = p;
+    else if (r.top == 0) rightTop = p;
+    else rightBottom = p;
+  }
+  REQUIRE(left >= 0); REQUIRE(rightTop >= 0); REQUIRE(rightBottom >= 0);
+
+  // Right of the tall left pane: two candidates touch — the LARGER wins.
+  // Both right panes split 50/50, so make the top one bigger via a drag.
+  const int rightBranch = t.GetNode(t.NodeForPane(rightTop)).parent;
+  t.StartDrag(rightBranch);
+  t.Drag(600, 400, TEST_W, TEST_H);  // move the horizontal splitter down
+  t.EndDrag();
+  t.Recalculate(TEST_W, TEST_H);
+  CHECK(t.NeighborPane(left, SplitTree::DIR_RIGHT) == rightTop);
+  CHECK(t.NeighborPane(left, SplitTree::DIR_LEFT) == -1);
+  CHECK(t.NeighborPane(left, SplitTree::DIR_UP) == -1);
+  CHECK(t.NeighborPane(left, SplitTree::DIR_DOWN) == -1);
+
+  // The two right panes see each other vertically and the left pane to the west.
+  CHECK(t.NeighborPane(rightTop, SplitTree::DIR_DOWN) == rightBottom);
+  CHECK(t.NeighborPane(rightBottom, SplitTree::DIR_UP) == rightTop);
+  CHECK(t.NeighborPane(rightTop, SplitTree::DIR_LEFT) == left);
+  CHECK(t.NeighborPane(rightBottom, SplitTree::DIR_LEFT) == left);
+  CHECK(t.NeighborPane(rightTop, SplitTree::DIR_RIGHT) == -1);
+  CHECK(t.NeighborPane(rightTop, SplitTree::DIR_UP) == -1);
+
+  // Bad input never crashes.
+  CHECK(t.NeighborPane(-1, SplitTree::DIR_LEFT) == -1);
+  CHECK(t.NeighborPane(left, 7) == -1);
+  CHECK(t.NeighborPane(MAX_PANES - 1, SplitTree::DIR_LEFT) == -1);  // unused id
+}
+
+// v2.5.0 — the neighbor is GEOMETRIC, not the tree sibling: two columns each
+// split horizontally with different ratios. From the top-left pane, "right"
+// must pick the LARGER of the two right-column leaves, which live in the
+// other subtree entirely. Also: a merged-away id reports no neighbors.
+TEST_CASE("SplitTree::NeighborPane crosses subtree boundaries (largest wins)", "[split_tree][neighbor]")
+{
+  SplitTree t;
+  t.Reset();
+  t.Recalculate(TEST_W, TEST_H);
+  const int root = t.GetRootIndex();
+  const int rightCol = t.SplitLeaf(root, SPLIT_VERTICAL, 0.5f);   // childA = left col
+  REQUIRE(rightCol >= 0);
+  t.Recalculate(TEST_W, TEST_H);
+  // Left column: split 50/50. Right column: 30/70 (bottom leaf is the big one).
+  const int leftCol = t.GetNode(t.GetRootIndex()).childA;
+  const int leftBottom = t.SplitLeaf(leftCol, SPLIT_HORIZONTAL, 0.5f);
+  const int rightBottom = t.SplitLeaf(rightCol, SPLIT_HORIZONTAL, 0.3f);
+  REQUIRE(leftBottom >= 0); REQUIRE(rightBottom >= 0);
+  t.Recalculate(TEST_W, TEST_H);
+  REQUIRE(t.GetLeafCount() == 4);
+
+  int tl = -1, bl = -1, tr = -1, br = -1;
+  for (int i = 0; i < t.GetLeafCount(); i++) {
+    const int p = t.GetPaneId(t.GetLeafList()[i]);
+    const RECT& r = t.GetPaneRect(p);
+    const bool isLeft = (r.left == 0), isTop = (r.top == 0);
+    if (isLeft && isTop) tl = p; else if (isLeft) bl = p; else if (isTop) tr = p; else br = p;
+  }
+  REQUIRE(tl >= 0); REQUIRE(bl >= 0); REQUIRE(tr >= 0); REQUIRE(br >= 0);
+
+  // Top-left (0..50%) touches BOTH right leaves (0..30% and 30..100%): the
+  // bottom-right one is larger → it wins, although it is not tl's sibling.
+  CHECK(t.NeighborPane(tl, SplitTree::DIR_RIGHT) == br);
+  // Bottom-left (50..100%) touches only the bottom-right leaf.
+  CHECK(t.NeighborPane(bl, SplitTree::DIR_RIGHT) == br);
+  // Top-right (0..30%) touches only the top-left leaf on its left.
+  CHECK(t.NeighborPane(tr, SplitTree::DIR_LEFT) == tl);
+  // Bottom-right (30..100%) touches both left leaves; the two are equal in
+  // area → whichever is first is fine, but it must be one of them.
+  const int nb = t.NeighborPane(br, SplitTree::DIR_LEFT);
+  CHECK((nb == tl || nb == bl));
+
+  // Merge the top-left leaf away: its id has no neighbors any more, and the
+  // survivor (bottom-left, now the whole left column) sees both right leaves.
+  REQUIRE(t.MergeNode(t.NodeForPane(tl)));
+  t.Recalculate(TEST_W, TEST_H);
+  CHECK(t.NeighborPane(tl, SplitTree::DIR_RIGHT) == -1);
+  CHECK(t.NeighborPane(bl, SplitTree::DIR_RIGHT) == br);
+  CHECK(t.NeighborPane(tr, SplitTree::DIR_LEFT) == bl);
+}

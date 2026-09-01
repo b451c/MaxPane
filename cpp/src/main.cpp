@@ -16,6 +16,10 @@
 #define REAPERAPI_WANT_plugin_register
 #define REAPERAPI_WANT_GetMainHwnd
 #define REAPERAPI_WANT_GetUserInputs
+// v2.5.0 — pane background "Custom..." picker (Settings, quar_edm #91).
+#define REAPERAPI_WANT_GR_SelectColor
+#define REAPERAPI_WANT_ColorFromNative
+#define REAPERAPI_WANT_ColorToNative
 #define REAPERAPI_WANT_GetToggleCommandState
 #define REAPERAPI_WANT_NamedCommandLookup
 #define REAPERAPI_WANT_ReverseNamedCommandLookup
@@ -93,6 +97,9 @@ static int g_cmdQuickSwitcher = 0;
 static int g_cmdReopenTab = 0;       // C1 (ADR-027)
 static int g_cmdWsPickup  = 0;       // C4 (ADR-027)
 static int g_cmdToggleAOT = 0;       // U15 (ADR-069) — bindable always-on-top
+static int g_cmdOpenSettings = 0;    // v2.5.0 — quar_edm #91
+static int g_cmdLayoutEdit = 0;      // v2.5.0 — layout edit mode (LorenzoB #90)
+static int g_cmdMergeDir[4] = {0};   // v2.5.0 — merge focused pane L/R/U/D
 static int g_cmdNextPane = 0;
 static int g_cmdPrevPane = 0;
 static int g_cmdSoloToggle = 0;
@@ -215,6 +222,19 @@ MaxPaneContainer* GetContainer() { return InstanceManager::Get().GetExisting(0);
 // created on next main-loop tick (safe context for UI). Project RPP state
 // always takes priority — if a project defines a MaxPane layout, load it
 // regardless of was_visible.
+// v2.5.0 (ADR-092, Win-VM verification B) — a project saved by v2.x carries
+// its MaxPane state TWICE: the <MAXPANE_STATE> RPP chunk (consumed here) and
+// ProjExtState (consumed by projStateOpenTimer's F-39 poll). Both fired on
+// every startup: the chunk restored the layout at ~2 s, then the poll found
+// ProjExtState at ~2.7 s and ReloadProjectState'd the OPEN container — every
+// live capture released and re-captured (double restore work), and a live
+// ReaImGui script tab got its action re-fired pre-detach → REAPER's modal
+// "ReaScript task control" on every launch once ADR-091 made script
+// captures land before the second pass. Remember which instances the chunk
+// path already restored inside the current load window; the poll then
+// treats them as done instead of reloading.
+static bool g_rppConsumedThisLoad[MaxPaneContainer::MAX_INSTANCES] = {};
+
 static void rppReadyTimerFunc()
 {
   g_plugin_register("-timer", (void*)(void(*)())rppReadyTimerFunc);
@@ -224,6 +244,7 @@ static void rppReadyTimerFunc()
     DBG("[MaxPane] rppReadyTimer: inst %d has RPP state (%d lines), ensuring container\n",
         i, g_pendingProjectState[i].lineCount);
     MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
+    if (c) g_rppConsumedThisLoad[i] = true;  // ADR-092
     if (c && !c->IsAlive()) {
       c->Create();  // Create() → LoadState() consumes this instance's pending RPP data
     } else if (c) {
@@ -297,7 +318,13 @@ static void projStateOpenTimerFunc()
       }
 
       MaxPaneContainer* c = InstanceManager::Get().GetOrCreate(i);
-      if (c && !c->IsAlive()) {  // A3 — a docker-X zombie counts as closed
+      if (c && c->IsAlive() && g_rppConsumedThisLoad[i]) {
+        // ADR-092 — the RPP chunk path already restored THIS load's state
+        // into the open container; the ProjExtState copy is the same data.
+        DBG("[MaxPane] projStateOpenTimer: inst %d already restored from the RPP chunk this load — not reloading\n", i);
+        g_rppConsumedThisLoad[i] = false;
+        anyOpened = true;
+      } else if (c && !c->IsAlive()) {  // A3 — a docker-X zombie counts as closed
         DBG("[MaxPane] projStateOpenTimer: inst %d has ProjExtState, force-opening\n", i);
         c->Create();  // Create() → LoadState() restores the captured windows
         anyOpened = true;
@@ -319,6 +346,7 @@ static void projStateOpenTimerFunc()
     g_plugin_register("-timer", (void*)(void(*)())projStateOpenTimerFunc);
     g_projOpenPollCounter = 0;
     g_projOpenTimerActive = false;
+    for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) g_rppConsumedThisLoad[i] = false;
   }
 }
 
@@ -331,6 +359,10 @@ void OnProjectLoadMaybeOpen()
   g_projOpenPollCounter = 0;
   if (!g_projOpenTimerActive) {
     g_projOpenTimerActive = true;
+    // ADR-092 — a NEW load window starts: forget what the previous load's
+    // chunk path restored (REAPER's repeated begin-load callbacks within
+    // one load keep the timer active and therefore keep the flags).
+    for (int i = 0; i < MaxPaneContainer::MAX_INSTANCES; i++) g_rppConsumedThisLoad[i] = false;
     g_plugin_register("timer", (void*)(void(*)())projStateOpenTimerFunc);
   }
 }
@@ -578,6 +610,32 @@ static bool hookCommandProc(int command, int /*flag*/)
     return true;
   }
 
+  // v2.5.0 — Settings / layout edit / directional merge act on the focused
+  // instance (inst 0 created if none is live — same routing as the slots).
+  if (g_cmdOpenSettings && command == g_cmdOpenSettings) {
+    MaxPaneContainer* c = ResolveSlotTargetInstance();
+    if (!c) return false;
+    c->UnmuteProjectPersist();  // F7 — hotkey = user action
+    c->OpenSettings();
+    return true;
+  }
+  if (g_cmdLayoutEdit && command == g_cmdLayoutEdit) {
+    MaxPaneContainer* c = ResolveSlotTargetInstance();
+    if (!c) return false;
+    c->UnmuteProjectPersist();
+    c->ToggleLayoutEditMode();
+    return true;
+  }
+  for (int d = 0; d < 4; d++) {
+    if (g_cmdMergeDir[d] && command == g_cmdMergeDir[d]) {
+      MaxPaneContainer* c = ResolveSlotTargetInstance();
+      if (!c) return false;
+      c->UnmuteProjectPersist();
+      c->MergeFocusedPaneToward(d);
+      return true;
+    }
+  }
+
   // F6 — workspace slot. Slot N (1-indexed in name) = workspace at index N-1.
   // Routes to focused instance; opens inst 0 if no instance is live.
   {
@@ -792,7 +850,16 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   g_Main_OnCommand = Main_OnCommand;
   g_GetExtState = GetExtState;
   g_SetExtState = SetExtState;
+  // v2.5.0 — runtime debug log (Settings → "Write debug log"). Read as early
+  // as ExtState is reachable so a Release build logs its own startup.
+  {
+    const char* dl = g_GetExtState(EXT_SECTION, "debug_log");
+    if (dl && dl[0] == '1' && dl[1] == '\0') g_dbgEnabled = true;
+  }
   g_GetUserInputs = GetUserInputs;
+  g_GR_SelectColor = GR_SelectColor;
+  g_ColorFromNative = ColorFromNative;
+  g_ColorToNative = ColorToNative;
   g_GetToggleCommandState = GetToggleCommandState;
   g_NamedCommandLookup = NamedCommandLookup;
   g_ReverseNamedCommandLookup = ReverseNamedCommandLookup;
@@ -857,6 +924,14 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
   // context-menu item shown while floating; a bindable, searchable action
   // fixes the discoverability gap.
   g_cmdToggleAOT     = rec->Register("command_id", (void*)"MaxPane_ToggleAlwaysOnTop");
+  // v2.5.0 — forum asks: Settings reachable with every bar hidden
+  // (quar_edm #91), layout edit mode + directional merge (LorenzoB #90).
+  g_cmdOpenSettings  = rec->Register("command_id", (void*)"MaxPane_OpenSettings");
+  g_cmdLayoutEdit    = rec->Register("command_id", (void*)"MaxPane_ToggleLayoutEdit");
+  g_cmdMergeDir[0]   = rec->Register("command_id", (void*)"MaxPane_MergePaneLeft");
+  g_cmdMergeDir[1]   = rec->Register("command_id", (void*)"MaxPane_MergePaneRight");
+  g_cmdMergeDir[2]   = rec->Register("command_id", (void*)"MaxPane_MergePaneUp");
+  g_cmdMergeDir[3]   = rec->Register("command_id", (void*)"MaxPane_MergePaneDown");
 
   static gaccel_register_t accelNextTab = {{0, 0, 0}, "MaxPane: Next Tab"};
   accelNextTab.accel.cmd = static_cast<unsigned short>(g_cmdNextTab);
@@ -882,6 +957,25 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
       {{0, 0, 0}, "MaxPane: Toggle always-on-top (floating mode)"};
   accelAOT.accel.cmd = static_cast<unsigned short>(g_cmdToggleAOT);
   rec->Register("gaccel", &accelAOT);
+
+  // v2.5.0 — no default keys; all bindable via REAPER's Actions list.
+  static gaccel_register_t accelSettings = {{0, 0, 0}, "MaxPane: Open Settings"};
+  accelSettings.accel.cmd = static_cast<unsigned short>(g_cmdOpenSettings);
+  rec->Register("gaccel", &accelSettings);
+  static gaccel_register_t accelLayoutEdit =
+      {{0, 0, 0}, "MaxPane: Toggle layout edit mode (hide windows, arrange panes)"};
+  accelLayoutEdit.accel.cmd = static_cast<unsigned short>(g_cmdLayoutEdit);
+  rec->Register("gaccel", &accelLayoutEdit);
+  static gaccel_register_t accelMergeDir[4] = {
+    {{0, 0, 0}, "MaxPane: Merge focused pane into left neighbor"},
+    {{0, 0, 0}, "MaxPane: Merge focused pane into right neighbor"},
+    {{0, 0, 0}, "MaxPane: Merge focused pane into upper neighbor"},
+    {{0, 0, 0}, "MaxPane: Merge focused pane into lower neighbor"},
+  };
+  for (int d = 0; d < 4; d++) {
+    accelMergeDir[d].accel.cmd = static_cast<unsigned short>(g_cmdMergeDir[d]);
+    rec->Register("gaccel", &accelMergeDir[d]);
+  }
 
   // F4 — no default accel; user binds Cmd+P (macOS) / Ctrl+P (Win/Linux)
   // themselves via REAPER's Actions list (no per-platform translation).
@@ -923,13 +1017,37 @@ REAPER_PLUGIN_DLL_EXPORT int ReaperPluginEntry(
     [](MSG* msg, accelerator_register_t*) -> int {
       if (!msg) return 0;
       if (msg->message != WM_KEYDOWN && msg->message != WM_SYSKEYDOWN) return 0;
+      // v2.5.0 (quar_edm #91 "Enter never works in the captured ReaImGui",
+      // Win-VM code audit, ADR-090): -666 for EVERY captured descendant
+      // handed each plain keystroke typed into a paneled script's text field
+      // to REAPER's main accel table first — Enter / letters / Space bound
+      // there were eaten before the script saw them (a floating ReaImGui
+      // never had the problem: it consumes keys first, forwards the rest
+      // itself). Now: a captured ReaImGui / Lua-gfx SCRIPT window gets plain
+      // keys (a Ctrl/Cmd/Alt/Win chord still routes to REAPER — MaxPane
+      // bindings are chords); everything else — the container's own chrome
+      // and captured NATIVE REAPER windows (Mixer, Media Explorer, FX…),
+      // which REAPER's translation skips once they live under a plugin
+      // dialog — keeps -666 (correctness audit #3: Space/Delete/arrows in a
+      // captured Mixer must keep working).
+      const bool chord =
+          (GetAsyncKeyState(VK_CONTROL) & 0x8000) ||
+          (GetAsyncKeyState(VK_MENU) & 0x8000) ||
+          (GetAsyncKeyState(VK_LWIN) & 0x8000) ||
+          (GetAsyncKeyState(VK_RWIN) & 0x8000);
       HWND walk = msg->hwnd;
+      bool first = true;
       while (walk) {
-        bool isOurs = false;
+        MaxPaneContainer* owner = nullptr;
         InstanceManager::Get().ForEach([&](int /*id*/, MaxPaneContainer& c) {
-          if (c.GetHwnd() == walk) isOurs = true;
+          if (c.GetHwnd() == walk) owner = &c;
         });
-        if (isOurs) return -666;
+        if (owner) {
+          if (first || chord) return -666;
+          const TabEntry* tab = owner->GetWinMgr().FindTabContaining(msg->hwnd);
+          return (tab && tab->isReaImGui) ? 0 : -666;
+        }
+        first = false;
         walk = GetParent(walk);
       }
       return 0;

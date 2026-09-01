@@ -1,4 +1,13 @@
 #include "globals.h"
+#include "debug.h"
+
+// v2.5.0 — runtime debug-log switch (see debug.h). Debug builds: always on.
+// Release: off until the Settings pref / plugin-entry read flips it.
+#ifdef MAXPANE_DEBUG
+bool g_dbgEnabled = true;
+#else
+bool g_dbgEnabled = false;
+#endif
 
 // Global REAPER API function pointers
 void (*g_DockWindowAddEx)(HWND, const char*, const char*, bool) = nullptr;
@@ -13,6 +22,9 @@ void (*g_SetExtState)(const char*, const char*, const char*, bool) = nullptr;
 HWND g_reaperMainHwnd = nullptr;
 int (*g_plugin_register)(const char*, void*) = nullptr;
 bool (*g_GetUserInputs)(const char*, int, const char*, char*, int) = nullptr;
+int  (*g_GR_SelectColor)(HWND, int*) = nullptr;
+void (*g_ColorFromNative)(int, int*, int*, int*) = nullptr;
+int  (*g_ColorToNative)(int, int, int) = nullptr;
 int (*g_GetToggleCommandState)(int) = nullptr;
 int (*g_NamedCommandLookup)(const char*) = nullptr;
 const char* (*g_ReverseNamedCommandLookup)(int) = nullptr;

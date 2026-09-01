@@ -30,18 +30,24 @@ enum ButtonId : int {
   // view on macOS (ADR-026 lore), so a floating re-expand affordance over
   // the panes is impossible; the sliver is the only reachable click target.
   BTN_COLLAPSE       = 7,
-  BUTTON_COUNT       = 8,
+  // v2.5.0 — layout edit mode toggle (LorenzoB #90): last in the capture
+  // group. Vector-drawn grid glyph (no Phosphor asset; ids 0-6 index the
+  // icon table). Appended AFTER the collapse chevron so every pre-existing
+  // id (and the icon table indexed by them) stays put.
+  BTN_EDIT_LAYOUT    = 8,
+  BUTTON_COUNT       = 9,
   // Pseudo-button: center-aligned workspace-name label between the two
   // groups. Hit-tested so the standard tooltip delay mechanism reuses the
   // m_navTooltipBtn path to display the full name when truncated.
-  BTN_WORKSPACE_NAME = 8,
+  BTN_WORKSPACE_NAME = 9,
 };
 
 constexpr int NAV_BAR_HEIGHT           = 30;
 constexpr int NAV_BAR_COLLAPSED_HEIGHT = 10;  // chevron sliver (collapsed mode)
 constexpr int BUTTON_SIZE     = 26;    // all buttons square + identical width
 constexpr int COLLAPSE_BTN_W  = 14;    // slim chevron button (expanded mode)
-constexpr int MIN_VISIBLE_W   = 320;   // below this container width, bar hides
+constexpr int MIN_VISIBLE_W   = 348;   // below this container width, bar hides
+                                       // (v2.5.0: +28 for the layout-edit button)
 
 struct Layout {
   bool visible;
@@ -62,6 +68,7 @@ struct State {
   bool collapsed;      // bar collapsed to the chevron sliver
   bool dragModeArmed;  // true when drag-to-dock is waiting/tracking
   bool homeActive;     // true when Home overlay is showing
+  bool layoutEditActive;  // v2.5.0 — layout edit mode on (grid button lit)
   // Feature A — name of the currently-loaded workspace and dirty flag.
   // workspaceName == nullptr / "" → no label rendered, no space reserved.
   // workspaceDirty == true → trailing "•" (U+2022) appended to the label.

@@ -124,6 +124,16 @@ public:
   // bottom-most leaf. Returns -1 when the node can't merge.
   int MergeDestinationPane(int leafNodeIndex) const;
 
+  // v2.5.0 (LorenzoB #90 "merge sibling up/down/left/right") — the pane
+  // ADJACENT to paneId in a screen direction: its rect touches paneId's
+  // edge across one splitter (SPLITTER_WIDTH gap) and overlaps along the
+  // other axis. Several candidates (a split neighbor) → the LARGEST area
+  // wins, per the request. Geometry-based (uses the rects from the last
+  // Recalculate), so it works across subtrees, not just tree siblings.
+  // Returns -1 when nothing is there.
+  enum PaneDirection { DIR_LEFT = 0, DIR_RIGHT = 1, DIR_UP = 2, DIR_DOWN = 3 };
+  int NeighborPane(int paneId, int dir) const;
+
 private:
   SplitNode m_nodes[MAX_TREE_NODES];
   int m_root;

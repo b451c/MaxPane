@@ -16,6 +16,7 @@ struct PendingCapture {
   int maxRetries = 30;
   char actionCommand[128] = {};  // stable command string for re-resolve after restart
   bool actionDeferred = false;   // true = Main_OnCommand not yet called (deferred from LoadState)
+  bool dockedWaitLogged = false; // ADR-089 — "waiting for it to float" logged once
   // v2.0.4 #1 (ADR-037) — FX plugin identity. When non-empty Tick skips
   // FindReaperWindow and instead resolves via FxCapture::ResolveLocation +
   // ShowAndGetHwnd. Format: "fx@{track_guid}@{fx_guid}@<flags>" or
@@ -31,8 +32,11 @@ public:
   static const int MAX_PENDING = 32;
   static const int INITIAL_WAIT_TICKS = 10;  // 500ms at 50ms/tick
   static const int RETRY_INTERVAL = 4;       // 200ms
-  static const int MAX_RETRIES = 30;          // ~1.5s for known windows with toggle
-  static const int MAX_RETRIES_ARBITRARY = 200; // ~10s for arbitrary (user may reopen manually)
+  // Horizons are time budgets: retries × RETRY_INTERVAL (50 ms ticks) after
+  // INITIAL_WAIT_TICKS — probe cadence backs off after 10 / 30 probes
+  // (ADR-093), the budget does not change.
+  static const int MAX_RETRIES = 30;            // ~6 s for REAPER toggle windows
+  static const int MAX_RETRIES_ARBITRARY = 200; // ~40 s for scripts / arbitrary windows
 
   CaptureQueue();
 

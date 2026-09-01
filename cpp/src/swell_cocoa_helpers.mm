@@ -48,6 +48,19 @@ void ForceViewLayoutAndDisplay(HWND hwnd)
   }
 }
 
+void RequestViewDisplay(HWND hwnd)
+{
+  if (!hwnd) return;
+  NSView* view = (NSView*)hwnd;
+  if (![view isKindOfClass:[NSView class]]) return;
+  [view setNeedsLayout:YES];
+  [view setNeedsDisplay:YES];
+  for (NSView* child in [view subviews]) {
+    [child setNeedsLayout:YES];
+    [child setNeedsDisplay:YES];
+  }
+}
+
 void ForceHideWindow(HWND hwnd)
 {
   if (!hwnd) return;
@@ -135,6 +148,23 @@ void OpenUrlPlatform(const char* url)
   NSURL* u = [NSURL URLWithString:s];
   if (!u) return;
   [[NSWorkspace sharedWorkspace] openURL:u];
+}
+
+// v2.5.0 — Finder reveal with the file selected; a log that was never
+// written yet has no file to select, so fall back to the folder.
+void RevealFileInFolderPlatform(const char* path)
+{
+  if (!path || !path[0]) return;
+  NSString* p = [NSString stringWithUTF8String:path];
+  if (!p) return;
+  NSWorkspace* ws = [NSWorkspace sharedWorkspace];
+  if ([[NSFileManager defaultManager] fileExistsAtPath:p] &&
+      [ws selectFile:p inFileViewerRootedAtPath:@""]) {
+    return;
+  }
+  NSString* dir = [p stringByDeletingLastPathComponent];
+  if ([dir length] == 0) dir = @"/tmp";
+  [ws openURL:[NSURL fileURLWithPath:dir isDirectory:YES]];
 }
 
 bool IsAppModalActive()
@@ -284,6 +314,10 @@ void ShowCaptureHighlight(HWND target)
   NSRect inWin = [v convertRect:[v bounds] toView:nil];
   NSRect screenRect = [tw convertRectToScreen:inWin];
   EnsureHighlightWindow();
+  // v2.5.0 perf (ADR-093 #9): the 50 ms capture poll called this every tick
+  // — a setFrame:display:YES + orderFront round-trip per tick while the
+  // rect had not moved. Early-out when nothing changed and it is showing.
+  if ([s_highlightWin isVisible] && NSEqualRects([s_highlightWin frame], screenRect)) return;
   [s_highlightWin setFrame:screenRect display:YES];
   [s_highlightWin orderFrontRegardless];  // never becomes key (borderless)
 }
@@ -444,7 +478,7 @@ bool AttachWindowAsChildWindow(HWND containerHwnd, HWND targetHwnd)
 }
 
 void SetChildWindowFrame(HWND containerHwnd, HWND targetHwnd,
-                         int x, int y, int w, int h)
+                         int x, int y, int w, int h, bool display)
 {
   NSView* cv = (NSView*)containerHwnd;
   if (![cv isKindOfClass:[NSView class]]) return;
@@ -457,7 +491,10 @@ void SetChildWindowFrame(HWND containerHwnd, HWND targetHwnd,
   NSRect scr = [host convertRectToScreen:inWin];
   objc_setAssociatedObject(win, kMaxPaneHostFrameKey, [NSValue valueWithRect:scr],
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-  [win setFrame:scr display:YES];
+  // ADR-093 #3 — unchanged frame = nothing to do (RepositionAll re-runs on
+  // every tab click); interactive passes skip the synchronous display.
+  if (NSEqualRects([win frame], scr)) return;
+  [win setFrame:scr display:display ? YES : NO];
 }
 
 void ShowChildWindow(HWND targetHwnd, bool show)
@@ -470,8 +507,9 @@ void ShowChildWindow(HWND targetHwnd, bool show)
     if (host && ![[host childWindows] containsObject:win]) {
       [host addChildWindow:win ordered:NSWindowAbove];
     }
-    [win orderFront:nil];
+    if (![win isVisible]) [win orderFront:nil];   // ADR-093 — already up: no-op
   } else {
+    if (![win isVisible] && !(host && [[host childWindows] containsObject:win])) return;
     if (host) [host removeChildWindow:win];
     [win orderOut:nil];
   }

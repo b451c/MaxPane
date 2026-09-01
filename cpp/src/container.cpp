@@ -536,6 +536,15 @@ void MaxPaneContainer::Shutdown()
 
   DBG("[MaxPane] Shutdown: starting, hwnd=%p atexitSaved=%d\n", m_hwnd, g_atexitSaved);
 
+  // v2.5.0 (correctness audit #4) — layout edit mode is session UI state: a
+  // container closed while editing must not reopen with every restored
+  // window hidden and the grid button lit.
+  m_layoutEdit = false;
+  m_editDragPane = -1;
+  m_editDragging = false;
+  m_editHoverPane = -1;
+  m_winMgr.SetLayoutEditHide(false);
+
   // Feature B — drain any pending async workspace save synchronously before
   // the host process can exit. The async path moves the ExtState freeze off
   // the click frame; this brings it back at shutdown (where the user is
@@ -657,6 +666,7 @@ bool MaxPaneContainer::WasIntendedVisible() const
 bool MaxPaneContainer::IsInLauncherMode() const
 {
   if (m_soloActive) return false;
+  if (m_layoutEdit) return false;  // v2.5.0 — pane cards are the UI here
   // v2.0.6 — keep the launcher visible while capture-by-click is ARMED (was:
   // hidden the instant the CTA was pressed, which read as "nothing happened").
   // It now stays until a window is actually captured (tabCount > 0 below), and
@@ -779,6 +789,7 @@ void MaxPaneContainer::SplitPane(int paneId, SplitterOrientation orient)
 
 void MaxPaneContainer::MergePane(int paneId, bool releaseTabs)
 {
+  CancelLayoutEditDrag();
   // Exit solo before merge
   if (m_soloActive) ToggleSolo(m_soloPaneId);
 
@@ -810,33 +821,8 @@ void MaxPaneContainer::MergePane(int paneId, bool releaseTabs)
     // #79 "had to delete and rebuild"). Tabs NEVER enter the stale-action
     // list here — they stay live captures (the B15/B17 startup cleanup
     // must not close them next launch).
-    m_winMgr.ReleaseTransientTabs(paneId);  // follow-mode tabs re-spawn in pane 0
-
     const int destPane = m_tree.MergeDestinationPane(nodeIdx);
-    const PaneState* srcPs = m_winMgr.GetPaneState(paneId);
-    const PaneState* dstPs = m_winMgr.GetPaneState(destPane);
-    if (destPane < 0 || destPane == paneId || !srcPs || !dstPs) return;
-
-    // Execute-time re-validation — the menu-build gate can go stale: a
-    // queued capture can land while TrackPopupMenu's modal loop pumps
-    // WM_TIMER. All-or-nothing: never a partial move, never a release.
-    if (srcPs->tabCount + dstPs->tabCount > MAX_TABS_PER_PANE) {
-      ShowToast("No room in the sibling pane - move or close some tabs first.");
-      return;
-    }
-    // Bounded relocation: MoveTab reports failure instead of silently
-    // no-opping (the unbounded loop + void MoveTab was a UI-thread hang).
-    int guard = srcPs->tabCount;
-    while (guard-- > 0 && srcPs->tabCount > 0) {
-      if (!m_winMgr.MoveTab(paneId, 0, destPane)) {
-        ShowToast("Merge stopped - the sibling pane filled up mid-move.");
-        RefreshLayout();
-        SaveState();
-        MarkWorkspaceDirty();
-        return;
-      }
-    }
-    if (srcPs->tabCount > 0) return;  // defense: abort the tree merge
+    if (!RelocateAllTabs(paneId, destPane)) return;  // toasts + aborts inside
   }
 
   m_tree.MergeNode(nodeIdx);
@@ -846,6 +832,113 @@ void MaxPaneContainer::MergePane(int paneId, bool releaseTabs)
   RefreshLayout();
   SaveState();
   MarkWorkspaceDirty();  // Feature A — layout no longer matches loaded ws
+}
+
+// v2.5.0 — shared relocation core of Merge into Sibling (F9) and the
+// directional merges. Follow-mode transients are released first (they
+// re-spawn in their follow pane); everything else moves all-or-nothing.
+bool MaxPaneContainer::RelocateAllTabs(int srcPane, int dstPane)
+{
+  m_winMgr.ReleaseTransientTabs(srcPane);  // follow-mode tabs re-spawn in pane 0
+
+  const PaneState* srcPs = m_winMgr.GetPaneState(srcPane);
+  const PaneState* dstPs = m_winMgr.GetPaneState(dstPane);
+  if (dstPane < 0 || dstPane == srcPane || !srcPs || !dstPs) return false;
+
+  // Execute-time re-validation — the menu-build gate can go stale: a
+  // queued capture can land while TrackPopupMenu's modal loop pumps
+  // WM_TIMER. All-or-nothing: never a partial move, never a release.
+  if (srcPs->tabCount + dstPs->tabCount > MAX_TABS_PER_PANE) {
+    ShowToast("No room in the target pane - move or close some tabs first.");
+    return false;
+  }
+  // Bounded relocation: MoveTab reports failure instead of silently
+  // no-opping (the unbounded loop + void MoveTab was a UI-thread hang).
+  int guard = srcPs->tabCount;
+  while (guard-- > 0 && srcPs->tabCount > 0) {
+    if (!m_winMgr.MoveTab(srcPane, 0, dstPane)) {
+      ShowToast("Merge stopped - the target pane filled up mid-move.");
+      RefreshLayout();
+      SaveState();
+      MarkWorkspaceDirty();
+      return false;
+    }
+  }
+  return srcPs->tabCount == 0;  // defense: never merge the tree over live tabs
+}
+
+// v2.5.0 (LorenzoB #90) — Merge Left/Right/Up/Down. The ADJACENT pane in
+// that direction takes the tabs; the merging leaf then leaves the tree
+// (its area goes to its tree sibling, as in every merge). The neighbor is
+// geometric (SplitTree::NeighborPane), so a pane can merge across a
+// subtree boundary — the tree sibling and the visual neighbor differ
+// exactly in the layouts where "Merge into Sibling" felt arbitrary.
+void MaxPaneContainer::MergePaneToward(int paneId, int dir)
+{
+  CancelLayoutEditDrag();  // bound action may fire while a card is held
+  if (m_soloActive) ToggleSolo(m_soloPaneId);
+  const int nodeIdx = m_tree.NodeForPane(paneId);
+  if (nodeIdx < 0 || !m_tree.CanMerge(nodeIdx)) return;
+  const int dest = m_tree.NeighborPane(paneId, dir);
+  if (dest < 0) {
+    ShowToast("No pane in that direction.");
+    return;
+  }
+  if (!RelocateAllTabs(paneId, dest)) return;
+  m_tree.MergeNode(nodeIdx);
+  m_winMgr.SetFollowSlot(paneId, -1);  // F11 — freed id must not keep a slot
+  m_focusedPaneId = dest;
+  RefreshLayout();
+  SaveState();
+  MarkWorkspaceDirty();  // Feature A
+}
+
+void MaxPaneContainer::MergeFocusedPaneToward(int dir)
+{
+  if (!m_tree.IsPaneIdUsed(m_focusedPaneId)) m_focusedPaneId = 0;
+  MergePaneToward(m_focusedPaneId, dir);
+}
+
+// v2.5.0 (LorenzoB #90 "container lock mode") — layout edit mode. Windows
+// are HIDDEN rather than overlaid: on macOS captured child views always
+// paint above the container (ADR-026), so an in-container overlay can't
+// cover them, and a separate overlay NSWindow per pane would be a second
+// window-hosting system. Hiding is one flag in RepositionAll, works on all
+// three platforms, and leaves the container's own paint + mouse surface
+// as the whole editing UI. Session-only state — nothing persists.
+void MaxPaneContainer::ToggleLayoutEditMode()
+{
+  if (!m_hwnd) return;
+  if (!m_layoutEdit) {
+    if (m_soloActive) ToggleSolo(m_soloPaneId);
+    if (m_captureMode.active) ExitCaptureMode();
+    if (m_drag.mode != DragDock::IDLE) ExitDragMode();
+    if (m_homeOverlay) CloseHomeOverlay();
+    if (m_dragState.sourcePaneId >= 0) CancelTabDrag();
+    m_layoutEdit = true;
+    m_winMgr.SetLayoutEditHide(true);
+    ShowToast("Layout edit: drag a pane onto another to swap, right-click a pane "
+              "for split/merge, click the grid button again to finish.");
+    DBG("[MaxPane] LayoutEdit: ON\n");
+  } else {
+    m_layoutEdit = false;
+    m_editDragPane = -1;
+    m_editDragging = false;
+    m_editHoverPane = -1;
+    // Win-VM smoke: a ReaImGui viewport is alpha-composited over its parent
+    // on Windows, so whatever the container painted underneath stays faintly
+    // visible through the re-shown canvas. Erase + paint the PLAIN pane
+    // background synchronously BEFORE the children come back — with the
+    // hide flag still set, so neither the cards (m_layoutEdit off) nor the
+    // floor-hide hint (child hidden by edit mode, not by size) are drawn.
+    InvalidateRect(m_hwnd, nullptr, TRUE);
+    UpdateWindow(m_hwnd);
+    m_winMgr.SetLayoutEditHide(false);
+    ShowToast("Layout edit finished.");
+    DBG("[MaxPane] LayoutEdit: OFF\n");
+  }
+  RefreshLayout();  // RepositionAll hides / re-shows every captured window
+  InvalidateRect(m_hwnd, nullptr, TRUE);
 }
 
 // F12 (ADR-079, bertrand #73) — focus the active fx@/takefx@ tab's captured
@@ -893,6 +986,10 @@ void MaxPaneContainer::FitPaneToWindow(int paneId)
 void MaxPaneContainer::SwapPanes(int paneA, int paneB)
 {
   if (paneA == paneB) return;
+  // Correctness audit #2 — a pane can leave the tree while a menu is open or
+  // a layout-edit card is held (hotkey merge / Delete Pane): swapping into a
+  // freed id would orphan the other pane's tabs (hidden, no leaf, persisted).
+  if (!m_tree.IsPaneIdUsed(paneA) || !m_tree.IsPaneIdUsed(paneB)) return;
   // Exit solo first (same guard as Split/Merge; SaveState is a no-op while
   // soloed, so ordering matters).
   if (m_soloActive) ToggleSolo(m_soloPaneId);
@@ -1016,6 +1113,7 @@ void MaxPaneContainer::ToggleSolo(int paneId)
 
 void MaxPaneContainer::OnTimer()
 {
+  MaxPaneDebugLogFlush();  // ADR-093 #8 — buffered runtime log, ≤500 ms lag
   // A2 (v2.4.0) — one-shot settle refresh armed by Create(): catches a
   // docker resize that landed after Create's own RefreshLayout without a
   // real WM_SIZE reaching us (startup ordering, LorenzoB #77).
@@ -1065,6 +1163,7 @@ void MaxPaneContainer::OnTimer()
 
 void MaxPaneContainer::OnContextMenu(int x, int y)
 {
+  CancelLayoutEditDrag();  // a menu may remove the pane under the held card
   // Sprint 2.5 — right-click on a launcher workspace card opens a card menu
   // (Load / Rename / Duplicate / Delete / Bind Hotkey). Right-click on the
   // launcher background still falls through to the standard pane menu.
@@ -1114,17 +1213,58 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
     HMENU menu = BuildTabContextMenu(paneId, tabIdx, m_tree, m_winMgr, *m_favMgr);
     if (!menu) return;
 
+    // v2.5.0 (LorenzoB #90: "if a container is already full, the only way to
+    // modify it is to disable 'collapse tab bar'") — on a collapsed header
+    // (ADR-055 sliver / clean mode) the whole sliver hit-tests as tab 0, so
+    // the pane menu was reachable only through the unmarked 16 px ▼ zone.
+    // Carry the full pane menu as a "Pane" submenu of the tab menu there.
+    const bool collapsedHeader =
+        (m_winMgr.PaneHeaderHeight(paneId) < TAB_BAR_HEIGHT);
+    if (collapsedHeader) {
+      m_wsMgr->LoadList();
+      HMENU paneMenu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr,
+                                           *m_favMgr, *m_wsMgr, m_soloActive,
+                                           m_floating, m_floatAlwaysOnTop,
+                                           m_layoutEdit);
+      if (paneMenu) {
+        const int count = GetMenuItemCount(menu);
+        MENUITEMINFO sep = {};
+        sep.cbSize = sizeof(sep);
+        sep.fMask = MIIM_TYPE;
+        sep.fType = MFT_SEPARATOR;
+        InsertMenuItem(menu, count, TRUE, &sep);
+        MENUITEMINFO mi = {};
+        mi.cbSize = sizeof(mi);
+        mi.fMask = MIIM_TYPE | MIIM_SUBMENU;
+        mi.fType = MFT_STRING;
+        mi.hSubMenu = paneMenu;
+        mi.dwTypeData = (char*)"Pane";
+        InsertMenuItem(menu, count + 1, TRUE, &mi);
+      }
+    }
+
     POINT pt = {x, y};
     ClientToScreen(m_hwnd, &pt);
     int cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_NONOTIFY, pt.x, pt.y, 0, m_hwnd, nullptr);
-    DestroyMenu(menu);
+    DestroyMenu(menu);  // destroys the attached pane submenu too
 
     // Clear stale hover state — mouse has moved during menu interaction
     m_hoverPane = -1;
     m_hoverTab = -1;
     m_hoverSplitter = -1;
 
-    HandleTabMenuCommand(cmd, paneId, tabIdx);
+    // Tab-menu ids (TAB_*, TAB_MOVE_*, TAB_COLOR_*, FAV_ADD) go to the tab
+    // handler; anything else came from the attached pane submenu.
+    const bool isTabCmd =
+        (cmd >= MenuIds::TAB_CLOSE && cmd <= MenuIds::TAB_RELEASE) ||
+        (cmd >= MenuIds::TAB_MOVE_BASE && cmd < MenuIds::TAB_MOVE_BASE + MAX_PANES) ||
+        (cmd >= MenuIds::TAB_COLOR_BASE && cmd < MenuIds::TAB_COLOR_BASE + TAB_COLOR_COUNT) ||
+        cmd == MenuIds::FAV_ADD;
+    if (collapsedHeader && cmd > 0 && !isTabCmd) {
+      HandlePaneMenuCommand(cmd, paneId);
+    } else {
+      HandleTabMenuCommand(cmd, paneId, tabIdx);
+    }
     return;
   }
 
@@ -1135,7 +1275,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
   }
 
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop, m_layoutEdit);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -1153,7 +1293,7 @@ void MaxPaneContainer::OnContextMenu(int x, int y)
 void MaxPaneContainer::OnPaneMenuButtonClick(int paneId, int x, int y)
 {
   m_wsMgr->LoadList();
-  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop);
+  HMENU menu = BuildPaneContextMenu(paneId, m_hwnd, m_tree, m_winMgr, *m_favMgr, *m_wsMgr, m_soloActive, m_floating, m_floatAlwaysOnTop, m_layoutEdit);
   if (!menu) return;
 
   POINT pt = {x, y};
@@ -1665,6 +1805,18 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
     return;
   }
 
+  // v2.5.0 — Merge Left/Right/Up/Down into the adjacent pane.
+  if (cmd >= MenuIds::MERGE_DIR_BASE && cmd < MenuIds::MERGE_DIR_BASE + 4) {
+    MergePaneToward(paneId, cmd - MenuIds::MERGE_DIR_BASE);
+    return;
+  }
+
+  // v2.5.0 — layout edit mode toggle (also nav button + action).
+  if (cmd == MenuIds::LAYOUT_EDIT) {
+    ToggleLayoutEditMode();
+    return;
+  }
+
   // F9 (v2.4.0) — Swap with Pane N (wholesale content swap).
   if (cmd >= MenuIds::SWAP_PANE_BASE && cmd < MenuIds::SWAP_PANE_BASE + MAX_PANES) {
     SwapPanes(paneId, cmd - MenuIds::SWAP_PANE_BASE);
@@ -1724,8 +1876,7 @@ void MaxPaneContainer::HandlePaneMenuCommand(int cmd, int paneId)
 
   // Settings dialog
   if (cmd == MenuIds::SETTINGS) {
-    OpenSettingsDialog(m_hwnd);
-    InvalidateRect(m_hwnd, nullptr, FALSE);  // dark mode change repaint
+    OpenSettings();  // v2.5.0 — shared with the nav button + action
     return;
   }
 
@@ -2124,7 +2275,7 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
       if (self) {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        self->OnPaint(hdc);
+        self->OnPaint(hdc, &ps.rcPaint);
         EndPaint(hwnd, &ps);
         // After parent paint, tell captured children to redraw.
         // SWELL doesn't implement WS_CLIPCHILDREN, so the Cocoa drawRect:
@@ -2146,15 +2297,33 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
         bool overlayActive = self->m_homeOverlay ||
                              self->m_drag.mode == DragDock::TRACKING;
         if (!overlayActive) {
+          // v2.5.0 perf (ADR-093 #1) — only a child the parent's dirty rect
+          // actually touched can have been damaged. ps.rcPaint is the real
+          // drawRect: rect on macOS (swell-dlg.mm getSwellPaintInfo), so a
+          // tab-bar hover, a splitter line or the 30 ms toast strip no longer
+          // repaints every plugin UI in full (a toast alone used to cost
+          // ~100 full plugin repaints). A degenerate rcPaint keeps the old
+          // full re-invalidate as the safe fallback.
+          const RECT& pr = ps.rcPaint;
+          const bool havePaintRect = (pr.right > pr.left && pr.bottom > pr.top);
           for (int i = 0; i < self->m_tree.GetLeafCount(); i++) {
             int pid = self->m_tree.GetPaneId(self->m_tree.GetLeafList()[i]);
             if (pid < 0 || pid >= MAX_PANES) continue;
             const PaneState* pps = self->m_winMgr.GetPaneState(pid);
             if (pps && pps->activeTab >= 0 && pps->activeTab < pps->tabCount) {
               const TabEntry* tab = &pps->tabs[pps->activeTab];
-              if (tab->captured && tab->hwnd && IsWindow(tab->hwnd)) {
-                InvalidateRect(tab->hwnd, nullptr, FALSE);
-              }
+              if (!(tab->captured && tab->hwnd && IsWindow(tab->hwnd))) continue;
+              if (!havePaintRect) { InvalidateRect(tab->hwnd, nullptr, FALSE); continue; }
+              int cx, cy, cw, ch;
+              WindowManager::GetChildRectInParentClient(tab->hwnd, hwnd, &cx, &cy, &cw, &ch);
+              if (cw <= 0 || ch <= 0) { InvalidateRect(tab->hwnd, nullptr, FALSE); continue; }
+              RECT is = { pr.left > cx ? pr.left : cx,
+                          pr.top  > cy ? pr.top  : cy,
+                          pr.right  < cx + cw ? pr.right  : cx + cw,
+                          pr.bottom < cy + ch ? pr.bottom : cy + ch };
+              if (is.right <= is.left || is.bottom <= is.top) continue;  // untouched
+              RECT inChild = { is.left - cx, is.top - cy, is.right - cx, is.bottom - cy };
+              InvalidateRect(tab->hwnd, &inChild, FALSE);
             }
           }
         }
@@ -2219,6 +2388,11 @@ INT_PTR CALLBACK MaxPaneContainer::DlgProc(HWND hwnd, UINT msg, WPARAM wParam, L
           SetCapture(hwnd);
           return 0;
         }
+
+        // v2.5.0 — layout edit mode: a press on a pane CARD (content area,
+        // below the header) starts the card-to-pane swap drag. Splitters
+        // (above) and tab bars (below) keep their normal behaviour.
+        if (self->m_layoutEdit && self->OnLayoutEditLButtonDown(x, y)) return 0;
 
         // Check tab clicks across all leaf panes
         for (int li = 0; li < self->m_tree.GetLeafCount(); li++) {

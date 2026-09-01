@@ -122,3 +122,20 @@ TEST_CASE("LookupToggleAction covers toolbars and known windows", "[toolbar-acti
   CHECK(LookupToggleAction("Main toolbar") == 0);    // ADR-052 exclusion
   CHECK(LookupToggleAction(nullptr) == 0);
 }
+
+// v2.5.0 — pane background override parser (Settings "Pane background").
+TEST_CASE("ParsePaneBgOverride accepts #RRGGBB only", "[pane-bg]")
+{
+  COLORREF c = 0;
+  CHECK(ParsePaneBgOverride("#000000", &c)); CHECK(c == RGB(0, 0, 0));
+  CHECK(ParsePaneBgOverride("#1A2b3C", &c));
+  CHECK(GetRValue(c) == 0x1A); CHECK(GetGValue(c) == 0x2B); CHECK(GetBValue(c) == 0x3C);
+  CHECK(ParsePaneBgOverride("#FFFFFF", nullptr));  // out may be null
+  CHECK_FALSE(ParsePaneBgOverride("auto", &c));
+  CHECK_FALSE(ParsePaneBgOverride("", &c));
+  CHECK_FALSE(ParsePaneBgOverride(nullptr, &c));
+  CHECK_FALSE(ParsePaneBgOverride("#12345", &c));     // too short
+  CHECK_FALSE(ParsePaneBgOverride("#1234567", &c));   // too long
+  CHECK_FALSE(ParsePaneBgOverride("#12G456", &c));    // bad digit
+  CHECK_FALSE(ParsePaneBgOverride("123456", &c));     // no '#'
+}

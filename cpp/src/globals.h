@@ -22,6 +22,10 @@ extern void (*g_SetExtState)(const char*, const char*, const char*, bool);
 extern HWND g_reaperMainHwnd;
 extern int (*g_plugin_register)(const char*, void*);
 extern bool (*g_GetUserInputs)(const char*, int, const char*, char*, int);
+// v2.5.0 — native color picker + OS-color conversion (Settings pane bg).
+extern int  (*g_GR_SelectColor)(HWND hwnd, int* colorOut);  // nonzero = OK
+extern void (*g_ColorFromNative)(int col, int* rOut, int* gOut, int* bOut);
+extern int  (*g_ColorToNative)(int r, int g, int b);
 extern int (*g_GetToggleCommandState)(int);
 extern int (*g_NamedCommandLookup)(const char*);
 extern const char* (*g_ReverseNamedCommandLookup)(int);

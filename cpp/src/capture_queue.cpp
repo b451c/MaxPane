@@ -137,7 +137,13 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   pc.isArbitrary = true;
   pc.tickCount = 0;
   pc.retryCount = 0;
-  pc.maxRetries = (toggleAction > 0) ? MAX_RETRIES : MAX_RETRIES_ARBITRARY;
+  // v2.5.0 (inthevoid #88, ADR-091) — SCRIPTS (no toggle state, -1) are the
+  // slow class by nature (heDa Track Inspector scanning, big projects): give
+  // them the arbitrary horizon, not the 30-retry toggle-window one. Only a
+  // real REAPER toggle window (state 0/1) keeps the short horizon.
+  const bool isScript = (toggleAction > 0 && g_GetToggleCommandState &&
+                         g_GetToggleCommandState(toggleAction) == -1);
+  pc.maxRetries = (toggleAction > 0 && !isScript) ? MAX_RETRIES : MAX_RETRIES_ARBITRARY;
   pc.actionDeferred = deferAction;
   pc.transient = transient;
   if (actionCmd && actionCmd[0]) {
@@ -164,6 +170,21 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
       DBG("[MaxPane] CaptureQueue: toggle state for arbitrary '%s' (action %d) = %d\n",
           name, toggleAction, state);
     }
+    // v2.5.0 (ADR-091) — a script (state -1) that is ALREADY RUNNING must not
+    // be fired again: REAPER would terminate it (kb flag 516 → the window we
+    // want vanishes) or pop the modal "ReaScript task control". Its window
+    // existing is the truth. Scripts ONLY (ADR-093 #6): a REAPER toggle
+    // window's state is authoritative, and ApplyPaneState just searched.
+    if (!alreadyOpen && isScript) {
+      // VISIBLE only (correctness audit #1): FindReaperWindow also returns
+      // hidden HWNDs REAPER keeps around for closed windows.
+      HWND w = WindowManager::FindReaperWindow(name, nullptr);
+      if (w && IsWindowVisible(w)) {
+        DBG("[MaxPane] CaptureQueue: '%s' window already exists — not firing action %d\n",
+            name, toggleAction);
+        alreadyOpen = true;
+      }
+    }
     if (!alreadyOpen) {
       g_Main_OnCommand(toggleAction, 0);
     }
@@ -172,6 +193,15 @@ void CaptureQueue::EnqueueArbitrary(int paneId, const char* name, int toggleActi
   m_count++;
   DBG("[MaxPane] CaptureQueue: enqueued arbitrary '%s' action=%d cmd='%s' maxRetries=%d for pane %d (count=%d, deferred=%d)\n",
       name, toggleAction, pc.actionCommand, pc.maxRetries, paneId, m_count, deferAction);
+}
+
+// v2.5.0 perf (ADR-093 #7) — the retry horizon is a TIME budget expressed in
+// ticks (maxRetries × RETRY_INTERVAL after the initial wait), independent of
+// how many probes the backoff actually ran.
+static bool HorizonReached(const PendingCapture& pc)
+{
+  return pc.tickCount >= CaptureQueue::INITIAL_WAIT_TICKS +
+                         pc.maxRetries * CaptureQueue::RETRY_INTERVAL;
 }
 
 bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
@@ -215,6 +245,18 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     // RETRYING state
     if (pc.tickCount % RETRY_INTERVAL != 0) continue;
 
+    // v2.5.0 perf (ADR-093 #7) — probe backoff. A not-found search is a full
+    // window-tree walk; with several missing/slow entries (a workspace that
+    // references an uninstalled script) the flat 200 ms cadence kept the
+    // main thread busy for the whole horizon. After 10 probes (~2 s) probe
+    // every 1 s, after 30 every 5 s; the horizon itself is in TICKS (see
+    // HorizonReached), so the time budget stays what it was.
+    {
+      const int interval = pc.tickCount / RETRY_INTERVAL;
+      if (pc.retryCount >= 30) { if (interval % 25 != 0) continue; }
+      else if (pc.retryCount >= 10) { if (interval % 5 != 0) continue; }
+    }
+
     pc.retryCount++;
 
     // v2.0.4 #1 (ADR-037) — FX identity path: resolve (track, FX) by GUID,
@@ -249,7 +291,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         Remove(i);
         continue;
       }
-      if (pc.retryCount >= pc.maxRetries) {
+      if (HorizonReached(pc)) {
         DBG("[MaxPane] CaptureQueue: FX FAILED after %d retries identity='%s'\n",
             pc.retryCount, pc.fxIdentity);
         // Distinguish "owner missing" from "FX missing" for toast copy.
@@ -274,10 +316,12 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
     }
 
     // Fire deferred action on first retry (REAPER is now past startup)
+    HWND probeHwnd = nullptr;  // ADR-093 #6 — reused by the search below
     if (pc.actionDeferred) {
       pc.actionDeferred = false;
       if (g_Main_OnCommand && pc.toggleAction > 0) {
         bool alreadyOpen = false;
+        int state = -1;
         // U7 (ADR-065) — the already-open guard used to be skipped for
         // arbitrary entries, but toolbars ARE arbitrary and DO have real
         // toggle state: restoring a workspace while REAPER had re-shown the
@@ -285,8 +329,24 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         // hunted a window we'd just closed ("toolbars not recalled", #65).
         // state==-1 (scripts, no toggle state) still falls through to fire.
         if (g_GetToggleCommandState) {
-          int state = g_GetToggleCommandState(pc.toggleAction);
+          state = g_GetToggleCommandState(pc.toggleAction);
           alreadyOpen = (state == 1);
+        }
+        // v2.5.0 (inthevoid #88, ADR-091) — the user's own startup action may
+        // already have launched the script (heDa Track Inspector): firing it
+        // again terminates it or pops "ReaScript task control". If its window
+        // exists, skip the fire and go straight to the capture below (the
+        // probe's HWND is reused — ADR-093 #6; scripts only, state -1).
+        if (!alreadyOpen && state == -1) {
+          probeHwnd = WindowManager::FindReaperWindow(pc.searchTitle, containerHwnd);
+          if (!probeHwnd && pc.altSearchTitle[0])
+            probeHwnd = WindowManager::FindReaperWindow(pc.altSearchTitle, containerHwnd);
+          if (probeHwnd && !IsWindowVisible(probeHwnd)) probeHwnd = nullptr;  // hidden = closed
+          if (probeHwnd) {
+            DBG("[MaxPane] CaptureQueue: '%s' window already exists — skipping deferred fire\n",
+                pc.displayName);
+            alreadyOpen = true;
+          }
         }
         if (!alreadyOpen) {
           DBG("[MaxPane] CaptureQueue: firing deferred action for '%s' (action %d)\n",
@@ -296,8 +356,9 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       }
     }
 
-    // Try to find the window
-    HWND found = WindowManager::FindReaperWindow(pc.searchTitle, containerHwnd);
+    // Try to find the window (reuse the deferred-fire probe when it hit)
+    HWND found = probeHwnd ? probeHwnd
+                           : WindowManager::FindReaperWindow(pc.searchTitle, containerHwnd);
     if (!found && pc.altSearchTitle[0]) {
       found = WindowManager::FindReaperWindow(pc.altSearchTitle, containerHwnd);
     }
@@ -310,6 +371,27 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
       DBG("[MaxPane] CaptureQueue: '%s' hwnd=%p held by another instance — dropping entry\n",
           pc.searchTitle, (void*)found);
       Remove(i);
+      continue;
+    }
+
+    // ADR-089 (v2.5.0) — a ReaImGui window that is DOCKED in REAPER's docker
+    // cannot be captured (REAPER crash on the next frame). Don't fail the
+    // tab: keep waiting (fx@ passive-regrab idiom, ADR-080) — the user can
+    // undock it, or the script may re-create it floating — and say so once
+    // the horizon runs out instead of a generic "not found".
+    if (found && pc.isArbitrary && WindowManager::IsReaImGuiDockedHost(found)) {
+      if (HorizonReached(pc)) {
+        DBG("[MaxPane] CaptureQueue: '%s' stayed docked in REAPER's docker for %d retries — giving up (ADR-089)\n",
+            pc.displayName, pc.retryCount);
+        snprintf(m_lastFailureToast, sizeof(m_lastFailureToast),
+                 "'%.150s' is docked in REAPER's docker - undock it and reload the workspace.",
+                 pc.displayName[0] ? pc.displayName : "(unknown)");
+        Remove(i);
+      } else if (!pc.dockedWaitLogged) {
+        pc.dockedWaitLogged = true;  // first retry that actually sees it docked
+        DBG("[MaxPane] CaptureQueue: '%s' is a docked ReaImGui host — waiting for it to float (ADR-089)\n",
+            pc.displayName);
+      }
       continue;
     }
 
@@ -342,6 +424,11 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         // empty-title plugin fast-path stays (ReaBeat / Reamix on
         // Win32 — they never have a dock-frame wrapper at all).
         const bool isPluginNoTitle = (foundTitle[0] == '\0');
+        // v2.5.0 (ADR-091, Win-VM verified) — the "(docked)" wrapper frame is
+        // a macOS-only construct; on Win/Linux a docked ReaImGui window is a
+        // direct child of REAPER_dock, so the 8-retry wait (~2 s) only ever
+        // delayed every ReaImGui restore for nothing.
+#ifdef __APPLE__
         if (!foundIsDockFrame && !isPluginNoTitle && pc.retryCount <= 8) {
           // We found the inner window but no dock frame yet — wait for it
           if (pc.retryCount == 1) {
@@ -351,6 +438,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
               pc.displayName, (void*)found, pc.retryCount);
           continue;
         }
+#endif
         if (isPluginNoTitle) {
           DBG("[MaxPane] CaptureQueue: empty-title plugin '%s' — skipping dock-frame wait (Entry 16)\n",
               pc.displayName);
@@ -390,7 +478,7 @@ bool CaptureQueue::Tick(HWND containerHwnd, WindowManager& winMgr)
         }
       }
       Remove(i);
-    } else if (pc.retryCount >= pc.maxRetries) {
+    } else if (HorizonReached(pc)) {
       DBG("[MaxPane] CaptureQueue: FAILED '%s' after %d retries\n",
           pc.displayName, pc.retryCount);
       // Audit M1.2 — the user's workspace tab silently never appeared here.

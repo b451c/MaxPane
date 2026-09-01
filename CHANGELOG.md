@@ -4,6 +4,123 @@ All notable changes to MaxPane will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [2.5.0] - 2026-09-02
+
+The post-2.4.0 feedback batch (forum posts #84-95): one visible regression
+fixed, every layout-editing ask from the thread answered, a debug log you
+can switch on in the public build, a performance pass driven by a code
+audit (smooth splitter drags, no repaint storms), and a reorganised
+navigation bar, pane menu and Settings dialog.
+
+### Fixed
+
+- **macOS: JSFX graphics render inside panes again.** Since 2.4.0 a JSFX
+  whose UI is its `@gfx` canvas (multislider sequencers, the stock analyzers)
+  showed a flat pane-colored area under the header - the dark-filler paint
+  hook descended into the JSFX canvas window and painted over every frame.
+  The hook now never paints inside a self-drawing window. (Reported by
+  bertrand fraysse.)
+- **macOS: REAPER's own plugin dialogs keep their own background.** The same
+  filler used to paint the slider panel of a plain JSFX dark (black labels
+  on a dark surface) and, after switching tabs and back, the label strip,
+  band-tab row and button row of ReaEQ. It now only frames real plugin
+  views and never paints inside a dialog that carries REAPER controls.
+- **Windows / Linux: capturing a ReaImGui window that is docked in REAPER's
+  docker no longer crashes REAPER.** Scripts that remember a docker position
+  (Paranormal FX Router, TK scripts) come up docked; ripping them out broke
+  ReaImGui's docker bookkeeping (assert / crash, a rebuilt window elsewhere,
+  "doubled" windows). MaxPane now refuses that capture with a clear message,
+  and a workspace tab for such a window waits until it floats instead of
+  failing. Undock the script window (drag its tab out of the docker) and
+  capture it floating. (Reported by LorenzoB and quar_edm.)
+- **Typing into a captured ReaImGui window works again** - Enter, letters
+  and Space typed into a paneled script's text field were offered to
+  REAPER's key bindings first and eaten. Plain keys now reach the window;
+  MaxPane's own bindings still fire from inside a pane when they use a
+  modifier. (Reported by quar_edm.)
+- **Projects restore their MaxPane layout once at startup, not twice.** A
+  project saved by 2.x carries its layout both in the project chunk and in
+  the project extension state; both paths ran on every launch, so every
+  captured window was released and re-captured a second time (and a script
+  window could get its launch action fired again, popping REAPER's
+  "ReaScript task control" dialog). The second pass now recognises the
+  first one.
+- **Window sets (screensets) save and restore containers 2-8.** Only the
+  first container was ever written into a window set; the other seven were
+  registered with an index instead of a pointer and REAPER silently dropped
+  them, so a floating second container "ignored" every window set. Re-save
+  your sets once with the containers open. (Reported by LorenzoB; diagnosed
+  from his screensets file.)
+- **Windows: a script window in a pane smaller than 200 px no longer
+  covers the whole container at startup.** MaxPane hides a ReaImGui window
+  whose pane is below the size floor, but on Windows the script showed its
+  window again on its next frame, stretched over every pane. It now stays
+  hidden until the pane grows.
+- **Startup workspaces wait long enough for slow script windows** (up to
+  ~50 s instead of ~8 s) and never re-launch a script that is already
+  running - re-firing it could terminate the script or pop REAPER's
+  "ReaScript task control" dialog. On Windows and Linux, ReaImGui windows
+  restore about two seconds sooner. (Reported by inthevoid.)
+
+### Changed
+
+- **Navigation bar and menus reorganised.** Toolbar buttons follow the
+  workflow: Home | Load, Save, Drag-to-dock, Edit layout, Quick Switcher |
+  Settings, Support. The pane menu is grouped into four sections - add
+  windows to this pane, this pane (split / merge / swap / fit / solo /
+  release / delete), layout and workspaces, MaxPane - with the five merge
+  entries and the per-pane swap entries collapsed into "Merge" and "Swap
+  with Pane" submenus. The tab menu puts organising actions first (Pin,
+  Color, Move, Favorites) and the two destructive ones last (Release, Close).
+- **Settings dialog is shorter** (about 100 px on Windows): hotkeys label
+  and button share a row, the About block is one line with the link buttons
+  beside it. The previous height ran off 900 px displays.
+
+### Performance
+
+- **Smoother splitter drags and window resizes with heavy plugin UIs.** The
+  throttled drag passes no longer force a synchronous repaint of every
+  visible plugin twenty times a second; the exact final layout still lands
+  when the drag ends.
+- **No more repaint storms.** A container repaint (tab hover, splitter line,
+  the fading toast) used to make every captured plugin repaint in full - a
+  single toast meant about a hundred full plugin repaints. Children now
+  repaint only the part the container actually touched, the navigation bar
+  and pane headers repaint only when their own area is dirty, and the
+  drag-to-dock preview repaints only when the target changes.
+- **Cheaper window searches during workspace restore.** The window-tree walk
+  behind every restore retry did the same work twice; retries back off after
+  the first seconds instead of probing every 200 ms for 40 s when a script
+  window never shows up; the "already running" check runs only for scripts.
+- **Debug log is buffered** (line-buffered on macOS/Linux, flushed twice a
+  second on Windows) so leaving it on costs nothing noticeable.
+
+### Added
+
+- **Layout edit mode.** A grid button on the navigation bar (also the pane
+  menu and the `MaxPane: Toggle layout edit mode` action) hides every
+  captured window and shows each pane as a card with its contents: drag a
+  card onto another pane to swap the two panes, right-click a card for
+  split/merge/fit, drag splitters as usual, click the button again to finish.
+  Lets you rework a full container without releasing anything. (Requested
+  by LorenzoB.)
+- **Merge Left / Right / Up / Down.** Four pane-menu entries and four
+  bindable actions merge the pane into its neighbour in that direction (the
+  largest neighbour when several touch); the menu names the target by its
+  content. (Requested by LorenzoB.)
+- **`MaxPane: Open Settings` action**, and the pane menu is now reachable
+  from a collapsed tab bar: right-click the sliver and the tab menu carries
+  a "Pane" submenu with every pane operation. (Requested by quar_edm and
+  LorenzoB.)
+- **Write debug log (Settings).** Off by default; when on, the public build
+  writes `maxpane_debug.log` to the system temp folder (`/tmp` on macOS and
+  Linux) - the same log the developer reads - so bug reports no longer need
+  a special build; "Show log file..." opens the folder with the file
+  selected. (Requested by LorenzoB.)
+- **Pane background color** (Settings > Appearance: Auto / Black / Custom...
+  with the native color picker) and a **Black** pane-border preset, for the
+  chrome-free look. (Requested by quar_edm.)
+
 ## [2.4.0] - 2026-07-16
 
 The complete post-2.3.0 feedback batch (forum posts #69-79) plus an extended

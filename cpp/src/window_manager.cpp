@@ -67,11 +67,10 @@ static LRESULT CALLBACK ToolbarSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, 
     }
     int x = (short)LOWORD(lParam);
     int y = (short)HIWORD(lParam);
-#ifdef MAXPANE_DEBUG
+    // v2.5.0 — DBG is runtime-gated in every build now; the name is free.
     const char* msgName = msg == WM_LBUTTONDOWN ? "WM_LBUTTONDOWN"
                         : msg == WM_LBUTTONUP   ? "WM_LBUTTONUP"
                                                 : "WM_LBUTTONDBLCLK";
-#endif
     RECT cr;
     GetClientRect(hwnd, &cr);
     if (x < 0 || y < 0 || x >= cr.right || y >= cr.bottom) {
@@ -226,6 +225,39 @@ struct SelfChildMoveScope {
 // fallback instead. Per-level [FXBG] dumps carry child rects + wndproc
 // pointers so any remaining white is attributable from one debug log.
 static const char* const kFxBgProcProp = "MaxPane_FxBgOrig";
+// Set on the fx@ HOST level only (depth 0). v2.4.1 (forum #84 bertrand,
+// JSFX @gfx panes went dark): the "no visible children → fill the whole
+// client" branch is meant for the host BEFORE REAPER attaches the plugin
+// area. Any deeper childless level is self-drawing CONTENT (the JSFX
+// `jsfx_gfx` canvas has a SWELL wndproc and zero children) — filling it
+// post-paint buried the LICE-blitted graphics under pane color.
+static const char* const kFxBgHostProp = "MaxPane_FxBgHost";
+#ifdef MAXPANE_DEBUG
+static const char* const kFxBgPaintNProp = "MaxPane_FxBgPaintN";  // paint telemetry counter
+#endif
+
+#ifdef __APPLE__
+// v2.5.0 (owner smoke 2026-09-01: "some panels lose their background") —
+// the strips must frame a PLUGIN VIEW, never a REAPER control. A JSFX
+// parameter panel (no @gfx) is one flat level of sliders, text fields and
+// VU meters; its "largest child" was a 27x537 VU meter, so the strips
+// painted REAPER's light panel dark and its black labels lost contrast.
+// A plugin view is a foreign NSView (class not REAPERSwell_*: AU/VST/JUCE)
+// or a SWELL wrapper that holds one (REAPERSwell_hwnd WITH children — the
+// Acon holder, REAPER's plugin-area container). Plain REAPERSwell_* leaves
+// (buttons, fields, meters, faders, the jsfx_gfx canvas) never qualify.
+static bool IsFxPluginViewCandidate(HWND c)
+{
+  char cls[96] = {0};
+  GetViewClassNamePlatform(c, cls, sizeof(cls));
+  if (strncmp(cls, "REAPERSwell_", 12) != 0) return true;   // foreign view
+  // Only the bare SWELL child-dialog wrapper counts; REAPERSwell_pub /
+  // button / textfield are controls that carry their own subviews (the
+  // preset popup framed the whole JSFX panel dark on the first cut).
+  if (strcmp(cls, "REAPERSwell_hwnd") != 0) return false;
+  return GetWindow(c, GW_CHILD) != nullptr;
+}
+#endif
 
 static void FillFxHostBackground(HWND hwnd)
 {
@@ -246,19 +278,31 @@ static void FillFxHostBackground(HWND hwnd)
   // top of the fill anyway.
   int dL = 0, dT = 0, dR = 0, dB = 0;
   long long bestArea = 0;
+  bool anyVisibleChild = false;
   for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
     if (!IsWindow(c) || !IsWindowVisible(c)) continue;
+    anyVisibleChild = true;
+    if (!IsFxPluginViewCandidate(c)) continue;  // v2.5.0 — controls never frame
     int x, y, w, h;
     WindowManager::GetChildRectInParentClient(c, hwnd, &x, &y, &w, &h);
     if (w <= 0 || h <= 0) continue;
     const long long a = (long long)w * (long long)h;
     if (a > bestArea) { bestArea = a; dL = x; dT = y; dR = x + w; dB = y + h; }
   }
+  if (!bestArea && (anyVisibleChild || !GetProp(hwnd, kFxBgHostProp))) {
+    // No plugin view at this level: either it is a REAPER-drawn panel
+    // (JSFX parameters — leave REAPER's own background + label colors
+    // alone) or a childless NON-host leaf (the JSFX @gfx canvas — never
+    // paint inside it; v2.4.0 did and the canvas went flat, forum #84).
+    // Only the HOST before its plugin area attaches gets the full fill.
+    return;
+  }
   HDC hdc = GetDC(hwnd);   // inside the paint dispatch this is the LIVE
   if (!hdc) return;        // paint context (clipped to the dirty rect)
   HBRUSH br = CreateSolidBrush(COLOR_PANE_BG);
   if (!bestArea) {
-    // Plugin view not attached yet — cover the whole client (no white flash).
+    // Host level, plugin view not attached yet — cover the whole client
+    // (no white flash).
     FillRect(hdc, &rc, br);
   } else {
     if (dT > rc.top)     { RECT r = { rc.left, rc.top, rc.right, dT };    FillRect(hdc, &r, br); }
@@ -283,6 +327,41 @@ static LRESULT CALLBACK FxBgSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
   if (!origProc) return DefWindowProc(hwnd, msg, wParam, lParam);
   if (msg == WM_PAINT) {
     LRESULT r = CallWindowProc(origProc, hwnd, msg, wParam, lParam);
+#ifdef MAXPANE_DEBUG
+    // Paint-time telemetry (first 2 paints per level): what the fill sees.
+    {
+      INT_PTR n = (INT_PTR)GetProp(hwnd, kFxBgPaintNProp);
+      if (n < 2) {
+        SetProp(hwnd, kFxBgPaintNProp, (HANDLE)(n + 1));
+        int kids = 0, vis = 0, bw = 0, bh = 0, cw = 0, ch = 0;
+        char ccls[96] = {0};
+        for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+          kids++;
+          if (!IsWindow(c) || !IsWindowVisible(c)) continue;
+          vis++;
+          int x, y, w, h;
+          WindowManager::GetChildRectInParentClient(c, hwnd, &x, &y, &w, &h);
+          if ((long long)w * h > (long long)bw * bh) { bw = w; bh = h; }
+#ifdef __APPLE__
+          if (IsFxPluginViewCandidate(c) && (long long)w * h > (long long)cw * ch) {
+            cw = w; ch = h;
+            GetViewClassNamePlatform(c, ccls, sizeof(ccls));
+          }
+#endif
+        }
+        char cls[64] = {0}, vcls[96] = {0};
+        GetClassName(hwnd, cls, sizeof(cls));
+        GetViewClassNamePlatform(hwnd, vcls, sizeof(vcls));
+        RECT rc = {}; GetClientRect(hwnd, &rc);
+        DBG("[MaxPane][FXBG] paint#%d hwnd=%p class='%s' view='%s' client=%dx%d "
+            "children=%d visible=%d largest=%dx%d candidate=%dx%d '%s' -> %s\n",
+            (int)n + 1, (void*)hwnd, cls, vcls, (int)(rc.right - rc.left),
+            (int)(rc.bottom - rc.top), kids, vis, bw, bh, cw, ch, ccls,
+            !vis ? (GetProp(hwnd, kFxBgHostProp) ? "FULL FILL (host)" : "skip (leaf)")
+                 : (cw ? "strips" : "skip (no plugin view)"));
+      }
+    }
+#endif
     FillFxHostBackground(hwnd);
     return r;
   }
@@ -303,7 +382,28 @@ static LRESULT CALLBACK FxBgSubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPA
 // SWELL window (has a wndproc). A proc-less dominant child is the plugin's
 // OWN view (sonible: 1000x657, proc=0) — hands off, stop there: whatever
 // its superview paints beneath it is already our dark fill.
-static HWND FxBgDominantSwellChild(HWND hwnd)
+// v2.5.0 (ADR-083 §3, owner smoke: ReaEQ's background changed after a tab
+// return) — a SWELL wrapper that contains REAPER CONTROLS (buttons, popups,
+// text fields, tab views) is a plugin DIALOG that paints its own background
+// (ReaEQ / ReaComp / JSFX panels): content, never a level to fill inside.
+// A pure wrapper (the Acon holder: one foreign plugin view, nothing else)
+// has no controls. mac-only knowledge (view classes); elsewhere false.
+static bool FxBgHasSwellControlChild(HWND hwnd)
+{
+#ifdef __APPLE__
+  for (HWND c = GetWindow(hwnd, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT)) {
+    char cls[96] = {0};
+    GetViewClassNamePlatform(c, cls, sizeof(cls));
+    if (strncmp(cls, "REAPERSwell_", 12) == 0 && strcmp(cls, "REAPERSwell_hwnd") != 0)
+      return true;
+  }
+#else
+  (void)hwnd;
+#endif
+  return false;
+}
+
+static HWND FxBgDominantSwellChild(HWND hwnd, int depth)
 {
   RECT rc = {};
   GetClientRect(hwnd, &rc);
@@ -323,6 +423,17 @@ static HWND FxBgDominantSwellChild(HWND hwnd)
   if (!best) return nullptr;
   if (bestArea * 2 < clientArea) return nullptr;  // no dominant child
   if (!GetWindowLongPtr(best, GWLP_WNDPROC)) return nullptr;  // plugin's own view
+  // A SWELL window with NO children is a self-drawing leaf (JSFX `jsfx_gfx`
+  // canvas, ReaEQ graph), not a wrapper level — never subclass it. A holder
+  // that is still empty on this pass gets picked up by the next RepositionAll
+  // walk once its plugin view exists (the walk is idempotent per level).
+  if (!GetWindow(best, GW_CHILD)) return nullptr;
+  // Below the host → plugin-area-container step (depth 0 → 1, REAPER's fixed
+  // FX-window shape), only a PURE wrapper is a level: a dialog with REAPER
+  // controls inside is the plugin's own UI (ReaEQ grew to fill the pane
+  // after a tab return, became dominant, got subclassed, and the strips
+  // painted its light dialog background dark around the band section).
+  if (depth >= 1 && FxBgHasSwellControlChild(best)) return nullptr;
   return best;
 }
 
@@ -332,6 +443,7 @@ static void SubclassFxBgLevel(HWND hwnd, int depth)
   WNDPROC orig = (WNDPROC)GetWindowLongPtr(hwnd, GWLP_WNDPROC);
   if (orig && orig != FxBgSubclassProc) {
     SetProp(hwnd, kFxBgProcProp, (HANDLE)(INT_PTR)orig);
+    if (depth == 0) SetProp(hwnd, kFxBgHostProp, (HANDLE)(INT_PTR)1);
     SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)FxBgSubclassProc);
     DBG("[MaxPane][FXBG] subclassed depth=%d hwnd=%p orig=%p\n",
         depth, (void*)hwnd, (void*)orig);
@@ -362,32 +474,35 @@ static void SubclassFxBgLevel(HWND hwnd, int depth)
   }
 }
 
-static void SubclassFxBg(HWND hwnd)
+// Returns the resolved wrapper chain (host first) in `chain[4]` so the
+// caller's invalidate does not walk it a second time (ADR-093 #4).
+static int SubclassFxBg(HWND hwnd, HWND chain[4])
 {
-  if (!hwnd) return;
+  if (!hwnd) return 0;
   // Walk the wrapper chain every call (cheap, idempotent per level): a
   // rebuilt plugin view introduces FRESH inner levels even when the host
   // itself is already subclassed.
+  int n = 0;
   HWND cur = hwnd;
   for (int depth = 0; cur && depth < 4; depth++) {
     SubclassFxBgLevel(cur, depth);
-    cur = FxBgDominantSwellChild(cur);
+    chain[n++] = cur;
+    cur = FxBgDominantSwellChild(cur, depth);
   }
+  return n;
 }
 
 // Round 4 — MaxPane-initiated layout changes repaint the filler explicitly
 // (low-frequency; replaces the removed per-WM_SIZE invalidate that made
 // metering plugins stutter during their own edge-resize).
-static void InvalidateFxBgChain(HWND hwnd)
+static void InvalidateFxBgChain(const HWND* chain, int n)
 {
 #ifdef __APPLE__
-  HWND cur = hwnd;
-  for (int depth = 0; cur && depth < 4; depth++) {
-    InvalidateRect(cur, nullptr, FALSE);
-    cur = FxBgDominantSwellChild(cur);
+  for (int i = 0; i < n; i++) {
+    if (chain[i] && IsWindow(chain[i])) InvalidateRect(chain[i], nullptr, FALSE);
   }
 #else
-  (void)hwnd;
+  (void)chain; (void)n;
 #endif
 }
 
@@ -398,6 +513,10 @@ static void UnsubclassFxBgTree(HWND hwnd, int depth)
   if (orig) {
     SetWindowLongPtr(hwnd, GWLP_WNDPROC, (LONG_PTR)orig);
     RemoveProp(hwnd, kFxBgProcProp);
+    RemoveProp(hwnd, kFxBgHostProp);
+#ifdef MAXPANE_DEBUG
+    RemoveProp(hwnd, kFxBgPaintNProp);  // audit #8 — Win32 props leak atoms
+#endif
     DBG("[MaxPane][FXBG] unsubclassed depth=%d hwnd=%p restored=%p\n",
         depth, (void*)hwnd, (void*)orig);
   }
@@ -439,6 +558,7 @@ WindowManager::WindowManager()
 void WindowManager::Init()
 {
   m_containerHwnd = nullptr;
+  m_layoutEditHide = false;  // v2.5.0 — never carry edit mode into a fresh container
   for (int i = 0; i < MAX_PANES; i++) {
     m_panes[i].tabCount = 0;
     m_panes[i].activeTab = -1;
@@ -617,47 +737,19 @@ HWND WindowManager::FindReaperWindow(const char* title, HWND skipContainer)
       }
     }
 
-    // 4b. Search for dock frame among grandchildren (inside REAPER_dock containers)
-    {
-      char dockedTitle[512];
-      snprintf(dockedTitle, sizeof(dockedTitle), "%s%s", title, DOCKED_TITLE_SUFFIX);
-      FindWindowData dockData = { dockedTitle, nullptr, skipContainer, "EnumChildWindows" };
-      HWND dockChild = nullptr;
-      while ((dockChild = FindWindowEx(g_reaperMainHwnd, dockChild, nullptr, nullptr)) != nullptr) {
-        if (skipContainer && (dockChild == skipContainer || IsChild(skipContainer, dockChild)))
-          continue;
-        dockData.result = nullptr;
-        EnumChildWindows(dockChild, FindWindowEnumProc, (LPARAM)&dockData);
-        if (dockData.result) {
-          DBG("[MaxPane] FindReaperWindow: DOCKED FRAME grandchild match hwnd=%p\n", (void*)dockData.result);
-          return dockData.result;
-        }
-      }
-    }
-
-    // 4c. Fallback: search for inner window among direct children
+    // 4b. Fallback: inner window "Title" anywhere under the main window.
+    //
+    // v2.5.0 perf (ADR-093 #10): the former explicit "grandchildren inside
+    // REAPER_dock" passes (4b + 5) were pure duplicates — EnumChildWindows
+    // RECURSES on every backend (Win32 by spec; vendored SWELL:
+    // swell-wnd.mm EnumChildWindows calls itself per subview, swell-wnd-
+    // generic.cpp likewise), so 4a/4c already visit every descendant. A
+    // not-found search paid four full main-window tree walks, two of them
+    // identical — the unit cost behind every capture-queue retry.
     data.result = nullptr;
     EnumChildWindows(g_reaperMainHwnd, FindWindowEnumProc, (LPARAM)&data);
     if (data.result) {
       return data.result;
-    }
-
-    // 5. Search grandchildren — windows inside REAPER_dock containers
-    //    SWELL's EnumChildWindows may not recurse, so check each dock explicitly
-    HWND dockChild = nullptr;
-    while ((dockChild = FindWindowEx(g_reaperMainHwnd, dockChild, nullptr, nullptr)) != nullptr) {
-      if (skipContainer && (dockChild == skipContainer || IsChild(skipContainer, dockChild)))
-        continue;
-      // Search ALL children of every child of main window, not just docks
-      data.result = nullptr;
-      EnumChildWindows(dockChild, FindWindowEnumProc, (LPARAM)&data);
-      if (data.result) {
-        char dockBuf[256];
-        GetWindowText(dockChild, dockBuf, sizeof(dockBuf));
-        DBG("[MaxPane] FindReaperWindow: found '%s' inside '%s' (hwnd=%p)\n",
-            title, dockBuf, (void*)data.result);
-        return data.result;
-      }
     }
   }
 
@@ -856,6 +948,16 @@ static bool HasRemoteAuView(HWND hwnd, int depth)
 // hosting works for ordinary windows too, it is just less integrated.)
 #endif
 
+// v2.5.0 (ADR-089, Win-VM repro 2026-09-01) — a ReaImGui window that sits in
+// REAPER's docker is a ReaImGui DockerHost: every frame it re-reads
+// DockIsChildOfDock and moves itself to that docker; ripped out by SetParent
+// the id becomes -1 and ReaImGui asserts / null-derefs (docker.cpp:130 —
+// the same signature as the macOS ADR-035 crash). Refuse with a way out.
+// (All platforms: the predicate itself is false on macOS.)
+static const char* const kDockedImGuiRefusalMsg =
+  "This ReaImGui window is docked in REAPER's docker - undock it (drag its "
+  "tab out of the docker) and capture it while floating.";
+
 #if !defined(_WIN32) && !defined(__APPLE__)
 // ADR-061 — narrow GL-only ReaImGui probe; defined next to
 // IsReaImGuiHostWindow, used by the Linux capture blocks below.
@@ -999,6 +1101,15 @@ bool WindowManager::CaptureArbitraryWindow(int paneId, HWND targetHwnd, const ch
     return false;
   }
 #endif
+  // ADR-089 (v2.5.0) — a ReaImGui window docked in REAPER's docker cannot
+  // leave it (DockerHost invariant; REAPER crash on the next frame). Choke
+  // point for menu / favorites / drag / workspace-restore captures.
+  if (IsReaImGuiDockedHost(targetHwnd)) {
+    DBG("[MaxPane] CaptureArbitraryWindow: REJECTED docked ReaImGui host '%s' (ADR-089)\n",
+        displayName);
+    SetCaptureRefusal(kDockedImGuiRefusalMsg);
+    return false;
+  }
   // (ADR-081 §4 refusal REVERTED per owner directive — "wszystko musi
   //  działać spójnie": remote-view windows capture too, via the §5
   //  window-hosted protocol selected in DispatchCapture below.)
@@ -1339,6 +1450,30 @@ static bool IsReaImGuiHostWindow(HWND hwnd)
   bool found = false;
   EnumChildWindows(hwnd, ReaImGuiChildScanProc, (LPARAM)&found);
   return found;
+}
+
+// ADR-089 (v2.5.0) — ReaImGui window currently living INSIDE a REAPER docker
+// (Win/Linux: the `reaper_imgui_context` window is a direct child of
+// REAPER_dock; there is no "(docked)" wrapper frame there). Capturing it
+// breaks ReaImGui's DockerHost invariant and crashes REAPER on the next
+// frame (deterministic Win11 repro; root cause = cfillion/reaimgui
+// docker.cpp DockerHost::update → moveTo(findById(-1))). macOS keeps the
+// long-standing dock-frame capture path (ADR-035 pre-close protects the
+// release side) — the mac side of this invariant is an open check, so the
+// predicate is deliberately false there until verified.
+bool WindowManager::IsReaImGuiDockedHost(HWND hwnd)
+{
+#ifdef __APPLE__
+  (void)hwnd;
+  return false;
+#else
+  if (!hwnd || !IsWindow(hwnd) || !g_DockIsChildOfDock) return false;
+  char cls[64] = {};
+  GetClassName(hwnd, cls, sizeof(cls));
+  if (strcmp(cls, "reaper_imgui_context") != 0) return false;
+  bool floatingDocker = false;
+  return g_DockIsChildOfDock(hwnd, &floatingDocker) >= 0;
+#endif
 }
 
 #if !defined(_WIN32) && !defined(__APPLE__)
@@ -1699,6 +1834,13 @@ bool WindowManager::IsCapturableTarget(HWND topLevel, const char* title)
   // action-based backstop lives in CaptureArbitraryWindow (a switched main
   // toolbar can carry the displayed toolbar's name instead).
   if (strcmp(title, "Main toolbar") == 0) return false;
+  // ADR-089 (v2.5.0) — docked ReaImGui host: refuse before the hover
+  // preview advertises it (Win/Linux; predicate is false on mac).
+  if (IsReaImGuiDockedHost(topLevel)) {
+    DBG("[MaxPane] IsCapturableTarget: reject docked ReaImGui host '%s' (ADR-089)\n", title);
+    SetCaptureRefusal(kDockedImGuiRefusalMsg);
+    return false;
+  }
 #if !defined(_WIN32) && !defined(__APPLE__)
   // ADR-061 — GL ReaImGui windows can't be captured on Linux (see
   // CaptureArbitraryWindow); reject here too, BEFORE the not-embedded
@@ -2172,10 +2314,9 @@ static void ReleaseToggleKnown(TabEntry& tab, bool returnVisible)
   // Capture full state at entry to diagnose why action toggle doesn't
   // update REAPER's tracker on close. Audit M2.2 — the GetWindowRect
   // probes used to run in Release too, feeding no-op DBG calls.
-#ifdef MAXPANE_DEBUG
+  // v2.5.0 — probe only while the runtime log is on (M2.2 intent kept).
   RECT preReleaseRect = {};
-  GetWindowRect(tab.hwnd, &preReleaseRect);
-#endif
+  if (g_dbgEnabled) GetWindowRect(tab.hwnd, &preReleaseRect);
   DBG("[B27] === DoRelease ENTER ===\n");
   DBG("[B27]   name='%s' isArbitrary=%d hwnd=%p action=%d\n",
       tab.name, tab.isArbitrary, tab.hwnd, tab.toggleAction);
@@ -2334,10 +2475,8 @@ static void ReleaseNoAction(TabEntry& tab, bool toggleOff, bool returnVisible)
   // responds with script teardown, which updates REAPER's tracker
   // (toolbar buttons, menu checkmarks) via the script's own logic.
   // For windows that don't respond — at least we tried.
-#ifdef MAXPANE_DEBUG
   RECT preClose = {};
-  GetWindowRect(tab.hwnd, &preClose);
-#endif
+  if (g_dbgEnabled) GetWindowRect(tab.hwnd, &preClose);  // v2.5.0 runtime gate
   DBG("[B27] no-action ELSE branch: name='%s' toggleOff=%d actionCmd='%s'\n",
       tab.name, toggleOff,
       tab.actionCmd[0] ? tab.actionCmd : "(empty)");
@@ -2827,7 +2966,7 @@ int WindowManager::PaneHeaderHeight(int paneId) const
   return TAB_BAR_HEIGHT;  // multi-tab AND empty panes (capture CTA) keep full
 }
 
-void WindowManager::RepositionAll(const SplitTree& tree)
+void WindowManager::RepositionAll(const SplitTree& tree, bool interactive)
 {
   // U10 (ADR-067) — everything RepositionAll does to captured children is a
   // MaxPane-intended reposition; let it through the ImGui move guard.
@@ -2873,6 +3012,15 @@ void WindowManager::RepositionAll(const SplitTree& tree)
       if (!tab.captured || !tab.hwnd) continue;
       if (!IsWindow(tab.hwnd)) continue;
 
+      // v2.5.0 — layout edit mode: every window hidden, the container's
+      // pane cards are the UI. Same two hide paths as the inactive-tab
+      // branch below; the normal pass re-shows them when the flag clears.
+      if (m_layoutEditHide) {
+        if (tab.windowHosted) ShowChildWindow(tab.hwnd, false);
+        else ShowWindow(tab.hwnd, SW_HIDE);
+        continue;
+      }
+
       if (t == ps.activeTab) {
         // ADR-081 §5 — window-hosted tab: glue the plugin's own window over
         // the pane (screen-space frame; resize runs REAPER's native float
@@ -2895,13 +3043,18 @@ void WindowManager::RepositionAll(const SplitTree& tree)
           if (hy + hh >= cc.bottom - 1) { hh -= grip; }
           if (hw < 50) hw = 50;
           if (hh < 50) hh = 50;
-          SetChildWindowFrame(m_containerHwnd, tab.hwnd, hx, hy, hw, hh);
+          // ADR-093 #3 — no synchronous display (XPC viewport renegotiation
+          // for remote views) on the 20 Hz interactive passes.
+          SetChildWindowFrame(m_containerHwnd, tab.hwnd, hx, hy, hw, hh, !interactive);
           ShowChildWindow(tab.hwnd, true);
           // Round 2 — the hosted float's body is still a SWELL window; the
           // dark-filler subclass works on it unchanged (kills the white
           // remainder around a plugin smaller than the pane).
-          SubclassFxBg(tab.hwnd);
-          InvalidateFxBgChain(tab.hwnd);
+          if (!interactive) {
+            HWND chain[4];
+            const int n = SubclassFxBg(tab.hwnd, chain);
+            InvalidateFxBgChain(chain, n);
+          }
           continue;
         }
         // Bug I — never size a captured ReaImGui / Lua-gfx window below its
@@ -2933,6 +3086,7 @@ void WindowManager::RepositionAll(const SplitTree& tree)
           InvalidateRect(m_containerHwnd, &paneRect, TRUE);
           DBG("[MaxPane] Bug I: hid ReaImGui '%s' below floor pane=(w%d h%d) floor=(w%d h%d)\n",
               tab.name, w, h, floorW, floorH);
+          tab.floorHidden = true;  // ADR-097 — CheckAlive re-hides if the script re-shows it
           continue;
         }
         // Sprint 1 Entry 19 — Direct2D-rendered children (ReaImGui, JUCE,
@@ -2953,6 +3107,7 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         UINT swpFlags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_FRAMECHANGED;
         if (tab.isArbitrary) swpFlags |= SWP_NOCOPYBITS;
         SetWindowPos(tab.hwnd, HWND_TOP, x, y, w, h, swpFlags);
+        tab.floorHidden = false;  // ADR-097 — shown at pane size again
         SendMessage(tab.hwnd, WM_SIZE, SIZE_RESTORED, MAKELPARAM(w, h));
         // ADR-061 item #2 — remember what we asked for; CheckAlive's drift
         // watchdog compares the actual rect against this to learn the
@@ -2983,9 +3138,15 @@ void WindowManager::RepositionAll(const SplitTree& tree)
         } else if (isFxTab) {
           // ADR-081 — idempotent; covers capture, restore and the fx@
           // recapture path (a fresh hwnd gets subclassed on its first
-          // reposition).
-          SubclassFxBg(tab.hwnd);
-          InvalidateFxBgChain(tab.hwnd);
+          // reposition). ADR-093 #4: ONE chain walk (the subclass pass
+          // returns the resolved levels for the invalidate), and none on
+          // interactive passes — the chain cannot change mid-drag and the
+          // size change dirties the levels anyway.
+          if (!interactive) {
+            HWND chain[4];
+            const int n = SubclassFxBg(tab.hwnd, chain);
+            InvalidateFxBgChain(chain, n);
+          }
           DBG("[MaxPane][DRIFT-FX] RepositionAll set '%s' local=(%d,%d %dx%d)\n",
               tab.name, x, y, w, h);
         }
@@ -3004,8 +3165,12 @@ void WindowManager::RepositionAll(const SplitTree& tree)
           }
           child = GetWindow(child, GW_HWNDNEXT);
         }
-        // Force Cocoa display pass on the view and all subviews
-        ForceViewLayoutAndDisplay(tab.hwnd);
+        // Force Cocoa display pass on the view and all subviews. ADR-093 #3:
+        // during a drag only MARK dirty — the synchronous displayIfNeeded of
+        // every active plugin at 20 Hz was the stutter ADR-080 only halved;
+        // the drag-end / settle pass forces once.
+        if (interactive) RequestViewDisplay(tab.hwnd);
+        else ForceViewLayoutAndDisplay(tab.hwnd);
 
         // Bug I — clean re-show for a window unhidden by the floor-hide, so it
         // repaints without a manual tab switch (mirrors SetActiveTab).
@@ -3021,6 +3186,20 @@ void WindowManager::RepositionAll(const SplitTree& tree)
       }
     }
   }
+}
+
+const TabEntry* WindowManager::FindTabContaining(HWND hwnd) const
+{
+  if (!hwnd) return nullptr;
+  for (int p = 0; p < MAX_PANES; p++) {
+    const PaneState& ps = m_panes[p];
+    for (int t = 0; t < ps.tabCount; t++) {
+      const TabEntry& tab = ps.tabs[t];
+      if (!tab.captured || !tab.hwnd) continue;
+      if (tab.hwnd == hwnd || IsChild(tab.hwnd, hwnd)) return &tab;
+    }
+  }
+  return nullptr;
 }
 
 bool WindowManager::HasCapturedReaImGui() const
@@ -3137,6 +3316,18 @@ bool WindowManager::CheckAlive()
               dead = true;
             }
             }  // U4 arbitration else-block end
+          }
+          // ADR-097 (v2.5.0) — a floor-hidden ReaImGui window that is visible
+          // again was re-shown by the script itself (Win32: ReaImGui's
+          // viewport ShowWindow on its next frame, sized to the whole
+          // container and covering the neighbouring panes; seen live on the
+          // Win11 VM with a saved layout whose pane sat below the floor).
+          // Hide it again; the pane hint stays as the visible explanation.
+          else if (tab.isReaImGui && tab.floorHidden && IsWindowVisible(tab.hwnd)) {
+            ShowWindow(tab.hwnd, SW_HIDE);
+            InvalidateRect(m_containerHwnd, nullptr, TRUE);
+            DBG("[MaxPane] Bug I: re-hid ReaImGui '%s' (script re-showed a floor-hidden window)\n",
+                tab.name);
           }
           // ADR-061 item #2 (v2.2.1) — drift watchdog. A captured ReaImGui
           // script can re-assert its own size every frame (ImGui size

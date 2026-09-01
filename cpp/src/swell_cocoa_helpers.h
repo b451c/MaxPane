@@ -46,6 +46,14 @@ void ClampRectToVisibleScreen(RECT* rect);
 // on macOS; Win32 ShellExecute on Windows; xdg-open on Linux. Used by the
 // nav bar's Support button.
 void OpenUrlPlatform(const char* url);
+// v2.5.0 perf (ADR-093) — mark a view (and its direct subviews) dirty and
+// let Cocoa coalesce, instead of ForceViewLayoutAndDisplay's synchronous
+// displayIfNeeded. Used on the interactive (drag) RepositionAll passes.
+void RequestViewDisplay(HWND hwnd);
+// v2.5.0 — Settings "Show log file...": open the file manager on the file's
+// folder with the file selected (Finder reveal / Explorer /select, / xdg-open
+// on the directory). A missing file falls back to opening the folder.
+void RevealFileInFolderPlatform(const char* path);
 
 // C5 (ADR-027) — keep a top-level floating NSWindow above other apps.
 // Cocoa: NSFloatingWindowLevel vs NSNormalWindowLevel. Win32: SetWindowPos
@@ -73,7 +81,7 @@ void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize);
 // resize goes through REAPER's native float path). No-ops off-mac.
 bool AttachWindowAsChildWindow(HWND containerHwnd, HWND targetHwnd);
 void SetChildWindowFrame(HWND containerHwnd, HWND targetHwnd,
-                         int x, int y, int w, int h);
+                         int x, int y, int w, int h, bool display = true);
 void ShowChildWindow(HWND targetHwnd, bool show);
 void DetachChildWindow(HWND targetHwnd);
 
@@ -255,6 +263,16 @@ inline void OpenUrlPlatform(const char* url)
   }
 }
 
+// v2.5.0 — Explorer with the file selected; Explorer itself falls back to the
+// folder when the file does not exist yet.
+inline void RevealFileInFolderPlatform(const char* path)
+{
+  if (!path || !path[0]) return;
+  char args[600];
+  snprintf(args, sizeof(args), "/select,\"%s\"", path);
+  ShellExecuteA(nullptr, "open", "explorer.exe", args, nullptr, SW_SHOWNORMAL);
+}
+
 inline void SetWindowAlwaysOnTop(HWND hwnd, bool onTop)
 {
   if (!hwnd) return;
@@ -271,7 +289,8 @@ inline void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize)
 }
 // ADR-081 §5 — window-hosted capture is Cocoa-only; no-ops here.
 inline bool AttachWindowAsChildWindow(HWND, HWND) { return false; }
-inline void SetChildWindowFrame(HWND, HWND, int, int, int, int) {}
+inline void SetChildWindowFrame(HWND, HWND, int, int, int, int, bool = true) {}
+inline void RequestViewDisplay(HWND) {}
 inline void ShowChildWindow(HWND, bool) {}
 inline void DetachChildWindow(HWND) {}
 // Win32 delivers WM_MOUSEMOVE to the window under the cursor regardless of
@@ -395,6 +414,22 @@ inline void OpenUrlPlatform(const char* url)
   int rc = system(cmd);
   (void)rc;
 }
+
+// v2.5.0 — no portable "reveal" on Linux desktops; open the containing
+// folder in the default file manager.
+inline void RevealFileInFolderPlatform(const char* path)
+{
+  if (!path || !*path) return;
+  char dir[600];
+  snprintf(dir, sizeof(dir), "%s", path);
+  char* slash = strrchr(dir, '/');
+  if (slash && slash != dir) *slash = '\0';
+  else snprintf(dir, sizeof(dir), "%s", "/tmp");
+  char cmd[1024];
+  snprintf(cmd, sizeof(cmd), "xdg-open '%s' >/dev/null 2>&1 &", dir);
+  int rc = system(cmd);
+  (void)rc;
+}
 // REGISTERED GAP (audit M2.5): SWELL-generic exposes no portable topmost
 // API — the floating-mode "always on top" checkbox is a no-op on Linux.
 // Revisit if SWELL grows SetWindowLevel-equivalent support.
@@ -409,7 +444,8 @@ inline void GetViewClassNamePlatform(HWND hwnd, char* buf, int bufSize)
 }
 // ADR-081 §5 — window-hosted capture is Cocoa-only; no-ops here.
 inline bool AttachWindowAsChildWindow(HWND, HWND) { return false; }
-inline void SetChildWindowFrame(HWND, HWND, int, int, int, int) {}
+inline void SetChildWindowFrame(HWND, HWND, int, int, int, int, bool = true) {}
+inline void RequestViewDisplay(HWND) {}
 inline void ShowChildWindow(HWND, bool) {}
 inline void DetachChildWindow(HWND) {}
 inline void EnableContainerMouseTracking(HWND) {}

@@ -898,7 +898,7 @@ both the container itself and any captured child windows route correctly.
 
 ---
 
-## 14. Feature surface, v2.0–v2.4 (one-liners)
+## 14. Feature surface, v2.0–v2.5 (one-liners)
 
 For each feature: where it lives + what ADR justifies it. Detail lives in
 `docs/v2/V2_DECISIONS.md` (local-only).
@@ -948,6 +948,20 @@ For each feature: where it lives + what ADR justifies it. Detail lives in
 | Window-hosted capture for remote-view plugin UIs on macOS (out-of-process AUs, Rosetta-bridged x86_64 VSTs): the REAPER float stays alive as a chrome-less child NSWindow glued to the pane; frame enforced via NSWindow move/resize observers | `window_manager.cpp` (`DispatchCapture`, `DoHostWindowCapture`), `swell_cocoa_helpers.mm` (attach/frame/show/detach) | ADR-081 §5 |
 | Settings platform gating (mac 6 / Linux 7 / Win 8 rows; static per-platform layout via `SD_Y_*` constants through swell_resgen + rc.exe) | `resources/settings_dialog.{h,rc}`, `settings_dialog.cpp` | ADR-081 |
 | Explicit workspace save materializes follow-mode transient tabs (automatic writers still exclude them) | `workspace_manager.cpp` (`EnqueueSave`) | ADR-081 §6 |
+| JSFX `@gfx` / REAPER-dialog aware dark filler (never descends into childless self-drawing windows; full-fill only on the host) | `window_manager.cpp` (`SubclassFxBg`) | ADR-083 |
+| Runtime debug log in the public build (Settings checkbox, `debug_log` pref, "Show log file…"; buffered) | `debug.h`, `globals.cpp` (`g_dbgEnabled`), `settings_dialog.cpp` | ADR-084 / ADR-093 |
+| `MaxPane: Open Settings` action + "Pane" submenu on a collapsed tab bar | `main.cpp`, `context_menu.cpp` | ADR-085 |
+| Merge Left / Right / Up / Down (geometric neighbour, largest wins) + 4 actions | `split_tree.{h,cpp}` (`NeighborPane`), `container.cpp` (`MergeFocusedPaneToward`) | ADR-086 |
+| Pane background color (Auto / Black / Custom via `GR_SelectColor`) + Black splitter preset | `config.{h,cpp}` (`ParsePaneBgOverride`), `settings_dialog.cpp` | ADR-087 |
+| Layout edit mode (hide-all in `RepositionAll`, per-pane cards, drag card = `SwapPanes`, nav button, `MaxPane_ToggleLayoutEdit`) | `container.{h,cpp}`, `container_paint.cpp`, `container_input.cpp`, `window_manager.{h,cpp}` | ADR-088 |
+| Docked-ReaImGui capture refusal on Win32/Linux (ReaImGui DockerHost invariant; workspace tabs wait until the window floats) | `window_manager.cpp`, `capture_queue.cpp` | ADR-089 |
+| Accelerator chord rule: plain keys pass through to focused ReaImGui / Lua-gfx script windows; MaxPane bindings need a modifier | `main.cpp` (accel hook) | ADR-090 |
+| Capture queue: long horizon for scripts, never re-fire a running script, visible-only "already running" probe, tick-budget backoff | `capture_queue.cpp` (`HorizonReached`) | ADR-091 / ADR-094 |
+| Startup single-restore: RPP-chunk consumption suppresses the ProjExtState poll for that load | `main.cpp` (`g_rppConsumedThisLoad`) | ADR-092 |
+| Performance batch: `rcPaint`-clipped child re-invalidate, transition-only drag preview, `RequestViewDisplay` during interactive drags, `OnPaint` early-outs, de-duplicated `FindReaperWindow` | `container.cpp`, `container_nav.cpp`, `container_paint.cpp`, `window_manager.cpp`, `swell_cocoa_helpers.mm` | ADR-093 |
+| Screenset registration param = pointer (containers 2-8 finally saved/restored by window sets) | `screenset.cpp` (`s_ssParam`, `InstFromParam`) | ADR-096 |
+| Floor-hidden ReaImGui re-hide in `CheckAlive` (Win32 scripts re-show their viewport after the floor-hide) | `window_manager.{h,cpp}` (`TabEntry::floorHidden`) | ADR-097 |
+| Nav bar in workflow order, four-section pane menu (Merge / Swap submenus), compact Settings | `nav_bar.cpp`, `context_menu.cpp`, `resources/settings_dialog.*` | ADR-095 |
 
 ---
 

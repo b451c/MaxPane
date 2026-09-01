@@ -368,14 +368,21 @@ bool ProcessStaleActionsForSection(const char* section, bool deepProbe)
     }
   }
 
+  // v2.5.0 perf (ADR-093 #11) — this runs on every startup tick (~75 ×
+  // sections); write the persistent key only when the remainder changed.
+  const char* prev = g_GetExtState ? g_GetExtState(section, "stale_toggle_actions") : nullptr;
   if (deferredCnt > 0) {
     char remaining[ACTION_LIST_BUF];
     SerializeActionList(deferred, deferredCnt, remaining, sizeof(remaining));
-    g_SetExtState(section, "stale_toggle_actions", remaining, true);
-    DBG("[MaxPane] StaleCleanup[%s]: deferred remaining: %s\n", section, remaining);
+    if (!prev || strcmp(prev, remaining) != 0) {
+      g_SetExtState(section, "stale_toggle_actions", remaining, true);
+      DBG("[MaxPane] StaleCleanup[%s]: deferred remaining: %s\n", section, remaining);
+    }
   } else {
-    g_SetExtState(section, "stale_toggle_actions", "", true);
-    DBG("[MaxPane] StaleCleanup[%s]: all stale actions cleaned up immediately\n", section);
+    if (!prev || prev[0]) {
+      g_SetExtState(section, "stale_toggle_actions", "", true);
+      DBG("[MaxPane] StaleCleanup[%s]: all stale actions cleaned up immediately\n", section);
+    }
   }
   return true;
 }

@@ -272,6 +272,48 @@ int SplitTree::MergeDestinationPane(int leafNodeIndex) const
   return m_nodes[cur].paneId;
 }
 
+int SplitTree::NeighborPane(int paneId, int dir) const
+{
+  if (paneId < 0 || paneId >= MAX_PANES || !m_paneIdUsed[paneId]) return -1;
+  if (dir < DIR_LEFT || dir > DIR_DOWN) return -1;
+  const RECT& r = m_paneRects[paneId];
+  if (r.right <= r.left || r.bottom <= r.top) return -1;
+  // Adjacency tolerance: the splitter sits between the two rects, so the
+  // facing edges differ by SPLITTER_WIDTH (allow a pixel of rounding).
+  const int tol = SPLITTER_WIDTH + 1;
+  int best = -1;
+  long long bestArea = 0;
+  for (int i = 0; i < m_leafCount; i++) {
+    const int other = m_nodes[m_leafList[i]].paneId;
+    if (other == paneId || other < 0 || other >= MAX_PANES) continue;
+    const RECT& q = m_paneRects[other];
+    if (q.right <= q.left || q.bottom <= q.top) continue;
+    bool touches = false;
+    switch (dir) {
+      case DIR_LEFT:
+        touches = (q.right <= r.left) && (r.left - q.right <= tol) &&
+                  (q.bottom > r.top) && (q.top < r.bottom);
+        break;
+      case DIR_RIGHT:
+        touches = (q.left >= r.right) && (q.left - r.right <= tol) &&
+                  (q.bottom > r.top) && (q.top < r.bottom);
+        break;
+      case DIR_UP:
+        touches = (q.bottom <= r.top) && (r.top - q.bottom <= tol) &&
+                  (q.right > r.left) && (q.left < r.right);
+        break;
+      case DIR_DOWN:
+        touches = (q.top >= r.bottom) && (q.top - r.bottom <= tol) &&
+                  (q.right > r.left) && (q.left < r.right);
+        break;
+    }
+    if (!touches) continue;
+    const long long area = (long long)(q.right - q.left) * (long long)(q.bottom - q.top);
+    if (area > bestArea) { bestArea = area; best = other; }
+  }
+  return best;
+}
+
 int SplitTree::NodeForPane(int paneId) const
 {
   for (int i = 0; i < m_leafCount; i++) {

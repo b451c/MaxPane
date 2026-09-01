@@ -1,6 +1,7 @@
 // container_input.cpp — Input handling for MaxPaneContainer
 // (mouse events, tab drag/drop, hit testing, resize)
 #include "container.h"
+#include "debug.h"   // v2.5.0 — layout-edit DBG lines
 #include "config.h"
 #include "launcher.h"
 #include "workspace_manager.h"
@@ -308,15 +309,62 @@ void MaxPaneContainer::OnSize(int cx, int cy)
   const DWORD nowTick = GetTickCount();
   if (nowTick - m_lastDragReposTick >= 50) {
     m_lastDragReposTick = nowTick;
-    m_winMgr.RepositionAll(m_tree);
-  } else {
-    m_needsSettleRefresh = true;
+    // ADR-093 #3 — interactive pass: move/size only, no forced display.
+    m_winMgr.RepositionAll(m_tree, /*interactive=*/true);
   }
+  // The final full (forcing) layout always lands on the next OnTimer tick
+  // once the resize stops — needed now that executed passes are light too.
+  m_needsSettleRefresh = true;
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+// v2.5.0 — layout edit mode: press on a pane card (content area) arms the
+// card-to-pane swap drag. Header / tab-bar presses fall through to the
+// normal tab logic so tabs can still be switched while editing.
+bool MaxPaneContainer::OnLayoutEditLButtonDown(int x, int y)
+{
+  const int paneId = PaneAtPoint(x, y);
+  if (paneId < 0) return false;
+  const RECT& pr = m_tree.GetPaneRect(paneId);
+  if (y < pr.top + m_winMgr.PaneHeaderHeight(paneId)) return false;
+  m_focusedPaneId = paneId;
+  m_editDragPane = paneId;
+  m_editDragStart = { x, y };
+  m_editDragging = false;
+  m_editHoverPane = paneId;
+  SetCapture(m_hwnd);
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+  return true;
+}
+
+void MaxPaneContainer::CancelLayoutEditDrag()
+{
+  if (m_editDragPane < 0) return;
+  m_editDragPane = -1;
+  m_editDragging = false;
+  ReleaseCapture();
   InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 void MaxPaneContainer::OnMouseMove(int x, int y)
 {
+  // v2.5.0 — layout edit mode: track the hovered card (highlight) and the
+  // swap drag. Splitter hover/drag below still works when no card is held.
+  if (m_layoutEdit) {
+    if (m_editDragPane >= 0 && !m_editDragging) {
+      const int dx = x - m_editDragStart.x, dy = y - m_editDragStart.y;
+      if (dx * dx + dy * dy >= DRAG_THRESHOLD_PX * DRAG_THRESHOLD_PX) {
+        m_editDragging = true;
+      }
+    }
+    const int hp = PaneAtPoint(x, y);
+    if (hp != m_editHoverPane) {
+      m_editHoverPane = hp;
+      InvalidateRect(m_hwnd, nullptr, FALSE);
+    }
+    if (m_editDragPane >= 0) return;
+  }
+
   if (m_dragState.sourcePaneId >= 0) {
     UpdateTabDrag(x, y);
     return;
@@ -340,7 +388,8 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
     const DWORD nowTick = GetTickCount();
     if (nowTick - m_lastDragReposTick >= 50) {
       m_lastDragReposTick = nowTick;
-      m_winMgr.RepositionAll(m_tree);
+      // ADR-093 #3 — interactive pass; drag END runs the forcing one.
+      m_winMgr.RepositionAll(m_tree, /*interactive=*/true);
     }
     InvalidateRect(m_hwnd, nullptr, FALSE);
     return;
@@ -458,6 +507,26 @@ void MaxPaneContainer::OnMouseMove(int x, int y)
 
 void MaxPaneContainer::OnLButtonUp(int x, int y)
 {
+  // v2.5.0 — layout edit mode: drop a dragged card on another pane = swap
+  // the two panes' contents (the F9 whole-pane swap; works when both are
+  // full). A click without a drag just focuses the pane.
+  if (m_layoutEdit && m_editDragPane >= 0) {
+    ReleaseCapture();
+    const int src = m_editDragPane;
+    const int dst = PaneAtPoint(x, y);
+    const bool dragged = m_editDragging;
+    m_editDragPane = -1;
+    m_editDragging = false;
+    m_editHoverPane = dst;
+    if (dragged && dst >= 0 && dst != src &&
+        m_tree.IsPaneIdUsed(src) && m_tree.IsPaneIdUsed(dst)) {
+      SwapPanes(src, dst);
+      DBG("[MaxPane] LayoutEdit: swapped pane %d <-> %d\n", src, dst);
+    }
+    InvalidateRect(m_hwnd, nullptr, FALSE);
+    return;
+  }
+
   if (m_dragState.sourcePaneId >= 0) {
     EndTabDrag(x, y);
     return;

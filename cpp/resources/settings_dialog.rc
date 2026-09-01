@@ -63,6 +63,10 @@ BEGIN
                     IDC_SET_TIEMAIN, 25, SD_Y_TIEMAIN, 320, 14
     AUTOCHECKBOX    "Focus FX when switching tabs (MIDI controller support)",
                     IDC_SET_FOCUSFX, 25, SD_Y_FOCUSFX, 320, 14
+    AUTOCHECKBOX    "Write debug log for bug reports",
+                    IDC_SET_DEBUGLOG, 25, SD_Y_DEBUGLOG, 230, 14
+    PUSHBUTTON      "Show log file...", IDC_SET_OPEN_LOG,
+                    262, SD_Y_DEBUGLOG, 83, 16
 #else
     CHECKBOX        "Open MaxPane automatically when REAPER starts",
                     IDC_SET_AUTOOPEN, 25, 22, 320, 14
@@ -80,6 +84,10 @@ BEGIN
 #endif
     CHECKBOX        "Focus FX when switching tabs (MIDI controller support)",
                     IDC_SET_FOCUSFX, 25, SD_Y_FOCUSFX, 320, 14
+    CHECKBOX        "Write debug log for bug reports",
+                    IDC_SET_DEBUGLOG, 25, SD_Y_DEBUGLOG, 230, 14
+    PUSHBUTTON      "Show log file...", IDC_SET_OPEN_LOG,
+                    262, SD_Y_DEBUGLOG, 83, 16
 #endif
     // F7 (v2.4.0) — loads only when the project carries no MaxPane state;
     // "None" keeps the ADR-013 empty launcher. Height covers the open list.
@@ -95,13 +103,19 @@ BEGIN
     LTEXT           "Pane border:", IDC_SET_BORDER_GROUP, 25, SD_Y_BORDER_LBL, 60, 12
     PUSHBUTTON      "Default (system)", IDC_SET_BORDER_CYCLE,
                     90, SD_Y_BORDER_BTN, 175, 18
+    // v2.5.0 (quar_edm #91) — pane background: Auto (theme) / Black /
+    // Custom... (native REAPER color picker). Cycle button like the two above.
+    LTEXT           "Pane background:", IDC_SET_PANEBG_GROUP, 25, SD_Y_PANEBG_LBL, 60, 12
+    PUSHBUTTON      "Auto (theme)", IDC_SET_PANEBG_CYCLE,
+                    90, SD_Y_PANEBG_BTN, 175, 18
 
     // ---- Hotkeys ----
     LTEXT           "HOTKEYS", -1, 15, SD_Y_SEC_HOTKEYS, 100, 10
-    LTEXT           "Right-click workspace cards to bind shortcuts. Browse all MaxPane actions:",
-                    IDC_SET_HOTKEYS_LBL, 25, SD_Y_HOTKEYS_LBL, 320, 12
+    // v2.5.0 compact pass — label + button on one row.
+    LTEXT           "Right-click workspace cards to bind shortcuts.",
+                    IDC_SET_HOTKEYS_LBL, 25, SD_Y_HOTKEYS_LBL, 185, 12
     PUSHBUTTON      "Open REAPER Actions...", IDC_SET_OPEN_ACTIONS,
-                    25, SD_Y_ACTIONS_BTN, 130, 18
+                    215, SD_Y_ACTIONS_BTN, 130, 18
 
     // ---- Updates (v2.0.4 #3) ----
     LTEXT           "UPDATES", -1, 15, SD_Y_SEC_UPDATES, 100, 10
@@ -120,14 +134,14 @@ BEGIN
     // Sprint 1 Entry 7 — em-dash → "--": rc.exe defaults to ACP for
     // string literals. settings_dialog.cpp fills the actual version
     // string at WM_INITDIALOG time from MAXPANE_VERSION_STRING.
+    // v2.5.0 compact pass — version + license on ONE line (runtime text
+    // "MaxPane vX.Y.Z -- MIT License"), the four link buttons beside it.
     LTEXT           "MaxPane (version filled at runtime)",
-                    IDC_SET_VERSION_LBL, 25, SD_Y_VERSION_LBL, 320, 12
-    LTEXT           "MIT License -- github.com/b451c/MaxPane",
-                    IDC_SET_LICENSE_LBL, 25, SD_Y_LICENSE_LBL, 320, 12
-    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,      25, SD_Y_LINK_BTNS, 60, 18
-    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,        90, SD_Y_LINK_BTNS, 60, 18
-    PUSHBUTTON      "BMC",    IDC_SET_BMC,        155, SD_Y_LINK_BTNS, 60, 18
-    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     220, SD_Y_LINK_BTNS, 60, 18
+                    IDC_SET_VERSION_LBL, 25, SD_Y_VERSION_LBL, 165, 12
+    PUSHBUTTON      "GitHub", IDC_SET_GITHUB,     195, SD_Y_LINK_BTNS, 36, 16
+    PUSHBUTTON      "Ko-fi",  IDC_SET_KOFI,       233, SD_Y_LINK_BTNS, 36, 16
+    PUSHBUTTON      "BMC",    IDC_SET_BMC,        271, SD_Y_LINK_BTNS, 36, 16
+    PUSHBUTTON      "PayPal", IDC_SET_PAYPAL,     309, SD_Y_LINK_BTNS, 36, 16
 
     // ---- Bottom button row ----
     PUSHBUTTON      "Reset", IDC_SET_RESET,

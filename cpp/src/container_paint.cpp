@@ -13,11 +13,104 @@
 // OnPaint
 // =========================================================================
 
-void MaxPaneContainer::OnPaint(HDC hdc)
+// v2.5.0 (LorenzoB #90) — layout edit mode cards. One card per pane in the
+// content area: pane number, the tabs it holds (active marked), and a hint
+// on the hovered card. Frame = hairline grid color; hover/drop target =
+// drag accent; the card being dragged dims. Colors derive from the pane
+// background so custom (Settings) backgrounds stay legible.
+void MaxPaneContainer::PaintLayoutEditCards(HDC hdc)
+{
+  const COLORREF bg = COLOR_PANE_BG;
+  const int lum = (GetRValue(bg) * 299 + GetGValue(bg) * 587 + GetBValue(bg) * 114) / 1000;
+  const bool darkBg = (lum < 128);
+  auto shade = [&](int delta) -> COLORREF {
+    const int d = darkBg ? delta : -delta;
+    auto c = [&](int v) { v += d; return v < 0 ? 0 : (v > 255 ? 255 : v); };
+    return RGB(c(GetRValue(bg)), c(GetGValue(bg)), c(GetBValue(bg)));
+  };
+  const COLORREF textCol = darkBg ? RGB(228, 228, 228) : RGB(28, 28, 28);
+  const COLORREF dimCol  = darkBg ? RGB(150, 150, 150) : RGB(95, 95, 95);
+
+  SetBkMode(hdc, TRANSPARENT);
+  const int leafCount = m_tree.GetLeafCount();
+  for (int i = 0; i < leafCount; i++) {
+    const int paneId = m_tree.GetPaneId(m_tree.GetLeafList()[i]);
+    if (paneId < 0) continue;
+    const RECT& pr = m_tree.GetPaneRect(paneId);
+    const int hdrH = m_winMgr.PaneHeaderHeight(paneId);
+    RECT card = { pr.left + 8, pr.top + hdrH + 8, pr.right - 8, pr.bottom - 8 };
+    if (card.right - card.left < 40 || card.bottom - card.top < 30) continue;
+
+    const bool isSrc    = (m_editDragging && paneId == m_editDragPane);
+    const bool isTarget = (m_editDragging && paneId == m_editHoverPane &&
+                           paneId != m_editDragPane);
+    const bool isHover  = (!m_editDragging && paneId == m_editHoverPane);
+
+    // Card body: a shade off the pane background.
+    HBRUSH fill = CreateSolidBrush(shade((isTarget || isHover) ? 22 : 10));
+    FillRect(hdc, &card, fill);
+    DeleteObject(fill);
+
+    // Frame: four strips (no Rectangle/NULL_BRUSH dependency on SWELL).
+    const int t = isTarget ? 3 : (isHover || isSrc) ? 2 : 1;
+    HBRUSH frame = CreateSolidBrush((isTarget || isHover) ? COLOR_DRAG_HIGHLIGHT
+                                    : isSrc ? dimCol : COLOR_PANE_GRID_LINE);
+    RECT s1 = { card.left, card.top, card.right, card.top + t };
+    RECT s2 = { card.left, card.bottom - t, card.right, card.bottom };
+    RECT s3 = { card.left, card.top, card.left + t, card.bottom };
+    RECT s4 = { card.right - t, card.top, card.right, card.bottom };
+    FillRect(hdc, &s1, frame); FillRect(hdc, &s2, frame);
+    FillRect(hdc, &s3, frame); FillRect(hdc, &s4, frame);
+    DeleteObject(frame);
+
+    // Text block: "Pane N", the tabs (active first-marked), hint on hover.
+    char buf[1024];
+    int n = std::snprintf(buf, sizeof(buf), "Pane %d", i + 1);
+    const PaneState* ps = m_winMgr.GetPaneState(paneId);
+    if (ps && ps->tabCount > 0) {
+      for (int k = 0; k < ps->tabCount && n < (int)sizeof(buf) - 2; k++) {
+        n += std::snprintf(buf + n, sizeof(buf) - (size_t)n, "\n%s%.60s",
+                           (k == ps->activeTab) ? "> " : "  ", ps->tabs[k].name);
+      }
+    } else if (n < (int)sizeof(buf) - 2) {
+      n += std::snprintf(buf + n, sizeof(buf) - (size_t)n, "\n(empty)");
+    }
+    if (isSrc && n < (int)sizeof(buf) - 2) {
+      n += std::snprintf(buf + n, sizeof(buf) - (size_t)n, "\n\nmoving...");
+    } else if (isTarget && n < (int)sizeof(buf) - 2) {
+      n += std::snprintf(buf + n, sizeof(buf) - (size_t)n, "\n\nrelease to swap");
+    } else if (isHover && n < (int)sizeof(buf) - 2) {
+      n += std::snprintf(buf + n, sizeof(buf) - (size_t)n,
+                         "\n\ndrag onto another pane to swap\nright-click for split / merge");
+    }
+    (void)n;
+
+    RECT tr = { card.left + 10, card.top + 10, card.right - 10, card.bottom - 10 };
+    RECT measure = tr;
+    DrawTextUtf8(hdc, buf, -1, &measure, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX | DT_CALCRECT);
+    const int textH = measure.bottom - measure.top;
+    const int availH = tr.bottom - tr.top;
+    if (textH < availH) tr.top += (availH - textH) / 2;  // vertical centering
+    SetTextColor(hdc, isSrc ? dimCol : textCol);
+    DrawTextUtf8(hdc, buf, -1, &tr, DT_CENTER | DT_WORDBREAK | DT_NOPREFIX);
+  }
+}
+
+void MaxPaneContainer::OnPaint(HDC hdc, const RECT* paintRect)
 {
   RECT rc;
   GetClientRect(m_hwnd, &rc);
   bool dark = MaxPaneIsDarkMode();
+
+  // ADR-093 #5 — dirty-rect early-outs. A degenerate/missing paint rect
+  // means "everything" (the pre-v2.5.0 behaviour).
+  const bool havePR = paintRect && paintRect->right > paintRect->left &&
+                      paintRect->bottom > paintRect->top;
+  auto touches = [&](const RECT& r) -> bool {
+    if (!havePR) return true;
+    return r.left < paintRect->right && r.right > paintRect->left &&
+           r.top < paintRect->bottom && r.bottom > paintRect->top;
+  };
 
   // ADR-026 — paint the persistent nav bar at the very top first. The
   // pane grid below renders into the reserved client area (tree origin
@@ -27,11 +120,16 @@ void MaxPaneContainer::OnPaint(HDC hdc)
   // the centered label between the two button groups.
   NavBar::Layout navLay = {};
   NavBar::State navState{};
-  if (m_navBarVisible) {
+  // Nav strip + the 36 px tooltip band below it; a tab-bar hover or a toast
+  // repaint never touches it → skip Compute (font + label measure) and the
+  // 7 icon compositions entirely.
+  RECT navBand = { rc.left, rc.top, rc.right, rc.top + NavBar::NAV_BAR_HEIGHT + 36 };
+  if (m_navBarVisible && touches(navBand)) {
     navState.hoverButton    = m_navHover;
     navState.collapsed      = m_navBarCollapsed;
     navState.dragModeArmed  = (m_drag.mode != DragDock::IDLE);
     navState.homeActive     = m_homeOverlay;
+    navState.layoutEditActive = m_layoutEdit;  // v2.5.0
     navState.workspaceName  = m_currentWorkspaceName[0] ? m_currentWorkspaceName : nullptr;
     navState.workspaceDirty = m_workspaceDirty;
     navLay = NavBar::Compute(rc, navState, hdc);
@@ -124,6 +222,7 @@ void MaxPaneContainer::OnPaint(HDC hdc)
   for (int i = 0; i < m_tree.GetBranchCount(); i++) {
     int branchIdx = m_tree.GetBranchList()[i];
     const SplitNode& n = m_tree.GetNode(branchIdx);
+    if (!touches(n.splitterRect)) continue;  // ADR-093 #5
     FillRect(hdc, &n.splitterRect, m_brushSplitter);
     if (branchIdx == m_hoverSplitter) {
       RECT hr = n.splitterRect;
@@ -138,6 +237,10 @@ void MaxPaneContainer::OnPaint(HDC hdc)
     }
   }
 
+  // v2.5.0 — layout edit mode: every captured window is hidden, so the
+  // content fills above landed everywhere; draw the pane cards on top.
+  if (m_layoutEdit) PaintLayoutEditCards(hdc);
+
   // Draw pane tab bars or empty headers
   for (int i = 0; i < m_tree.GetLeafCount(); i++) {
     int nodeIdx = m_tree.GetLeafList()[i];
@@ -149,7 +252,10 @@ void MaxPaneContainer::OnPaint(HDC hdc)
 
     if (ps && ps->tabCount > 0) {
       // U12 (ADR-068) — clean mode: no header to draw for occupied panes.
-      if (m_winMgr.PaneHeaderHeight(paneId) > 0)
+      // ADR-093 #5 — and no header repaint when the dirty rect misses it.
+      const int hdrH = m_winMgr.PaneHeaderHeight(paneId);
+      RECT hdrRect = { paneRect.left, paneRect.top, paneRect.right, paneRect.top + hdrH };
+      if (hdrH > 0 && touches(hdrRect))
         DrawTabBar(hdc, paneId, paneRect);
       // ADR-062 — floor-hidden hint. A captured ReaImGui window whose pane
       // is smaller than its (learned) content-min is HIDDEN by RepositionAll
@@ -158,7 +264,11 @@ void MaxPaneContainer::OnPaint(HDC hdc)
       // as a dead grey hole — say why and how to get the window back.
       const TabEntry* at = (ps->activeTab >= 0 && ps->activeTab < ps->tabCount)
                              ? &ps->tabs[ps->activeTab] : nullptr;
-      if (at && at->captured && at->isReaImGui && at->hwnd &&
+      // v2.5.0 — not while layout edit hides the windows: they are hidden
+      // by design there (the pane card says what the pane holds), and the
+      // exit repaint runs before they are re-shown (Win ReaImGui alpha bleed).
+      if (!m_layoutEdit && !m_winMgr.GetLayoutEditHide() &&
+          at && at->captured && at->isReaImGui && at->hwnd &&
           IsWindow(at->hwnd) && !IsWindowVisible(at->hwnd)) {
         int needW = ARB_PANE_MIN, needH = ARB_PANE_MIN;
         if (at->arbMinW > needW) needW = at->arbMinW;

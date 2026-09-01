@@ -162,6 +162,38 @@ bool MaxPaneContainer::OnNavBarClick(int x, int y)
 // Nav bar action dispatch
 // =========================================================================
 
+void MaxPaneContainer::OpenSettings()
+{
+  if (!m_hwnd) return;
+  OpenSettingsDialog(m_hwnd);
+  // dark mode / pane background override may have changed — repaint.
+  InvalidateRect(m_hwnd, nullptr, FALSE);
+  // Settings may toggle "show_nav_bar" or "hide_single_tab_bar" (ADR-055);
+  // re-read so live state stays in sync without requiring a restart.
+  bool wasVisible = m_navBarVisible;
+  bool wasHideTab = m_winMgr.GetHideSingleTabBar();
+  bool wasHideAll = m_winMgr.GetHideAllTabBars();
+  LoadNavBarPref();
+  // U13 (ADR-068) — splitter color may have changed; brushes are cached,
+  // so recreate them and let the Invalidate above repaint. v2.5.0: same
+  // for the pane background override (brush + grid pen).
+  RefreshChromeBrushes();
+  // U15 (ADR-069) — hide_from_taskbar may have changed; re-apply the
+  // floating chrome (no-op when docked).
+  RefreshFloatingChrome();
+  if (wasVisible != m_navBarVisible) {
+    m_tree.SetOrigin(0, NavBarReservedHeight());
+    RefreshLayout();
+  } else if (wasHideTab != m_winMgr.GetHideSingleTabBar() ||
+             wasHideAll != m_winMgr.GetHideAllTabBars()) {
+    // Pane header heights changed — reposition captured windows.
+    RefreshLayout();
+  }
+  // fx@ hosts paint the pane color themselves (ADR-081 filler) — nudge
+  // them so a changed background lands without a tab switch.
+  m_winMgr.RepositionAll(m_tree);
+}
+
 void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
 {
   switch (buttonId) {
@@ -201,32 +233,12 @@ void MaxPaneContainer::DispatchNavBar(int buttonId, int xClient, int yClient)
       OpenLoadDropdown(xClient, yClient);
       break;
 
+    case NavBar::BTN_EDIT_LAYOUT:
+      ToggleLayoutEditMode();  // v2.5.0
+      break;
+
     case NavBar::BTN_SETTINGS:
-      OpenSettingsDialog(m_hwnd);
-      // dark mode override may have changed — repaint container.
-      InvalidateRect(m_hwnd, nullptr, FALSE);
-      // Settings may toggle "show_nav_bar" or "hide_single_tab_bar" (ADR-055);
-      // re-read so live state stays in sync without requiring a restart.
-      {
-        bool wasVisible = m_navBarVisible;
-        bool wasHideTab = m_winMgr.GetHideSingleTabBar();
-        bool wasHideAll = m_winMgr.GetHideAllTabBars();
-        LoadNavBarPref();
-        // U13 (ADR-068) — splitter color may have changed; brushes are
-        // cached, so recreate them and let the Invalidate above repaint.
-        RefreshChromeBrushes();
-        // U15 (ADR-069) — hide_from_taskbar may have changed; re-apply the
-        // floating chrome (no-op when docked).
-        RefreshFloatingChrome();
-        if (wasVisible != m_navBarVisible) {
-          m_tree.SetOrigin(0, NavBarReservedHeight());
-          RefreshLayout();
-        } else if (wasHideTab != m_winMgr.GetHideSingleTabBar() ||
-                   wasHideAll != m_winMgr.GetHideAllTabBars()) {
-          // Pane header heights changed — reposition captured windows.
-          RefreshLayout();
-        }
-      }
+      OpenSettings();
       break;
 
     case NavBar::BTN_SUPPORT: {
@@ -787,18 +799,18 @@ void MaxPaneContainer::RefreshDragPreview()
     }
   }
 
-  // Invalidate prev + current target rects so preview redraws.
+  // Invalidate prev + current target rects so the preview redraws — ONLY on
+  // a (pane, zone) transition. v2.5.0 perf (ADR-093 #2): this ran on every
+  // 16 ms tick, i.e. a full container OnPaint at ~60 Hz for the whole
+  // drag-to-dock gesture while nothing on screen changed.
+  if (prevPane == newPane && prevZone == newZone) return;
   RECT dirty = {};
   if (prevPane >= 0 && m_tree.IsPaneIdUsed(prevPane))
     ExpandRect(dirty, m_tree.GetPaneRect(prevPane));
   if (newPane  >= 0 && m_tree.IsPaneIdUsed(newPane))
     ExpandRect(dirty, m_tree.GetPaneRect(newPane));
-  if (prevZone != newZone && prevPane == newPane && newPane < 0) {
-    // No-op (both empty).
-  }
   if (dirty.right > dirty.left) InvalidateRect(m_hwnd, &dirty, FALSE);
-  else if (prevPane != newPane || prevZone != newZone)
-    InvalidateRect(m_hwnd, nullptr, FALSE);
+  else InvalidateRect(m_hwnd, nullptr, FALSE);
 }
 
 // =========================================================================

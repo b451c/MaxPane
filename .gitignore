@@ -1,6 +1,7 @@
 # Build artifacts
 cpp/build/
 cpp/build-debug/
+cpp/build-werror/
 
 # External dependencies (cloned separately)
 cpp/sdk/

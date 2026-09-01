@@ -27,18 +27,66 @@ bool MaxPaneIsDarkMode()
   return g_darkModeActive;
 }
 
+// v2.5.0 (quar_edm #91 "black border color option") — pane background
+// override. ExtState "pane_bg": absent / "auto" = theme-derived (the v2.4
+// look); "#RRGGBB" = fixed color. Cached alongside the dark-mode flag and
+// invalidated by the same call, so Settings OK refreshes both at once.
+static bool g_paneBgChecked = false;
+static bool g_paneBgOverride = false;
+static COLORREF g_paneBgColor = 0;
+
+bool ParsePaneBgOverride(const char* value, COLORREF* out)
+{
+  if (!value || value[0] != '#' || std::strlen(value) != 7) return false;
+  unsigned int rgb = 0;
+  for (int i = 1; i < 7; i++) {
+    const char c = value[i];
+    unsigned int d;
+    if (c >= '0' && c <= '9') d = (unsigned int)(c - '0');
+    else if (c >= 'a' && c <= 'f') d = (unsigned int)(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F') d = (unsigned int)(c - 'A' + 10);
+    else return false;
+    rgb = (rgb << 4) | d;
+  }
+  if (out) *out = RGB((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+  return true;
+}
+
+static void EnsurePaneBgOverride()
+{
+  if (g_paneBgChecked) return;
+  const char* v = g_GetExtState ? g_GetExtState(EXT_SECTION, "pane_bg") : nullptr;
+  g_paneBgOverride = ParsePaneBgOverride(v, &g_paneBgColor);
+  g_paneBgChecked = true;
+}
+
 void InvalidateMaxPaneDarkModeCache()
 {
   g_darkModeChecked = false;
+  g_paneBgChecked = false;
 }
 
 COLORREF GetPaneBgColor()
 {
+  EnsurePaneBgOverride();
+  if (g_paneBgOverride) return g_paneBgColor;
   return MaxPaneIsDarkMode() ? RGB(51, 51, 51) : RGB(172, 172, 172);
 }
 
 COLORREF GetPaneGridLineColor()
 {
+  EnsurePaneBgOverride();
+  if (g_paneBgOverride) {
+    // Grid lines a notch off the chosen background, in the direction that
+    // stays visible (lighter on dark colors, darker on light ones) — same
+    // 14-step offset as the theme pair below.
+    const int r = GetRValue(g_paneBgColor), g = GetGValue(g_paneBgColor),
+              b = GetBValue(g_paneBgColor);
+    const int lum = (r * 299 + g * 587 + b * 114) / 1000;
+    const int d = (lum < 128) ? 14 : -14;
+    auto clampc = [](int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); };
+    return RGB(clampc(r + d), clampc(g + d), clampc(b + d));
+  }
   return MaxPaneIsDarkMode() ? RGB(65, 65, 65) : RGB(158, 158, 158);
 }
 
@@ -49,6 +97,9 @@ const char* const EXT_SECTION = "MaxPane_cpp";
 // conventions; "Default (system)" keeps the pre-U13 GetSysColor look.
 const SplitterColorPreset SPLITTER_COLOR_PRESETS[] = {
   { "Default (system)", "default",  0x000000, true  },
+  // v2.5.0 (quar_edm #91) — for the chrome-free "silent" look: borders
+  // vanish against a black pane background / dark plugin UIs.
+  { "Black",            "black",    0x000000, false },
   { "Graphite",         "graphite", 0x4A4D52, false },
   { "Slate blue",       "blue",     0x2D6BB4, false },
   { "Teal",             "teal",     0x2E8B74, false },

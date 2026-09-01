@@ -15,6 +15,7 @@
 #include "config.h"
 #include "swell_cocoa_helpers.h"  // OpenUrlPlatform
 #include "updater.h"               // Updater::CheckForUpdatesNow
+#include "debug.h"                 // v2.5.0 — g_dbgEnabled live flip
 
 #include <cstdio>
 #include <cstring>
@@ -181,6 +182,45 @@ void PopulateStartupWorkspaceCombo(HWND dlg)
 // pattern as the dark-mode cycle: staged here, committed on OK).
 static int g_pendingSplitterIdx = 0;
 
+// v2.5.0 (quar_edm #91) — pending pane-background override, staged as the
+// ExtState string: "auto" | "#RRGGBB". The cycle is Auto → Black → Custom...
+// (native REAPER color picker; Cancel falls back to Auto) → Auto.
+static char g_pendingPaneBg[16] = "auto";
+
+static void PaneBgButtonLabel(const char* v, char* out, int outSize)
+{
+  COLORREF c;
+  if (!ParsePaneBgOverride(v, &c)) { safe_strncpy(out, "Auto (theme)", outSize); return; }
+  if (c == RGB(0, 0, 0)) { safe_strncpy(out, "Black", outSize); return; }
+  std::snprintf(out, outSize, "Custom (#%02X%02X%02X)",
+                GetRValue(c), GetGValue(c), GetBValue(c));
+}
+
+// Native REAPER color picker seeded with the current pane color. Writes
+// "#RRGGBB" into g_pendingPaneBg on OK; returns false on Cancel / no API.
+static bool PickCustomPaneBg(HWND dlg)
+{
+  if (!g_GR_SelectColor || !g_ColorFromNative || !g_ColorToNative) return false;
+  COLORREF cur;
+  if (!ParsePaneBgOverride(g_pendingPaneBg, &cur)) cur = GetPaneBgColor();
+  int native = g_ColorToNative(GetRValue(cur), GetGValue(cur), GetBValue(cur));
+  if (!g_GR_SelectColor(dlg, &native)) return false;
+  int r = 0, g = 0, b = 0;
+  g_ColorFromNative(native, &r, &g, &b);
+  std::snprintf(g_pendingPaneBg, sizeof(g_pendingPaneBg), "#%02X%02X%02X",
+                r & 0xFF, g & 0xFF, b & 0xFF);
+  return true;
+}
+
+// v2.5.0 — runtime debug log pref (see debug.h). Default OFF in Release;
+// Debug builds log regardless of the pref (g_dbgEnabled starts true there).
+bool ReadDebugLogPref()
+{
+  if (!g_GetExtState) return false;
+  const char* v = g_GetExtState(EXT_SECTION, "debug_log");
+  return (v && v[0] == '1' && v[1] == '\0');
+}
+
 void LoadValues(HWND dlg)
 {
   CheckDlgButton(dlg, IDC_SET_AUTOOPEN, IsAutoOpenEnabled() ? BST_CHECKED : BST_UNCHECKED);
@@ -198,6 +238,7 @@ void LoadValues(HWND dlg)
   CheckDlgButton(dlg, IDC_SET_TIEMAIN, ReadTieToMain() ? BST_CHECKED : BST_UNCHECKED);
 #endif
   CheckDlgButton(dlg, IDC_SET_FOCUSFX, ReadFocusFxOnTab() ? BST_CHECKED : BST_UNCHECKED);
+  CheckDlgButton(dlg, IDC_SET_DEBUGLOG, ReadDebugLogPref() ? BST_CHECKED : BST_UNCHECKED);
   PopulateStartupWorkspaceCombo(dlg);
   CheckDlgButton(dlg, IDC_SET_AUTO_UPDATE, IsAutoUpdateEnabled() ? BST_CHECKED : BST_UNCHECKED);
   g_pendingDarkMode = ReadDarkMode();
@@ -205,10 +246,17 @@ void LoadValues(HWND dlg)
   g_pendingSplitterIdx = GetSplitterColorPresetIndex();
   SetDlgItemText(dlg, IDC_SET_BORDER_CYCLE,
                  SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].name);
+  {
+    const char* pb = g_GetExtState ? g_GetExtState(EXT_SECTION, "pane_bg") : nullptr;
+    safe_strncpy(g_pendingPaneBg, (pb && pb[0]) ? pb : "auto", sizeof(g_pendingPaneBg));
+    char label[48];
+    PaneBgButtonLabel(g_pendingPaneBg, label, sizeof(label));
+    SetDlgItemText(dlg, IDC_SET_PANEBG_CYCLE, label);
+  }
 
   // About section — fill version label from compile-time constant.
   char ver[128];
-  std::snprintf(ver, sizeof(ver), "MaxPane %s", MAXPANE_VERSION_STRING);
+  std::snprintf(ver, sizeof(ver), "MaxPane %s -- MIT License", MAXPANE_VERSION_STRING);
   SetDlgItemText(dlg, IDC_SET_VERSION_LBL, ver);
 }
 
@@ -246,6 +294,17 @@ void CommitValues(HWND dlg)
     }
     g_SetExtState(EXT_SECTION, "splitter_color",
                   SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].key, true);
+    // v2.5.0 — pane background override; the cache shares the dark-mode
+    // invalidate above, so the next paint + RefreshChromeBrushes see it.
+    g_SetExtState(EXT_SECTION, "pane_bg", g_pendingPaneBg, true);
+    // v2.5.0 — debug log: persist + flip live (a Release build starts
+    // logging from this moment; Debug builds always log).
+    const bool dbgLog = (IsDlgButtonChecked(dlg, IDC_SET_DEBUGLOG) == BST_CHECKED);
+    g_SetExtState(EXT_SECTION, "debug_log", dbgLog ? "1" : "0", true);
+#ifndef MAXPANE_DEBUG
+    g_dbgEnabled = dbgLog;
+#endif
+    DBG("[MaxPane] Settings: debug_log=%d pane_bg=%s\n", dbgLog ? 1 : 0, g_pendingPaneBg);
   }
 }
 
@@ -271,6 +330,33 @@ INT_PTR CALLBACK SettingsDialogProc(HWND dlg, UINT msg, WPARAM wParam, LPARAM /*
             (g_pendingSplitterIdx + 1) % NUM_SPLITTER_COLOR_PRESETS;
         SetDlgItemText(dlg, IDC_SET_BORDER_CYCLE,
                        SPLITTER_COLOR_PRESETS[g_pendingSplitterIdx].name);
+        return 0;
+      }
+
+      if (id == IDC_SET_PANEBG_CYCLE) {
+        // v2.5.0 — Auto → Black → Custom... → Auto (picker Cancel = Auto).
+        COLORREF c;
+        const bool isOverride = ParsePaneBgOverride(g_pendingPaneBg, &c);
+        if (!isOverride) {
+          safe_strncpy(g_pendingPaneBg, "#000000", sizeof(g_pendingPaneBg));
+        } else if (c == RGB(0, 0, 0)) {
+          if (!PickCustomPaneBg(dlg))
+            safe_strncpy(g_pendingPaneBg, "auto", sizeof(g_pendingPaneBg));
+        } else {
+          safe_strncpy(g_pendingPaneBg, "auto", sizeof(g_pendingPaneBg));
+        }
+        char label[48];
+        PaneBgButtonLabel(g_pendingPaneBg, label, sizeof(label));
+        SetDlgItemText(dlg, IDC_SET_PANEBG_CYCLE, label);
+        return 0;
+      }
+
+      if (id == IDC_SET_OPEN_LOG) {
+        // v2.5.0 — reveal maxpane_debug.log in the file manager (folder if
+        // it does not exist yet). Same path resolution as the writer.
+        char path[512];
+        MaxPaneDebugLogPath(path, sizeof(path));
+        RevealFileInFolderPlatform(path);
         return 0;
       }
 

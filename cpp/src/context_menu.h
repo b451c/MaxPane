@@ -49,6 +49,10 @@ namespace MenuIds {
   // v2.4.0 — Fit Pane to Window (owner smoke feedback; splitters snap to
   // the active captured window's natural size).
   static const int FIT_PANE = 10008;
+  // v2.5.0 — layout edit mode toggle (LorenzoB #90 "lock mode").
+  static const int LAYOUT_EDIT = 10009;
+  // v2.5.0 — Merge Left/Right/Up/Down (+ SplitTree::PaneDirection, 10020..10023).
+  static const int MERGE_DIR_BASE = 10020;
   // F9 (v2.4.0) — Swap with Pane N (+ otherPaneId, 10100..10115).
   static const int SWAP_PANE_BASE = 10100;
   // F11 (ADR-078) — per-pane "Follow FX slot" assignment submenu.
@@ -87,4 +91,5 @@ HMENU BuildPaneContextMenu(int paneId,
                            const WorkspaceManager& wsMgr,
                            bool soloActive = false,
                            bool isFloating = false,
-                           bool floatAlwaysOnTop = false);
+                           bool floatAlwaysOnTop = false,
+                           bool layoutEdit = false);

@@ -20,9 +20,10 @@ remembers your layouts.
 ---
 
 > **Release history** lives in [CHANGELOG.md](CHANGELOG.md) — latest:
-> **v2.4.0** (screenset + instance-resurrection fixes, per-slot FX follow,
-> startup workspace, tie-to-main, focus-FX for MIDI controllers, and
-> out-of-process plugin UIs rendering inside panes on macOS).
+> **v2.5.0** (JSFX-graphics regression fix, layout edit mode, Merge in any
+> direction, debug log in the public build, a performance pass, reorganised
+> navigation bar / menus / Settings, docked-ReaImGui capture refusal on
+> Windows and Linux).
 
 ## Features
 
@@ -32,7 +33,18 @@ remembers your layouts.
   click any splitter to reset to 50/50.
 - **Tabbed panes** — multiple windows per pane with a tab bar. Drag tabs
   between panes, reorder within a pane. Each tab bar has a **▼ menu** for
-  pane operations.
+  pane operations; on a collapsed tab bar the right-click menu carries the
+  whole pane menu as a "Pane" submenu.
+- **Layout edit mode** — the grid button on the navigation bar (or
+  `MaxPane: Toggle layout edit mode`) hides every captured window and shows
+  each pane as a card listing its contents: drag a card onto another pane
+  to swap the two panes, right-click a card for split / merge / fit, drag
+  splitters as usual, click the button again to finish. Rework a full
+  container without releasing anything.
+- **Merge Left / Right / Up / Down** — pane menu entries and bindable
+  actions merge a pane into its neighbour in that direction (the largest
+  neighbour when several touch); the menu names the target by its content.
+  "Merge into Sibling" and "Swap with Pane N" stay for the tree-shaped ops.
 - **Floating mode** — detach the whole container into a top-level window
   with native chrome. Multi-monitor positions remembered (on Windows
   including the maximized state); always-on-top toggle for
@@ -46,8 +58,11 @@ remembers your layouts.
   chevron, single-window panes can auto-hide their tab bar (Settings),
   and **clean mode** hides the tab bars of all occupied panes entirely
   so the captured windows get every pixel.
-- **Pane border color** — seven presets (Default / Graphite / Slate blue /
-  Teal / Amber / Crimson / Violet) cycled from Settings, applied live.
+- **Pane border + background color** — eight border presets (Default /
+  Black / Graphite / Slate blue / Teal / Amber / Crimson / Violet) and a
+  pane background of Auto (theme) / Black / Custom (native color picker),
+  cycled from Settings, applied live. Clean mode + Black + Black = no
+  visible chrome at all.
 - **Pinned tabs** — sticky tabs sorted to the left of each pane, exempt
   from "Close Others" / "Close All".
 - **Tab colors** — color-code tabs with 8 palette colors. Reopen last
@@ -119,9 +134,10 @@ remembers your layouts.
   state. Workspaces and favorites are shared across instances.
 
 ### Navigation + hotkeys
-- **Persistent navigation bar** — Home, Drag-to-dock, Quick Switch, Save,
-  Load▾, Settings, Support as a clean toolbar at the top of every
-  container (collapsible; current workspace name + dirty indicator).
+- **Persistent navigation bar** — Home | Load▾, Save, Drag-to-dock, Edit
+  layout, Quick Switch | Settings, Support: a clean toolbar at the top of
+  every container in workflow order (collapsible; current workspace name +
+  dirty indicator).
 - **Quick Switcher** — fuzzy-match across open tabs / workspaces /
   favorites. Bind your own hotkey.
 - **`MaxPane: Workspace pickup`** — single hotkey, prompt for slot
@@ -129,7 +145,10 @@ remembers your layouts.
 - **`MaxPane: Reopen last closed tab`** — 16-entry per-container ring
   buffer; session-scoped.
 - **Tab + pane keyboard nav** — Next/Prev Tab, Next/Prev Pane, Solo
-  Toggle, all bindable in REAPER's Actions dialog.
+  Toggle, Merge focused pane into left/right/upper/lower neighbour,
+  Toggle layout edit mode, Open Settings, all bindable in REAPER's
+  Actions dialog (so every MaxPane function stays reachable with the
+  navigation bar and tab bars hidden).
 - **Inline hotkey binding (v2.0.4+)** — workspace launcher right-click
   → "Bind hotkey" opens REAPER's native shortcut-edit dialog scoped
   to that specific slot (no need to filter through the full action
@@ -139,20 +158,28 @@ remembers your layouts.
   to have focus first.
 - **Settings + updates** — auto-open, nav bar, dark-mode override
   (auto / light / dark), default workspace, tab-bar collapse, clean
-  mode, pane border color, follow mode, taskbar-hide (Windows), support
-  links; non-blocking update check on startup (toggleable).
+  mode, pane border + background color, follow mode, taskbar-hide
+  (Windows), support links; non-blocking update check on startup
+  (toggleable).
+- **Debug log for bug reports** — Settings → "Write debug log" makes the
+  public build write `maxpane_debug.log` to the system temp folder (`/tmp`
+  on macOS and Linux, `%TEMP%` on Windows) — the same log the developer
+  reads. Off by default; "Show log file..." next to it opens the folder with
+  the file selected. Attach it to a report and the guesswork is gone.
 
 ### Platform
-- **macOS arm64 + x86_64** — primary platform, actively tested on every
-  release; the v2.4.0 batch went through an extended live session with
-  real-world plugin suites (Waves, iZotope, sonible, Audio Ease, Cradle).
-- **Windows x64** — supported and CI-built; the v2.4.0 multiplatform items
-  (tie-to-main, focused-FX, per-slot follow plumbing) were verified live
-  on a Windows 11 VM. Community reports welcome.
-- **Linux x86_64 + aarch64** — supported and CI-built; v2.4.0 verified on
-  Ubuntu 24.04 (transient-for tie, per-slot follow E2E; see Known
-  limitations for the X11 title-bar quirk and the ReaImGui
-  software-rendering requirement). Community reports welcome.
+- **macOS arm64 + x86_64** — primary platform; every release runs an
+  automated regression suite (ReaProof, 18 scenarios incl. pixel checks)
+  plus live sessions with real-world plugin suites (Waves, iZotope, sonible,
+  Audio Ease, Cradle).
+- **Windows x64** — supported and CI-built; the v2.5.0 Windows-specific
+  items (docked-ReaImGui refusal, key routing, startup restore, Settings
+  height) were verified live on a Windows 11 VM. Community reports welcome.
+- **Linux x86_64 + aarch64** — supported and CI-built; v2.5.0 passed the
+  build + unit-test gate on Ubuntu 25.10 and v2.4.0 was verified live there
+  (transient-for tie, per-slot follow E2E; see Known limitations for the
+  X11 title-bar quirk and the ReaImGui software-rendering requirement).
+  Community reports welcome.
 - **Zero scripting / no dependencies** — pure C++ extension using REAPER
   SDK + WDL/SWELL. No `js_ReaScriptAPI`, no ReaImGui, no Lua.
 
@@ -160,13 +187,9 @@ remembers your layouts.
 
 ## Screenshots
 
-| Launcher hero | Settings dialog |
+| Workspace launcher | Settings |
 |:---:|:---:|
-| ![Launcher hero](docs/images/MaxPane-v2_launcher.png) | ![Settings dialog](docs/images/MaxPane-v2_settings.png) |
-
-| Create grid layout | Assign windows to panes | Recall workspace |
-|:---:|:---:|:---:|
-| ![Create grid](docs/images/create-grid.gif) | ![Assign windows](docs/images/assign-windows.gif) | ![Recall workspace](docs/images/workspace-recall.gif) |
+| ![Workspace launcher](docs/images/MaxPane-v2_launcher.png) | ![Settings dialog](docs/images/MaxPane-v2_settings.png) |
 
 ---
 
@@ -303,6 +326,14 @@ that version.
   2015) — use the pane menu's "Fit Pane to Window", or the plugin's
   own zoom control if it exposes one. Same limitation in REAPER's
   native FX float windows.
+- **Windows / Linux: a ReaImGui window docked in REAPER's docker must be
+  undocked before capture.** Scripts that remember a docker position
+  (Paranormal FX Router, TK scripts) come up inside REAPER's docker; such
+  a window lives in a ReaImGui docker host that must stay in a REAPER
+  docker, and pulling it out crashes REAPER on the next frame. MaxPane
+  refuses the capture with a message (and a saved workspace keeps the tab
+  waiting until the window floats). Drag the script's tab out of the
+  docker once, capture it floating, then save the workspace.
 - **Linux: GL ReaImGui windows need software rendering to be captured.**
   Reparenting destroys the X11 window under the script's GL context, so
   MaxPane only captures these windows when ReaImGui's "Disable hardware

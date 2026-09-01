@@ -252,8 +252,12 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
   lay.divider1 = { x, btnY + 4, x + DIVIDER_WIDTH, btnBottom - 4 };
   x += DIVIDER_WIDTH + GROUP_GAP / 2;
 
-  // Capture group: Drag, Switch, Save, Load — uniform width.
-  const int captureBtns[] = { BTN_DRAG, BTN_SWITCH, BTN_SAVE, BTN_LOAD };
+  // Tool group, in workflow order (v2.5.0 menu/nav pass, owner request):
+  // open a workspace, save it, add a window, arrange the panes, find things.
+  //   Load ▾ | Save | Drag-to-dock | Edit layout | Quick Switcher
+  // Home stays alone on the left (workspace dashboard); Settings / Support
+  // / collapse stay pinned right. Uniform width.
+  const int captureBtns[] = { BTN_LOAD, BTN_SAVE, BTN_DRAG, BTN_EDIT_LAYOUT, BTN_SWITCH };
   for (int i = 0; i < (int)(sizeof(captureBtns) / sizeof(captureBtns[0])); i++) {
     int id = captureBtns[i];
     lay.buttons[id] = { x, btnY, x + BUTTON_SIZE, btnBottom };
@@ -275,7 +279,7 @@ Layout Compute(const RECT& containerRect, const State& state, HDC measureHdc)
   // floating in the middle of the nav bar). Visually a continuation of the
   // capture group's boundary, not a free-standing separator.
   int settingsLeft = lay.buttons[BTN_SETTINGS].left;
-  int loadRight    = lay.buttons[BTN_LOAD].right;
+  int loadRight    = lay.buttons[BTN_SWITCH].right;  // tool group's last button (v2.5.0 order)
   if (settingsLeft > loadRight + GROUP_GAP + DIVIDER_WIDTH) {
     int dx = loadRight + GROUP_GAP / 2;
     lay.divider2 = { dx, btnY + 4, dx + DIVIDER_WIDTH, btnBottom - 4 };
@@ -386,9 +390,10 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
   for (int i = 0; i < BUTTON_COUNT; i++) {
     const RECT& r = lay.buttons[i];
     if (r.right <= r.left) continue;
-    // The collapse chevron has no Phosphor icon (NavIcons is indexed by the
-    // pre-collapse button ids) — drawn vector-style below.
-    if (i == BTN_COLLAPSE) continue;
+    // The collapse chevron and the layout-edit grid have no Phosphor icon
+    // (NavIcons is indexed by the pre-collapse button ids) — drawn
+    // vector-style below.
+    if (i == BTN_COLLAPSE || i == BTN_EDIT_LAYOUT) continue;
     bool hover = (state.hoverButton == i);
     bool active = false;
     bool armed = false;
@@ -399,6 +404,36 @@ void Paint(HDC hdc, const Layout& lay, const State& state, bool dark)
       active = true;
     }
     DrawButton(hdc, r, i, hover, active, armed, pal);
+  }
+
+  // v2.5.0 — layout-edit grid button: 2x2 window grid drawn with 1 px
+  // strips (no font glyph — Linux tofu lesson). Lit like Home/Drag while
+  // the mode is active.
+  {
+    const RECT& r = lay.buttons[BTN_EDIT_LAYOUT];
+    if (r.right > r.left) {
+      const bool hover  = (state.hoverButton == BTN_EDIT_LAYOUT);
+      const bool active = state.layoutEditActive;
+      if (active || hover) {
+        HBRUSH bgb = CreateSolidBrush(active ? pal.btnActiveBg : pal.btnHoverBg);
+        FillRect(hdc, (RECT*)&r, bgb);
+        DeleteObject(bgb);
+      }
+      const COLORREF gc = active ? pal.glyphActive : hover ? pal.glyphHover : pal.glyph;
+      HBRUSH gb = CreateSolidBrush(gc);
+      const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+      const int half = 6;  // 13 px box
+      RECT top    = { cx - half, cy - half, cx + half + 1, cy - half + 1 };
+      RECT bottom = { cx - half, cy + half, cx + half + 1, cy + half + 1 };
+      RECT left   = { cx - half, cy - half, cx - half + 1, cy + half + 1 };
+      RECT right  = { cx + half, cy - half, cx + half + 1, cy + half + 1 };
+      RECT vmid   = { cx, cy - half, cx + 1, cy + half + 1 };
+      RECT hmid   = { cx - half, cy, cx + half + 1, cy + 1 };
+      FillRect(hdc, &top, gb);    FillRect(hdc, &bottom, gb);
+      FillRect(hdc, &left, gb);   FillRect(hdc, &right, gb);
+      FillRect(hdc, &vmid, gb);   FillRect(hdc, &hmid, gb);
+      DeleteObject(gb);
+    }
   }
 
   // Collapse chevron (points up = "fold the bar away").
@@ -591,6 +626,7 @@ const char* ButtonTooltip(int buttonId, bool dragArmed)
     case BTN_SETTINGS: return "Settings";
     case BTN_SUPPORT:  return "Support development";
     case BTN_COLLAPSE: return "Collapse navigation bar";
+    case BTN_EDIT_LAYOUT: return "Edit layout: hide windows, drag panes to swap (click again to finish)";
     default:           return "";
   }
 }

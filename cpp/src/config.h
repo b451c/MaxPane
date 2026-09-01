@@ -4,10 +4,10 @@
 // cpp/CMakeLists.txt project(VERSION …) and the latest CHANGELOG entry —
 // the Settings dialog "About" section reads this verbatim, and the
 // updater compares it against GitHub Releases tag_name on startup.
-// v2.4.0 cycle in progress — "-dev" marks pre-release working-tree builds
-// so smoke testers can tell them from the released v2.3.0 (release prep
-// strips the suffix). ParseVersion's sscanf ignores the suffix safely.
-#define MAXPANE_VERSION_STRING "v2.4.0"
+// Pre-release working-tree builds carry a "-dev" suffix so smoke testers
+// can tell them from the released version; release prep strips it.
+// ParseVersion's sscanf ignores the suffix safely.
+#define MAXPANE_VERSION_STRING "v2.5.0"
 
 // Layout constants
 static const int MAX_PANES = 16;
@@ -181,6 +181,10 @@ COLORREF GetPaneGridLineColor();
 // so the next paint pass re-evaluates.
 bool MaxPaneIsDarkMode();
 void InvalidateMaxPaneDarkModeCache();
+// v2.5.0 — pane background override (ExtState "pane_bg"): "#RRGGBB" parses
+// to a COLORREF and returns true; anything else ("auto", absent, junk) is
+// the theme-derived default and returns false. Pure logic, unit-tested.
+bool ParsePaneBgOverride(const char* value, COLORREF* out);
 #define COLOR_PANE_BG        GetPaneBgColor()
 #define COLOR_PANE_GRID_LINE GetPaneGridLineColor()
 

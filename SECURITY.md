@@ -4,8 +4,8 @@
 
 | Version | Supported |
 |---------|-----------|
-| 2.4.x (latest) | Yes |
-| 2.3.x | No — update to 2.4.x |
+| 2.5.x (latest) | Yes |
+| 2.4.x | No — update to 2.5.x |
 | older 2.x      | Fixes ship in the next release — update via ReaPack |
 | 1.x            | No |
 

@@ -44,6 +44,45 @@
 ]]></description>
       </metadata>
 
+      <version name="2.5.0" author="b451c" time="2026-09-02T12:00:00Z">
+        <changelog><![CDATA[The post-2.4.0 feedback batch (forum posts #84-95): one visible regression fixed, every layout-editing ask from the thread answered, a debug log you can switch on in the public build, a performance pass driven by a code audit, and a reorganised navigation bar, pane menu and Settings dialog.
+
+Fixed:
+- macOS: JSFX graphics render inside panes again (2.4.0 regression - a graphics-only JSFX came up flat pane-colored); REAPER's own plugin dialogs keep their native background too.
+- Windows / Linux: capturing a ReaImGui window that is docked in REAPER's docker no longer crashes REAPER - MaxPane refuses that capture with a message; a workspace tab for such a window waits until it floats. Undock the script window once and capture it floating.
+- Typing into a captured ReaImGui window works again (Enter, letters, Space reach the window; MaxPane bindings still fire with a modifier).
+- Projects restore their MaxPane layout once at startup, not twice (no more release + re-capture of every window, no spurious script re-launch).
+- Window sets (screensets) save and restore containers 2-8 - only the first container was ever written into a set, so a floating second container ignored every window set. Re-save your sets once with the containers open.
+- Windows: a script window in a pane smaller than 200 px no longer covers the whole container at startup (it stays hidden until the pane grows).
+- Startup workspaces wait long enough for slow script windows (up to ~50 s) and never re-launch a script that is already running; on Windows and Linux ReaImGui windows restore about two seconds sooner.
+
+Changed:
+- Navigation bar follows the workflow: Home | Load, Save, Drag-to-dock, Edit layout, Quick Switcher | Settings, Support.
+- Pane menu grouped into four sections (add windows / this pane / layout and workspaces / MaxPane); the five merge entries live in a Merge submenu, per-pane swaps in a Swap with Pane submenu. Tab menu: organising actions first, Release / Close last.
+- Settings dialog is about 100 px shorter (fits 900 px displays).
+
+Performance:
+- Smoother splitter drags and window resizes with heavy plugin UIs (no synchronous repaint of every plugin at 20 Hz).
+- No more repaint storms: children repaint only the area the container touched; nav bar, pane headers and the drag-to-dock preview repaint only when dirty.
+- Cheaper window searches during workspace restore; retries back off instead of probing every 200 ms for 40 s.
+- Debug log is buffered, so leaving it on costs nothing noticeable.
+
+Added:
+- Layout edit mode: a grid button on the navigation bar (also a pane-menu entry and the "MaxPane: Toggle layout edit mode" action) hides every captured window and shows each pane as a card - drag a card onto another pane to swap them, right-click for split / merge / fit, drag splitters as usual.
+- Merge Left / Right / Up / Down: four pane-menu entries and four bindable actions (largest neighbour wins when several touch).
+- "MaxPane: Open Settings" action; the whole pane menu is reachable from a collapsed tab bar via a "Pane" submenu.
+- Write debug log (Settings, off by default): the public build writes maxpane_debug.log to the system temp folder; "Show log file..." opens the folder with the file selected.
+- Pane background color (Auto / Black / Custom with the native color picker) and a Black pane-border preset.
+
+Full changelog: https://github.com/b451c/MaxPane/blob/main/CHANGELOG.md
+]]></changelog>
+        <source platform="darwin-arm64" file="reaper_maxpane-arm64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.5.0/reaper_maxpane-arm64.dylib</source>
+        <source platform="darwin64" file="reaper_maxpane-x86_64.dylib">https://github.com/b451c/MaxPane/releases/download/v2.5.0/reaper_maxpane-x86_64.dylib</source>
+        <source platform="win64" file="reaper_maxpane-x64.dll">https://github.com/b451c/MaxPane/releases/download/v2.5.0/reaper_maxpane-x64.dll</source>
+        <source platform="linux64" file="reaper_maxpane-x86_64.so">https://github.com/b451c/MaxPane/releases/download/v2.5.0/reaper_maxpane-x86_64.so</source>
+        <source platform="linux-aarch64" file="reaper_maxpane-aarch64.so">https://github.com/b451c/MaxPane/releases/download/v2.5.0/reaper_maxpane-aarch64.so</source>
+      </version>
+
       <version name="2.4.0" author="b451c" time="2026-07-16T18:00:00Z">
         <changelog><![CDATA[The complete post-2.3.0 feedback batch plus an extended live-testing marathon on macOS: seven bugfixes, five features, and a new window-hosting architecture that makes out-of-process plugin UIs (AUv3-class AUs, Rosetta-bridged x86_64 plug-ins) render inside panes on macOS.
 
